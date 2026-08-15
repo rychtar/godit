@@ -78,3 +78,43 @@ func _status_bits(xy: String) -> int:
 		"T": bits |= GitStatusFlags.WT_TYPECHANGE
 		"U": bits |= GitStatusFlags.CONFLICTED | GitStatusFlags.WT_MODIFIED
 	return bits
+
+
+## Stages many paths in one `git add` (adding new files one by one is slow in big folders).
+func stage_files(paths: Array) -> Dictionary:
+	if paths.is_empty():
+		return { "ok": true, "error": "", "output": "" }
+	return _simple(["add", "--"] + paths)
+
+
+func stage_file(path: String) -> bool:
+	# `rm --cached` is the fallback for whatever `add` doesn't cover.
+	if GitCli.run(_repo_root, ["add", "--", path])["exit_code"] == 0:
+		return true
+	return GitCli.run(_repo_root, ["rm", "--cached", "--", path])["exit_code"] == 0
+
+
+func unstage_file(path: String) -> bool:
+	if GitCli.run(_repo_root, ["reset", "--", path])["exit_code"] == 0:
+		return true
+	# Unborn branch, no HEAD to reset to — just drop it from the index.
+	return GitCli.run(_repo_root, ["rm", "--cached", "--", path])["exit_code"] == 0
+
+
+func commit(message: String) -> Dictionary:
+	var result := { "ok": false, "oid": "", "error": "" }
+	var commit_result := GitCli.run(_repo_root, ["commit", "-m", message], true)
+	if commit_result["exit_code"] != 0:
+		result["error"] = commit_result["text"].strip_edges()
+		return result
+
+	result["ok"] = true
+	result["oid"] = GitCli.run(_repo_root, ["rev-parse", "HEAD"])["text"].strip_edges()
+	return result
+
+
+## Runs a quick mutating command synchronously -> {"ok", "error", "output"}.
+func _simple(args: Array) -> Dictionary:
+	var r := GitCli.run(_repo_root, args, true)
+	var text: String = r["text"].strip_edges()
+	return { "ok": r["exit_code"] == 0, "error": "" if r["exit_code"] == 0 else text, "output": text }

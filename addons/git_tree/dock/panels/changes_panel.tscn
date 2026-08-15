@@ -20,34 +20,74 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="ToolbarRow" type="HBoxContainer" parent="Layout" unique_id=844172871]
-layout_mode = 2
-
-[node name="StatusLabel" type="Label" parent="Layout/ToolbarRow" unique_id=1287435924]
+[node name="Split" type="HSplitContainer" parent="Layout" unique_id=272277477]
 unique_name_in_owner = true
-modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Left" type="VBoxContainer" parent="Layout/Split" unique_id=272277478]
+custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-clip_text = true
-text_overrun_behavior = 3
 
-[node name="RefreshButton" type="Button" parent="Layout/ToolbarRow" unique_id=1728165141]
+[node name="ToolbarRow" type="HBoxContainer" parent="Layout/Split/Left" unique_id=844172871]
+layout_mode = 2
+alignment = 2
+
+[node name="RefreshButton" type="Button" parent="Layout/Split/Left/ToolbarRow" unique_id=1728165141]
 layout_mode = 2
 tooltip_text = "Refresh"
 text = "Refresh"
 flat = true
 
-[node name="ChangesTree" type="Tree" parent="Layout" unique_id=176718436]
+[node name="ChangesTree" type="Tree" parent="Layout/Split/Left" unique_id=176718436]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
 size_flags_vertical = 3
+columns = 2
+allow_rmb_select = true
 hide_root = true
+
+[node name="CommitMessage" type="TextEdit" parent="Layout/Split/Left" unique_id=120089585]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+placeholder_text = "Commit message"
+wrap_mode = 1
+
+[node name="CommitRow" type="HBoxContainer" parent="Layout/Split/Left" unique_id=1646957090]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="Layout/Split/Left/CommitRow" unique_id=1287435924]
+unique_name_in_owner = true
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 1
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="CommitButton" type="Button" parent="Layout/Split/Left/CommitRow" unique_id=895953307]
+unique_name_in_owner = true
+layout_mode = 2
+disabled = true
+text = "Commit"
 
 [node name="ErrorDialog" type="AcceptDialog" parent="." unique_id=72532236]
 unique_name_in_owner = true
 initial_position = 1
 size = Vector2i(360, 120)
 
-[connection signal="pressed" from="Layout/ToolbarRow/RefreshButton" to="." method="refresh"]
-[connection signal="item_activated" from="Layout/ChangesTree" to="." method="_on_changes_tree_item_activated"]
+[node name="ContextMenu" type="PopupMenu" parent="." unique_id=1637247915]
+unique_name_in_owner = true
+
+[connection signal="pressed" from="Layout/Split/Left/ToolbarRow/RefreshButton" to="." method="refresh"]
+[connection signal="item_activated" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_activated"]
+[connection signal="item_edited" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_edited"]
+[connection signal="item_mouse_selected" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_mouse_selected"]
+[connection signal="text_changed" from="Layout/Split/Left/CommitMessage" to="." method="_on_commit_message_text_changed"]
+[connection signal="pressed" from="Layout/Split/Left/CommitRow/CommitButton" to="." method="_on_commit_button_pressed"]
+[connection signal="id_pressed" from="ContextMenu" to="." method="_on_context_menu_id_pressed"]
