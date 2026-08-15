@@ -1,5 +1,5 @@
-## No class_name: internal helper, addressed via preload (this project
-## keeps its scripts out of the global namespace).
+## No class_name: internal helper, addressed via preload (matches this
+## project's no-global-namespace-pollution convention, see git_status_flags.gd).
 extends RefCounted
 
 const GitCliRepo := preload("res://addons/git_tree/util/git_cli_repo.gd")

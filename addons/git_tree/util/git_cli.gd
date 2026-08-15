@@ -1,5 +1,6 @@
 ## Thin wrapper around OS.execute() for running `git` in a given repo root.
-## No class_name: internal helper, addressed via preload.
+## No class_name: internal helper, addressed via preload (see
+## git_status_flags.gd for why).
 extends RefCounted
 
 ## Env vars set for the whole editor process while the plugin is enabled, so no git command can ever block on an interactive prompt (there's no terminal to answer it) — see prepare_environment().
