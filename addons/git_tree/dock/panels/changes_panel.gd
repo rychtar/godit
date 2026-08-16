@@ -3,17 +3,23 @@ extends Control
 
 const GitStatusFlags := preload("res://addons/git_tree/util/git_status_flags.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
+const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 
 const ID_OPEN := 1
 const ID_ADD_TO_VCS := 2
 const ID_ADD_ALL_TO_VCS := 3
 const ID_TOGGLE_STAGE := 4
+const ID_ADD_FOLDER_TO_VCS := 5
 
 ## ChangesTree has two columns: the checkbox needs its own narrow column,
 ## since Godot toggles a CELL_MODE_CHECK cell on any click anywhere inside
 ## it, and a single wide column meant clicking the filename also toggled
 ## staged state.
+##
+## Text is column 0, not the checkbox, because Godot only indents/draws
+## fold-arrows for column 0 — with the checkbox there, nested folders
+## lined up flush-left instead of stair-stepping.
 const TEXT_COLUMN := 0
 const CHECKBOX_COLUMN := 1
 const CHECKBOX_COLUMN_WIDTH := 28
@@ -33,7 +39,7 @@ var _repo: RefCounted
 var _suppress_item_edited := false
 
 ## What a right-click landed on, stashed for the context menu's id_pressed
-## handler: {"kind": "file"|"untracked_file", "path": ...}.
+## handler: {"kind": "file"|"untracked_file"|"folder", "path": ...}.
 var _context_target: Dictionary = {}
 
 
@@ -70,20 +76,65 @@ func refresh() -> void:
 	_tree.clear()
 	var root := _tree.create_item()
 
+	var changes_group := _tree.create_item(root)
+	changes_group.set_selectable(CHECKBOX_COLUMN, false)
+	changes_group.set_selectable(TEXT_COLUMN, false)
+	changes_group.set_metadata(0, { "kind": "changes_group" })
+	# Checkable like a folder — toggling the group header cascades to
+	# every file under it (see _aggregate_files() and
+	# _on_changes_tree_item_edited()).
+	changes_group.set_cell_mode(CHECKBOX_COLUMN, TreeItem.CELL_MODE_CHECK)
+	changes_group.set_editable(CHECKBOX_COLUMN, true)
+	changes_group.set_custom_color(TEXT_COLUMN, Color(0.68, 0.85, 1.0))
+	var changes_folders: Dictionary = {}
+
+	# Blank spacer row so "New Files" reads as separate from the
+	# tracked changes above it.
+	var spacer := _tree.create_item(root)
+	spacer.set_selectable(CHECKBOX_COLUMN, false)
+	spacer.set_selectable(TEXT_COLUMN, false)
+	spacer.set_custom_minimum_height(6)
+
+	var untracked_group := _tree.create_item(root)
+	untracked_group.set_selectable(CHECKBOX_COLUMN, false)
+	untracked_group.set_selectable(TEXT_COLUMN, false)
+	untracked_group.set_metadata(0, { "kind": "untracked_group" })
+	untracked_group.set_cell_mode(CHECKBOX_COLUMN, TreeItem.CELL_MODE_CHECK)
+	untracked_group.set_editable(CHECKBOX_COLUMN, true)
+	untracked_group.set_tooltip_text(CHECKBOX_COLUMN, "Add all new files to Git")
+	untracked_group.set_custom_color(TEXT_COLUMN, Color(0.55, 0.55, 0.58))
+	untracked_group.set_custom_bg_color(TEXT_COLUMN, Color(1, 1, 1, 0.03), true)
+	var untracked_folders: Dictionary = {}
+
 	var any_staged := false
-	var count := 0
+
 	for entry in entries:
 		var path: String = entry["path"]
 		var status: int = entry["status"]
 		var staged := GitStatusFlags.is_staged(status)
 		any_staged = any_staged or staged
-		count += 1
-		_add_file_item(root, path, status, staged, not GitStatusFlags.is_untracked(status))
+		if GitStatusFlags.is_untracked(status):
+			_add_file_item(untracked_group, untracked_folders, path, status, staged, false)
+		else:
+			_add_file_item(changes_group, changes_folders, path, status, staged, true)
+
+	var agg := _aggregate_files(changes_group)
+	var tracked_count: int = agg["count"]
+	changes_group.set_text(TEXT_COLUMN, "Changes  %d %s" % [tracked_count, "file" if tracked_count == 1 else "files"])
+	changes_group.set_checked(CHECKBOX_COLUMN, tracked_count > 0 and agg["staged"] == tracked_count)
+	changes_group.set_indeterminate(CHECKBOX_COLUMN, tracked_count > 0 and agg["staged"] > 0 and agg["staged"] < tracked_count)
+
+	var untracked_agg := _aggregate_files(untracked_group)
+	var untracked_count: int = untracked_agg["count"]
+	untracked_group.set_text(TEXT_COLUMN, "New Files  %d — not in Git yet, check to add" % untracked_count)
+	untracked_group.collapsed = untracked_count == 0
+	untracked_group.set_visible(untracked_count > 0)
+	spacer.set_visible(untracked_count > 0)
 	_suppress_item_edited = false
 
 	_reselect(root, selected_path, scroll_y)
 
-	if count == 0:
+	if untracked_count == 0 and tracked_count == 0:
 		_status_label.text = "No changes."
 	else:
 		_status_label.text = ""
@@ -97,27 +148,25 @@ func _reselect(root: TreeItem, path: String, scroll_y: float) -> void:
 		var found := _find_item_by_path(root, path)
 		if found != null:
 			found.select(TEXT_COLUMN)
-	_restore_scroll.call_deferred(scroll_y)
-
-
-## Tree keeps its scrollbars as internal children with no getter; restoring the scroll position after a rebuild needs the vertical one.
-func _restore_scroll(scroll_y: float) -> void:
-	for child in _tree.get_children(true):
-		if child is VScrollBar:
-			child.value = scroll_y
+	var bar: VScrollBar = TreeFolders.v_scroll_bar(_tree)
+	if bar != null:
+		bar.set_deferred("value", scroll_y)
 
 
 func _find_item_by_path(item: TreeItem, path: String) -> TreeItem:
 	var child := item.get_first_child()
 	while child:
 		var meta: Variant = child.get_metadata(0)
-		if meta is Dictionary and meta.get("path", "") == path:
+		if meta is Dictionary and meta.get("path", "") == path and child.is_visible_in_tree():
 			return child
+		var nested := _find_item_by_path(child, path)
+		if nested != null:
+			return nested
 		child = child.get_next()
 	return null
 
 
-## Stages previously-untracked files.
+## Stages previously-untracked files, which moves them from New Files into Changes.
 func _add_to_vcs(paths: Array) -> void:
 	var result: Dictionary = _repo.stage_files(paths)
 	if not result["ok"]:
@@ -126,14 +175,59 @@ func _add_to_vcs(paths: Array) -> void:
 	_status_label.text = "Added %s to Git." % (paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size())
 
 
-func _add_file_item(root: TreeItem, path: String, status: int, staged: bool, tracked: bool) -> void:
-	var item := _tree.create_item(root)
+## Post-order walk that counts a group/folder's files (for the "N files"
+## label) and rolls up checkable folders' checked state — indeterminate if
+## some but not all descendants are staged. Runs as a second pass since
+## folders are created lazily while files are added.
+func _aggregate_files(item: TreeItem) -> Dictionary:
+	var meta: Dictionary = item.get_metadata(0)
+	var kind: String = meta.get("kind", "") if not meta.is_empty() else ""
+	if kind == "file":
+		return { "count": 1, "staged": 1 if item.is_checked(CHECKBOX_COLUMN) else 0 }
+	if kind == "untracked_file":
+		return { "count": 1, "staged": 0 }
+
+	var total := 0
+	var staged := 0
+	var child := item.get_first_child()
+	while child:
+		var r := _aggregate_files(child)
+		total += r["count"]
+		staged += r["staged"]
+		child = child.get_next()
+
+	if kind == "folder":
+		var base_name: String = meta.get("name", "")
+		item.set_text(TEXT_COLUMN, "%s  %d %s" % [base_name, total, "file" if total == 1 else "files"])
+		if item.get_cell_mode(CHECKBOX_COLUMN) == TreeItem.CELL_MODE_CHECK:
+			item.set_checked(CHECKBOX_COLUMN, total > 0 and staged == total)
+			item.set_indeterminate(CHECKBOX_COLUMN, total > 0 and staged > 0 and staged < total)
+
+	return { "count": total, "staged": staged }
+
+
+## Collects the repo paths of every "file"-kind descendant, for cascading a
+## folder/group checkbox toggle down to actual stage/unstage calls.
+func _collect_file_paths(item: TreeItem, out: Array, kind := "file") -> void:
+	var child := item.get_first_child()
+	while child:
+		var meta: Dictionary = child.get_metadata(0)
+		if not meta.is_empty() and meta.get("kind", "") == kind:
+			out.append(meta["path"])
+		_collect_file_paths(child, out, kind)
+		child = child.get_next()
+
+
+func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String, status: int, staged: bool, tracked: bool) -> void:
+	var parent := TreeFolders.get_or_create_folder(_tree, group_root, folder_cache, path.get_base_dir(), TEXT_COLUMN, CHECKBOX_COLUMN)
+
+	var item := _tree.create_item(parent)
 	# New files get a checkbox too: checking one adds it to Git (same gesture as staging).
 	item.set_cell_mode(CHECKBOX_COLUMN, TreeItem.CELL_MODE_CHECK)
 	item.set_editable(CHECKBOX_COLUMN, true)
 	item.set_checked(CHECKBOX_COLUMN, staged)
 	item.set_tooltip_text(CHECKBOX_COLUMN, "Stage/unstage" if tracked else "Add to Git")
-	item.set_text(TEXT_COLUMN, "%s  %s" % [GitIcons.status_letter(status), path])
+	item.set_text(TEXT_COLUMN, "%s  %s" % [GitIcons.status_letter(status), path.get_file()])
 	item.set_custom_color(TEXT_COLUMN, GitIcons.status_color(status))
 	var meta := { "kind": "file" if tracked else "untracked_file", "path": path, "status": status, "staged": staged }
 	item.set_metadata(0, meta)
@@ -161,6 +255,24 @@ func _on_changes_tree_item_edited() -> void:
 	elif kind == "untracked_file":
 		if item.is_checked(CHECKBOX_COLUMN):
 			_add_to_vcs([meta["path"]])
+	else:
+		# "folder" or a group: cascade the new checked state to
+		# every file underneath. emit_signal off since we stage/unstage
+		# ourselves via _collect_file_paths() instead.
+		item.propagate_check(CHECKBOX_COLUMN, false)
+		var checked := item.is_checked(CHECKBOX_COLUMN)
+		var paths: Array = []
+		_collect_file_paths(item, paths)
+		for path in paths:
+			if checked:
+				_repo.stage_file(path)
+			else:
+				_repo.unstage_file(path)
+		# Folders/group of new files: checking adds them all in one go; unchecking has nothing to undo.
+		var new_paths: Array = []
+		_collect_file_paths(item, new_paths, "untracked_file")
+		if checked and not new_paths.is_empty():
+			_add_to_vcs(new_paths)
 	refresh.call_deferred()
 
 
@@ -200,10 +312,18 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 		"file":
 			_context_menu.add_item("Open", ID_OPEN)
 			_context_menu.add_item("Stage" if not meta["staged"] else "Unstage", ID_TOGGLE_STAGE)
+		"folder":
+			var new_paths: Array = []
+			_collect_file_paths(item, new_paths, "untracked_file")
+			if new_paths.is_empty():
+				return
+			_context_target = { "kind": "folder", "name": meta.get("name", ""), "new_paths": new_paths }
+			_context_menu.add_item("Add %d New File%s to Git" % [new_paths.size(), "" if new_paths.size() == 1 else "s"], ID_ADD_FOLDER_TO_VCS)
 		"untracked_file":
 			_context_menu.add_item("Add to Git", ID_ADD_TO_VCS)
-			_context_menu.add_item("Add All New Files to Git", ID_ADD_ALL_TO_VCS)
 			_context_menu.add_item("Open", ID_OPEN)
+		"untracked_group":
+			_context_menu.add_item("Add All to Git", ID_ADD_ALL_TO_VCS)
 		_:
 			return
 
@@ -227,6 +347,9 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				if GitStatusFlags.is_untracked(entry["status"]):
 					new_paths.append(entry["path"])
 			_add_to_vcs(new_paths)
+			refresh.call_deferred()
+		ID_ADD_FOLDER_TO_VCS:
+			_add_to_vcs(_context_target["new_paths"])
 			refresh.call_deferred()
 		ID_TOGGLE_STAGE:
 			var path: String = _context_target["path"]
