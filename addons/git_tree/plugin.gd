@@ -4,7 +4,7 @@ extends EditorPlugin
 const GitTreeDockScene := preload("res://addons/git_tree/dock/git_tree_dock.tscn")
 const GitCli := preload("res://addons/git_tree/util/git_cli.gd")
 
-## Changes: left dock, alongside FileSystem/Import.
+## Changes and Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 
 

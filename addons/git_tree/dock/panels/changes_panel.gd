@@ -5,6 +5,7 @@ const GitStatusFlags := preload("res://addons/git_tree/util/git_status_flags.gd"
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
+const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 
 const ID_OPEN := 1
 const ID_ADD_TO_VCS := 2
@@ -170,7 +171,7 @@ func _find_item_by_path(item: TreeItem, path: String) -> TreeItem:
 func _add_to_vcs(paths: Array) -> void:
 	var result: Dictionary = _repo.stage_files(paths)
 	if not result["ok"]:
-		_show_error("Add to Git failed", result["error"])
+		Dialogs.error(self, "Add to Git failed", result["error"])
 		return
 	_status_label.text = "Added %s to Git." % (paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size())
 

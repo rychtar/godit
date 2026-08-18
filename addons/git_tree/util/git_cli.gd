@@ -3,6 +3,13 @@
 ## git_status_flags.gd for why).
 extends RefCounted
 
+## Record/unit separators for parsing multi-field git log output (see
+## git_cli_repo.gd). Git's usual -z (NUL) delimiter doesn't survive
+## OS.execute's output capture — the string truncates at the first NUL
+## byte — so these control characters are used instead.
+const RS := "\u001e"
+const US := "\u001f"
+
 ## Env vars set for the whole editor process while the plugin is enabled, so no git command can ever block on an interactive prompt (there's no terminal to answer it) — see prepare_environment().
 const ENV_OVERRIDES := {
 	"GIT_TERMINAL_PROMPT": "0",

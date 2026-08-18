@@ -9,6 +9,7 @@ var plugin: EditorPlugin
 @onready var _message_label: Label = %MessageLabel
 @onready var _tab_container: TabContainer = %TabContainer
 @onready var _changes_panel: Control = %Changes
+@onready var _branches_panel: Control = %Branches
 
 ## A git_cli_repo.gd instance, or null if this project isn't a git repo.
 var _repo: RefCounted
@@ -24,6 +25,7 @@ func _ready() -> void:
 	_message_label.visible = false
 	_tab_container.visible = true
 	_changes_panel.set_repo(_repo)
+	_branches_panel.set_repo(_repo)
 
 
 func _show_message(text: String) -> void:

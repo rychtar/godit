@@ -1,0 +1,158 @@
+## Awaitable one-off dialogs built in code, so every new git action doesn't need its own node in a .tscn. Each call creates the dialog under `parent`, pops it up, and frees it once answered. No class_name: internal helper, addressed via preload.
+extends RefCounted
+
+const TEXT_WIDTH := 420
+
+
+## Plain error/info message.
+static func error(parent: Node, title: String, message: String) -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = title
+	dialog.add_child(_message_label(message))
+	await _run(parent, dialog)
+
+
+## true on OK, false on Cancel/close.
+static func confirm(parent: Node, title: String, message: String, ok_text: String = "OK") -> bool:
+	var dialog := ConfirmationDialog.new()
+	dialog.title = title
+	dialog.ok_button_text = ok_text
+	dialog.add_child(_message_label(message))
+	return await _run(parent, dialog) == true
+
+
+## Single line of text input; null on cancel.
+static func prompt(parent: Node, title: String, label: String, default_text: String = "", ok_text: String = "OK") -> Variant:
+	var answer: Variant = await form(parent, title, [{ "key": "value", "label": label, "type": "text", "default": default_text }], ok_text)
+	return null if answer == null else String(answer["value"]).strip_edges()
+
+
+## Small form. fields: [{"key", "label", "type": "text"|"multiline"|"check"|"option"|"label", "default", "options": Array[String], "placeholder", "tooltip"}]. Returns {key: value} (option -> selected text) or null on cancel.
+static func form(parent: Node, title: String, fields: Array, ok_text: String = "OK") -> Variant:
+	var dialog := ConfirmationDialog.new()
+	dialog.title = title
+	dialog.ok_button_text = ok_text
+
+	var layout := VBoxContainer.new()
+	layout.custom_minimum_size = Vector2(TEXT_WIDTH, 0)
+	dialog.add_child(layout)
+
+	var inputs := {}
+	var first_input: Control = null
+	for field in fields:
+		var type: String = field.get("type", "text")
+		var label_text: String = field.get("label", "")
+		match type:
+			"label":
+				layout.add_child(_message_label(label_text))
+			"check":
+				var check := CheckBox.new()
+				check.text = label_text
+				check.button_pressed = field.get("default", false)
+				check.tooltip_text = field.get("tooltip", "")
+				layout.add_child(check)
+				inputs[field["key"]] = check
+			"option":
+				if not label_text.is_empty():
+					layout.add_child(_caption(label_text))
+				var option := OptionButton.new()
+				var options: Array = field.get("options", [])
+				for i in options.size():
+					option.add_item(options[i])
+					if options[i] == field.get("default", ""):
+						option.select(i)
+				option.tooltip_text = field.get("tooltip", "")
+				layout.add_child(option)
+				inputs[field["key"]] = option
+			"multiline":
+				if not label_text.is_empty():
+					layout.add_child(_caption(label_text))
+				var edit := TextEdit.new()
+				edit.custom_minimum_size = Vector2(0, 110)
+				edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+				edit.text = field.get("default", "")
+				edit.placeholder_text = field.get("placeholder", "")
+				layout.add_child(edit)
+				inputs[field["key"]] = edit
+				if first_input == null:
+					first_input = edit
+			_:
+				if not label_text.is_empty():
+					layout.add_child(_caption(label_text))
+				var line := LineEdit.new()
+				line.text = field.get("default", "")
+				line.placeholder_text = field.get("placeholder", "")
+				line.tooltip_text = field.get("tooltip", "")
+				layout.add_child(line)
+				dialog.register_text_enter(line)
+				inputs[field["key"]] = line
+				if first_input == null:
+					first_input = line
+
+	if first_input != null:
+		dialog.about_to_popup.connect(func() -> void:
+			first_input.grab_focus.call_deferred()
+			if first_input is LineEdit:
+				(first_input as LineEdit).select_all.call_deferred()
+		)
+
+	# Values are read before _run() frees the dialog.
+	var values := {}
+	dialog.confirmed.connect(func() -> void:
+		for key in inputs:
+			var input: Control = inputs[key]
+			if input is CheckBox:
+				values[key] = (input as CheckBox).button_pressed
+			elif input is OptionButton:
+				var ob := input as OptionButton
+				values[key] = ob.get_item_text(ob.selected) if ob.selected >= 0 else ""
+			elif input is TextEdit:
+				values[key] = (input as TextEdit).text
+			else:
+				values[key] = (input as LineEdit).text
+	)
+	if await _run(parent, dialog) != true:
+		return null
+	return values
+
+
+## Pops the dialog up and waits for an answer: true (OK) or false (cancel/close).
+static func _run(parent: Node, dialog: AcceptDialog) -> Variant:
+	var waiter := _Waiter.new()
+	dialog.confirmed.connect(waiter.finish.bind(true))
+	dialog.canceled.connect(waiter.finish.bind(false))
+	parent.add_child(dialog)
+	dialog.popup_centered(Vector2i(TEXT_WIDTH + 40, 0))
+	var answer: Variant = await waiter.done
+	dialog.queue_free()
+	return answer
+
+
+static func _message_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size = Vector2(TEXT_WIDTH, 0)
+	return label
+
+
+static func _caption(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.modulate.a = 0.75
+	return label
+
+
+class _Waiter:
+	extends RefCounted
+
+	signal done(answer: Variant)
+
+	var _finished := false
+
+
+	func finish(answer: Variant) -> void:
+		if _finished:
+			return
+		_finished = true
+		done.emit(answer)
