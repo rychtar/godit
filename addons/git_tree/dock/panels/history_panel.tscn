@@ -1,0 +1,44 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://addons/git_tree/dock/panels/history_panel.gd" id="1"]
+[ext_resource type="Script" path="res://addons/git_tree/dock/widgets/commit_graph.gd" id="2"]
+
+[node name="HistoryPanel" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+clip_contents = true
+script = ExtResource("1")
+
+[node name="Layout" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Toolbar" type="HBoxContainer" parent="Layout"]
+layout_mode = 2
+
+[node name="RefreshButton" type="Button" parent="Layout/Toolbar"]
+layout_mode = 2
+text = "Refresh"
+
+[node name="GraphScroll" type="ScrollContainer" parent="Layout"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="CommitGraph" type="Control" parent="Layout/GraphScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+script = ExtResource("2")
+
+[connection signal="pressed" from="Layout/Toolbar/RefreshButton" to="." method="_on_refresh_button_pressed"]

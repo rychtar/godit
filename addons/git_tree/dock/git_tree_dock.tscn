@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://di7yussnr03y8" path="res://addons/git_tree/dock/git_tree_dock.gd" id="1"]
 [ext_resource type="PackedScene" path="res://addons/git_tree/dock/panels/changes_panel.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://addons/git_tree/dock/panels/branches_panel.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://addons/git_tree/dock/panels/history_panel.tscn" id="4"]
 
 [node name="GitTreeDock" type="Control" unique_id=2026172616]
 layout_mode = 3
@@ -47,3 +48,9 @@ unique_name_in_owner = true
 visible = false
 layout_mode = 2
 metadata/_tab_index = 1
+
+[node name="History" parent="TabContainer" unique_id=1418820574 instance=ExtResource("4")]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+metadata/_tab_index = 2

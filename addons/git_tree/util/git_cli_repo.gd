@@ -208,3 +208,87 @@ func create_branch(name: String, start_point: String, checkout: bool) -> Diction
 		return result
 	result["ok"] = true
 	return result
+
+
+## Flat parent-linked commit list (HEAD + local branches, lanes laid out in commit_graph.gd), newest first.
+func get_commit_graph(limit: int = 200) -> Array:
+	var fmt := "%H" + GitCli.US + "%P" + GitCli.US + "%s" + GitCli.US + "%B" + GitCli.US + "%an" + GitCli.US + "%ae" + GitCli.US + "%at" + GitCli.RS
+	var args := ["log", "--topo-order", "--date-order", "--format=" + fmt, "--max-count=%d" % limit, "HEAD", "--branches"]
+	return _parse_commit_graph(GitCli.run(_repo_root, args)["text"])
+
+
+func _parse_commit_graph(log_text: String) -> Array:
+	var branch_refs := _refs_by_oid(["refs/heads", "refs/remotes"])
+	var tag_refs := _tags_by_oid()
+	var entries: Array = []
+	for record in log_text.split(GitCli.RS):
+		if record.strip_edges().is_empty():
+			continue
+		var fields := record.lstrip("\n").split(GitCli.US) # leading \n from the previous record's terminator
+		if fields.size() < 7:
+			continue
+		var oid: String = fields[0]
+		var parents := PackedStringArray()
+		if not fields[1].strip_edges().is_empty():
+			for p in fields[1].split(" "):
+				if not p.is_empty():
+					parents.append(p)
+		entries.append({
+			"oid": oid,
+			"parents": parents,
+			"summary": fields[2],
+			"message": fields[3],
+			"author_name": fields[4],
+			"author_email": fields[5],
+			"time": int(fields[6].strip_edges()),
+			"refs": branch_refs.get(oid, PackedStringArray()),
+			"tags": tag_refs.get(oid, PackedStringArray()),
+		})
+	return entries
+
+
+func get_head_oid() -> String:
+	var r := GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", "HEAD"])
+	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
+func _refs_by_oid(ref_prefixes: Array) -> Dictionary:
+	var fmt := "%(objectname)" + GitCli.US + "%(refname:short)"
+	var args := ["for-each-ref", "--format=" + fmt]
+	args.append_array(ref_prefixes)
+	var result := GitCli.run(_repo_root, args)
+
+	var map := {}
+	for line in GitCli.lines(result["text"]):
+		var fields := line.split(GitCli.US)
+		if fields.size() < 2:
+			continue
+		var oid: String = fields[0]
+		var name: String = fields[1]
+		if name.ends_with("/HEAD"):
+			continue
+		# Mutating a PackedStringArray fetched from a Dictionary in place
+		# doesn't write back (COW) — reassign it instead.
+		var arr: PackedStringArray = map.get(oid, PackedStringArray())
+		arr.append(name)
+		map[oid] = arr
+	return map
+
+
+func _tags_by_oid() -> Dictionary:
+	# %(*objectname) is the peeled oid for an annotated tag, empty for a
+	# lightweight one (falls back to %(objectname)).
+	var fmt := "%(objectname)" + GitCli.US + "%(*objectname)" + GitCli.US + "%(refname:short)"
+	var result := GitCli.run(_repo_root, ["for-each-ref", "--format=" + fmt, "refs/tags"])
+
+	var map := {}
+	for line in GitCli.lines(result["text"]):
+		var fields := line.split(GitCli.US)
+		if fields.size() < 3:
+			continue
+		var oid: String = fields[1] if not fields[1].is_empty() else fields[0]
+		var name: String = fields[2]
+		var arr: PackedStringArray = map.get(oid, PackedStringArray())
+		arr.append(name)
+		map[oid] = arr
+	return map
