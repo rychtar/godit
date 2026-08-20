@@ -188,6 +188,11 @@ func checkout_branch(name: String) -> Dictionary:
 	return _checkout(name)
 
 
+## Checks out an arbitrary commit, leaving HEAD detached.
+func checkout_commit(oid: String) -> Dictionary:
+	return _checkout(oid)
+
+
 func _checkout(target: String) -> Dictionary:
 	var result := { "ok": false, "error": "" }
 	var checkout_result := GitCli.run(_repo_root, ["checkout", target], true)
