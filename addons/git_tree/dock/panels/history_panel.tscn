@@ -3,6 +3,13 @@
 [ext_resource type="Script" path="res://addons/git_tree/dock/panels/history_panel.gd" id="1"]
 [ext_resource type="Script" path="res://addons/git_tree/dock/widgets/commit_graph.gd" id="2"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_detail_label"]
+bg_color = Color(0, 0, 0, 0)
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+
 [node name="HistoryPanel" type="Control"]
 layout_mode = 3
 anchors_preset = 15
@@ -28,6 +35,17 @@ layout_mode = 2
 layout_mode = 2
 text = "Refresh"
 
+[node name="Spacer" type="Control" parent="Layout/Toolbar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="DetailsToggle" type="CheckButton" parent="Layout/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+tooltip_text = "Show/hide commit details (changed files + message)"
+text = "Details"
+
 [node name="Split" type="HSplitContainer" parent="Layout"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -51,6 +69,46 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("2")
+
+[node name="DetailMargin" type="MarginContainer" parent="Layout/Split"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="DetailLayout" type="VSplitContainer" parent="Layout/Split/DetailMargin"]
+layout_mode = 2
+split_offset = 40
+
+[node name="FilesTree" type="Tree" parent="Layout/Split/DetailMargin/DetailLayout"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+size_flags_vertical = 3
+hide_root = true
+
+[node name="DetailPane" type="VBoxContainer" parent="Layout/Split/DetailMargin/DetailLayout"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="DetailSeparator" type="HSeparator" parent="Layout/Split/DetailMargin/DetailLayout/DetailPane"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+
+[node name="DetailLabel" type="RichTextLabel" parent="Layout/Split/DetailMargin/DetailLayout/DetailPane"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/normal = SubResource("StyleBoxFlat_detail_label")
+theme_override_styles/focus = SubResource("StyleBoxFlat_detail_label")
+bbcode_enabled = true
+scroll_following = false
 
 [node name="ContextMenu" type="PopupMenu" parent="."]
 unique_name_in_owner = true
@@ -96,6 +154,8 @@ layout_mode = 2
 text = "Checkout after creating"
 
 [connection signal="pressed" from="Layout/Toolbar/RefreshButton" to="." method="_on_refresh_button_pressed"]
+[connection signal="toggled" from="Layout/Toolbar/DetailsToggle" to="." method="_on_details_toggle_toggled"]
+[connection signal="commit_selected" from="Layout/Split/GraphSplit/GraphScroll/CommitGraph" to="." method="_on_commit_graph_commit_selected"]
 [connection signal="commit_context_requested" from="Layout/Split/GraphSplit/GraphScroll/CommitGraph" to="." method="_on_commit_graph_commit_context_requested"]
 [connection signal="id_pressed" from="ContextMenu" to="." method="_on_context_menu_id_pressed"]
 [connection signal="confirmed" from="CheckoutConfirmDialog" to="." method="_on_checkout_confirm_dialog_confirmed"]

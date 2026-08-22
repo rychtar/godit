@@ -49,3 +49,47 @@ static func status_color(status: int) -> Color:
 			return COLOR_UNTRACKED
 		_:
 			return COLOR_DEFAULT
+
+
+## Used by GitRepo.get_commit_files() — a per-commit delta code (A/M/D/R/C/T),
+## separate from the status bitmask above, so it gets its own mapping.
+const DELTA_ADDED := 1
+const DELTA_DELETED := 2
+const DELTA_MODIFIED := 3
+const DELTA_RENAMED := 4
+const DELTA_COPIED := 5
+const DELTA_TYPECHANGE := 8
+
+
+static func delta_letter(delta_status: int) -> String:
+	match delta_status:
+		DELTA_ADDED:
+			return "A"
+		DELTA_DELETED:
+			return "D"
+		DELTA_MODIFIED:
+			return "M"
+		DELTA_RENAMED:
+			return "R"
+		DELTA_COPIED:
+			return "C"
+		DELTA_TYPECHANGE:
+			return "T"
+		_:
+			return "?"
+
+
+static func delta_color(delta_status: int) -> Color:
+	match delta_letter(delta_status):
+		"A":
+			return COLOR_ADDED
+		"M":
+			return COLOR_MODIFIED
+		"D":
+			return COLOR_DELETED
+		"R", "C":
+			return COLOR_RENAMED
+		"T":
+			return COLOR_TYPECHANGE
+		_:
+			return COLOR_DEFAULT

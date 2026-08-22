@@ -1,12 +1,13 @@
 ## Runs every git operation by shelling out to the system `git` binary (see
 ## util/git_cli.gd) — no native extension, works anywhere `git` is on PATH.
-## Status is encoded as GitStatusFlags' bitmask, same as the rest of the
-## addon expects. No class_name: internal helper,
+## Status is encoded as GitStatusFlags' bitmask and GitIcons' DELTA_* codes,
+## same as the rest of the addon expects. No class_name: internal helper,
 ## addressed via preload (see git_status_flags.gd for why).
 extends RefCounted
 
 const GitCli := preload("res://addons/git_tree/util/git_cli.gd")
 const GitStatusFlags := preload("res://addons/git_tree/util/git_status_flags.gd")
+const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 
 const US := GitCli.US
 
@@ -80,6 +81,16 @@ func _status_bits(xy: String) -> int:
 		"T": bits |= GitStatusFlags.WT_TYPECHANGE
 		"U": bits |= GitStatusFlags.CONFLICTED | GitStatusFlags.WT_MODIFIED
 	return bits
+
+
+## Overwrites path in the working tree with its content at rev (deleting it if it didn't exist there). The index is left alone, so it shows up as an ordinary unstaged change.
+func restore_file_from(rev: String, path: String) -> Dictionary:
+	if GitCli.run(_repo_root, ["cat-file", "-e", "%s:%s" % [rev, path]])["exit_code"] != 0:
+		var abs_path := _repo_root.path_join(path)
+		if FileAccess.file_exists(abs_path) and DirAccess.remove_absolute(abs_path) != OK:
+			return { "ok": false, "error": "couldn't delete %s" % path, "output": "" }
+		return { "ok": true, "error": "", "output": "" }
+	return _simple(["restore", "--source=" + rev, "--worktree", "--", path])
 
 
 ## Stages many paths in one `git add` (adding new files one by one is slow in big folders).
@@ -255,6 +266,60 @@ func _parse_commit_graph(log_text: String) -> Array:
 func get_head_oid() -> String:
 	var r := GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", "HEAD"])
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
+func has_parent(oid: String) -> bool:
+	return GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", oid + "^"])["exit_code"] == 0
+
+
+## Files changed by this commit, diffed against its first parent (--root
+## diffs a parentless commit against the empty tree, so its files show as
+## additions). -M folds a delete+add pair into a single rename entry.
+func get_commit_files(oid: String) -> Array:
+	var result := GitCli.run(_repo_root, ["diff-tree", "--no-commit-id", "--name-status", "-r", "--root", "-M", oid])
+	return _parse_name_status(result["text"])
+
+
+func _parse_name_status(text: String) -> Array:
+	var entries: Array = []
+	for line in GitCli.lines(text):
+		var fields := line.split("\t")
+		if fields.size() < 2:
+			continue
+		var letter := fields[0].substr(0, 1) # strip the similarity score off R100/C100
+		var path: String = fields[2] if (letter == "R" or letter == "C") and fields.size() > 2 else fields[1]
+		var entry := { "path": path, "status": _delta_status(letter) }
+		if letter == "R" or letter == "C":
+			entry["old_path"] = fields[1]
+		entries.append(entry)
+	return entries
+
+
+func _delta_status(letter: String) -> int:
+	match letter:
+		"A": return GitIcons.DELTA_ADDED
+		"D": return GitIcons.DELTA_DELETED
+		"R": return GitIcons.DELTA_RENAMED
+		"C": return GitIcons.DELTA_COPIED
+		"T": return GitIcons.DELTA_TYPECHANGE
+		_: return GitIcons.DELTA_MODIFIED
+
+
+## Branch names whose history contains oid, "HEAD" first if it qualifies
+## too (a detached checkout has no branch name of its own).
+func branches_containing(oid: String) -> PackedStringArray:
+	var names := PackedStringArray()
+
+	if GitCli.run(_repo_root, ["symbolic-ref", "-q", "HEAD"])["exit_code"] != 0:
+		if GitCli.run(_repo_root, ["merge-base", "--is-ancestor", oid, "HEAD"])["exit_code"] == 0:
+			names.append("HEAD")
+
+	var result := GitCli.run(_repo_root, ["for-each-ref", "--contains", oid, "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+	for line in GitCli.lines(result["text"]):
+		if line.ends_with("/HEAD"):
+			continue
+		names.append(line)
+	return names
 
 
 func _refs_by_oid(ref_prefixes: Array) -> Dictionary:
