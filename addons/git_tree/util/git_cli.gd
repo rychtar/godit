@@ -41,6 +41,13 @@ static func run(repo_root: String, args: Array, include_stderr: bool = false) ->
 	return { "exit_code": exit_code, "text": text }
 
 
+## Starts `git <args>` on a worker thread and returns a Job; `await job.finished` yields the same {"exit_code", "text", "cancelled"} shape as run() (stderr always included). For slow commands, which would otherwise freeze the editor.
+static func start(repo_root: String, args: Array) -> Job:
+	var job := Job.new()
+	job.start(repo_root, args)
+	return job
+
+
 ## Splits git output into non-empty lines.
 static func lines(text: String) -> PackedStringArray:
 	var result := PackedStringArray()
@@ -68,3 +75,83 @@ static func restore_environment() -> void:
 		else:
 			OS.set_environment(key, _saved_env[key])
 	_saved_env.clear()
+
+
+## One background git process. Reads its output on a Thread (OS.execute_with_pipe) so it can be killed mid-way via cancel(); finished is emitted on the main thread.
+class Job:
+	extends RefCounted
+
+	signal finished(result: Dictionary)
+
+	var args: PackedStringArray
+	var is_running := false
+	var _thread: Thread
+	var _pid := -1
+	var _cancelled := false
+	## Guards _pid/_cancelled: cancel() can arrive before the worker has the pid.
+	var _mutex := Mutex.new()
+
+
+	func start(repo_root: String, command_args: Array) -> void:
+		args = PackedStringArray(command_args)
+		is_running = true
+		_thread = Thread.new()
+		_thread.start(_run.bind(repo_root))
+
+
+	func cancel() -> void:
+		_mutex.lock()
+		if is_running and not _cancelled:
+			_cancelled = true
+			if _pid > 0:
+				OS.kill(_pid)
+		_mutex.unlock()
+
+
+	func _run(repo_root: String) -> void:
+		var full_args := PackedStringArray(["-C", repo_root])
+		full_args.append_array(args)
+		var info := OS.execute_with_pipe("git", full_args, true)
+		if info.is_empty():
+			_finish.call_deferred({ "exit_code": -1, "text": "Couldn't start `git` — is it on PATH?", "cancelled": false })
+			return
+
+		_mutex.lock()
+		_pid = info["pid"]
+		if _cancelled:
+			OS.kill(_pid)
+		_mutex.unlock()
+		var stdio: FileAccess = info["stdio"]
+		var stderr: FileAccess = info["stderr"]
+		# Both pipes drained at once, so neither can fill up and stall git.
+		var out_thread := Thread.new()
+		out_thread.start(_drain.bind(stdio))
+		var err := _drain(stderr)
+		var out: String = out_thread.wait_to_finish()
+		if _cancelled:
+			# OS.kill() already reaped the process — querying it again would only log "process does not exist".
+			_finish.call_deferred({ "exit_code": -1, "text": "Cancelled.", "cancelled": true })
+			return
+		while OS.is_process_running(_pid):
+			OS.delay_msec(5)
+		var exit_code := OS.get_process_exit_code(_pid)
+		var text := out + ("\n" if not out.is_empty() and not err.is_empty() else "") + err
+		_finish.call_deferred({ "exit_code": exit_code, "text": text, "cancelled": false })
+
+
+	## Reads until EOF. The pipe is blocking, so an empty read only happens once git has closed its end — a short read isn't EOF, and get_error() flags those too, so it can't be used here.
+	func _drain(pipe: FileAccess) -> String:
+		var bytes := PackedByteArray()
+		while pipe.is_open():
+			var chunk := pipe.get_buffer(4096)
+			if chunk.is_empty():
+				break
+			bytes.append_array(chunk)
+		pipe.close()
+		return bytes.get_string_from_utf8()
+
+
+	func _finish(result: Dictionary) -> void:
+		_thread.wait_to_finish()
+		is_running = false
+		finished.emit(result)

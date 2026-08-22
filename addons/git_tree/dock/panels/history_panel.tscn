@@ -35,9 +35,12 @@ layout_mode = 2
 layout_mode = 2
 text = "Refresh"
 
-[node name="Spacer" type="Control" parent="Layout/Toolbar"]
+[node name="SearchEdit" type="LineEdit" parent="Layout/Toolbar"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
+placeholder_text = "Search message or hash"
+clear_button_enabled = true
 
 [node name="DetailsToggle" type="CheckButton" parent="Layout/Toolbar"]
 unique_name_in_owner = true
@@ -154,6 +157,7 @@ layout_mode = 2
 text = "Checkout after creating"
 
 [connection signal="pressed" from="Layout/Toolbar/RefreshButton" to="." method="_on_refresh_button_pressed"]
+[connection signal="text_changed" from="Layout/Toolbar/SearchEdit" to="." method="_on_search_edit_text_changed"]
 [connection signal="toggled" from="Layout/Toolbar/DetailsToggle" to="." method="_on_details_toggle_toggled"]
 [connection signal="commit_selected" from="Layout/Split/GraphSplit/GraphScroll/CommitGraph" to="." method="_on_commit_graph_commit_selected"]
 [connection signal="commit_context_requested" from="Layout/Split/GraphSplit/GraphScroll/CommitGraph" to="." method="_on_commit_graph_commit_context_requested"]

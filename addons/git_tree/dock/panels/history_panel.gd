@@ -8,17 +8,23 @@ const Settings := preload("res://addons/git_tree/util/settings.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 
 const DETAILS_VISIBLE_SETTING_KEY := "history_details_visible"
+const SHOW_REMOTES_SETTING_KEY := "history_show_remotes"
+const SEARCH_LIMIT := 500
 
 const DETAIL_PANE_RATIO := 1.0 / 3.0
 
-## How many of the newest commits the log shows.
-const LOG_LIMIT := 300
+## Commits loaded at first, and added each time the list is scrolled to its end.
+const PAGE_SIZE := 300
 
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT,
 }
-enum { ID_FILE_OPEN = 100, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
+enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
 
+@onready var _search_edit: LineEdit = %SearchEdit
+var _search_mode: OptionButton
+## Whole-history matches after Enter in the search box, or null while only the loaded commits are filtered.
+var _search_results: Variant = null
 @onready var _split: HSplitContainer = %Split
 @onready var _graph_scroll: ScrollContainer = %GraphScroll
 @onready var _graph: Control = %CommitGraph
@@ -38,6 +44,7 @@ enum { ID_FILE_OPEN = 100, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE
 var _repo: RefCounted
 var _all_commits: Array = []
 var _commits_by_oid: Dictionary = {}
+var _limit := PAGE_SIZE
 
 ## The commit the context menu was last opened for, for the dialogs'
 ## confirmed handlers (same pattern as changes_panel.gd's _context_target).
@@ -47,6 +54,13 @@ var _context_oids := PackedStringArray()
 ## The commit whose files are listed in the detail pane.
 var _detail_oid := ""
 var _file_context_path := ""
+
+var _branch_option: OptionButton
+var _remotes_check: CheckBox
+var _path_chip: HBoxContainer
+var _path_label: Label
+var _path_filter := ""
+var _count_label: Label
 var _file_menu: PopupMenu
 
 
@@ -57,12 +71,80 @@ func _ready() -> void:
 	_files_tree.allow_rmb_select = true
 	_files_tree.item_mouse_selected.connect(_on_files_tree_item_mouse_selected)
 	_details_toggle.button_pressed = Settings.get_value(DETAILS_VISIBLE_SETTING_KEY, true)
+	_build_toolbar()
 
 	_file_menu = PopupMenu.new()
 	_file_menu.id_pressed.connect(_on_file_menu_id_pressed)
 	add_child(_file_menu)
 
-	_graph_scroll.get_v_scroll_bar().value_changed.connect(func(_v: float) -> void: _graph.queue_redraw())
+	var v_bar := _graph_scroll.get_v_scroll_bar()
+	v_bar.value_changed.connect(func(value: float) -> void:
+		_graph.queue_redraw()
+		# Scrolled to the end of a full page: there's probably more history, fetch the next page.
+		if value + v_bar.page >= v_bar.max_value - 4.0 and _all_commits.size() >= _limit and _search_edit.text.is_empty():
+			_limit += PAGE_SIZE
+			refresh.call_deferred()
+	)
+
+
+func _build_toolbar() -> void:
+	var toolbar: HBoxContainer = $Layout/Toolbar
+
+	_branch_option = OptionButton.new()
+	_branch_option.tooltip_text = "Which branches to show"
+	_branch_option.fit_to_longest_item = false
+	_branch_option.custom_minimum_size.x = 150
+	_branch_option.clip_text = true
+	_branch_option.item_selected.connect(func(_i: int) -> void: refresh())
+	toolbar.add_child(_branch_option)
+	toolbar.move_child(_branch_option, 1)
+
+	_remotes_check = CheckBox.new()
+	_remotes_check.text = "Remotes"
+	_remotes_check.tooltip_text = "Also show commits that are only on remote-tracking branches (e.g. fetched but not pulled)"
+	_remotes_check.button_pressed = Settings.get_value(SHOW_REMOTES_SETTING_KEY, true)
+	_remotes_check.toggled.connect(func(on: bool) -> void:
+		Settings.set_value(SHOW_REMOTES_SETTING_KEY, on)
+		refresh()
+	)
+	toolbar.add_child(_remotes_check)
+	toolbar.move_child(_remotes_check, 2)
+
+	_path_chip = HBoxContainer.new()
+	_path_chip.visible = false
+	_path_label = Label.new()
+	_path_label.modulate = Color(0.95, 0.85, 0.55)
+	_path_label.clip_text = true
+	_path_label.custom_minimum_size.x = 60
+	_path_label.size_flags_horizontal = SIZE_SHRINK_BEGIN
+	_path_chip.add_child(_path_label)
+	var clear := Button.new()
+	clear.text = "✕"
+	clear.flat = true
+	clear.tooltip_text = "Show all files again"
+	clear.pressed.connect(func() -> void: set_path_filter(""))
+	_path_chip.add_child(clear)
+	toolbar.add_child(_path_chip)
+	toolbar.move_child(_path_chip, 3)
+
+	_search_mode = OptionButton.new()
+	_search_mode.add_item("Message", 0)
+	_search_mode.add_item("Author", 1)
+	_search_mode.add_item("Code", 2)
+	_search_mode.tooltip_text = "What the search box matches. Typing filters the loaded commits; Enter searches the whole history (Code: commits that added or removed the text)."
+	_search_mode.item_selected.connect(func(_i: int) -> void:
+		_update_search_placeholder()
+		_on_search_edit_text_changed(_search_edit.text)
+	)
+	toolbar.add_child(_search_mode)
+	toolbar.move_child(_search_mode, _search_edit.get_index() + 1)
+	_search_edit.text_submitted.connect(func(_t: String) -> void: _run_full_search())
+	_update_search_placeholder()
+
+	_count_label = Label.new()
+	_count_label.modulate.a = 0.6
+	toolbar.add_child(_count_label)
+	toolbar.move_child(_count_label, toolbar.get_child_count() - 2)
 
 
 ## split_offset is a pixel offset from the container's midpoint, not a
@@ -77,18 +159,51 @@ func _update_split_offset() -> void:
 
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
+	_update_branch_option()
 	refresh()
+
+
+## Limits the log to commits touching path ("" = no filter) — the Changes panel's "Show History".
+func set_path_filter(path: String) -> void:
+	_path_filter = path
+	_path_chip.visible = not path.is_empty()
+	_path_label.text = "File: " + path.get_file()
+	_path_label.tooltip_text = path
+	_limit = PAGE_SIZE
+	refresh()
+
+
+func _log_options() -> Dictionary:
+	var ref := ""
+	if _branch_option.selected > 0:
+		ref = _branch_option.get_item_text(_branch_option.selected)
+	return { "remotes": _remotes_check.button_pressed, "ref": ref, "path": _path_filter }
+
+
+func _update_branch_option() -> void:
+	var current := _branch_option.get_item_text(_branch_option.selected) if _branch_option.selected >= 0 else ""
+	_branch_option.clear()
+	_branch_option.add_item("All branches")
+	for b in _repo.list_branches(false):
+		_branch_option.add_item(b["name"])
+		if b["name"] == current:
+			_branch_option.select(_branch_option.item_count - 1)
+	if _branch_option.selected < 0:
+		_branch_option.select(0)
 
 
 func refresh() -> void:
 	if _repo == null:
 		return
 
-	_all_commits = _repo.get_commit_graph(LOG_LIMIT)
+	_all_commits = _repo.get_commit_graph(_limit, _log_options())
 	_commits_by_oid.clear()
-	for c in _all_commits:
+	for c in _all_commits + (_search_results if _search_results != null else []):
 		_commits_by_oid[c["oid"]] = c
-	_graph.set_commits(_all_commits, _repo.get_head_oid())
+	if _search_results == null:
+		_count_label.text = "%d%s commits" % [_all_commits.size(), "+" if _all_commits.size() >= _limit else ""]
+
+	_apply_filter()
 	# Keep the detail pane if its commit is still listed (refresh after an unrelated change).
 	if not _commits_by_oid.has(_detail_oid):
 		_detail_oid = ""
@@ -98,12 +213,68 @@ func refresh() -> void:
 
 
 func _on_refresh_button_pressed() -> void:
+	_update_branch_option()
 	refresh()
+
+
+func _on_search_edit_text_changed(_new_text: String) -> void:
+	_search_results = null
+	_repo.cancel_search()
+	_apply_filter()
+
+
+func _search_mode_key() -> String:
+	return ["message", "author", "code"][_search_mode.selected]
+
+
+func _update_search_placeholder() -> void:
+	_search_edit.placeholder_text = {
+		"message": "Search message or hash (Enter: whole history)",
+		"author": "Search author (Enter: whole history)",
+		"code": "Text added/removed by a commit, then Enter",
+	}[_search_mode_key()]
+
+
+func _run_full_search() -> void:
+	var query := _search_edit.text.strip_edges()
+	if query.is_empty() or _repo == null:
+		return
+	_count_label.text = "searching…"
+	var results: Variant = await _repo.search_commits(query, _search_mode_key(), SEARCH_LIMIT, _log_options())
+	if results == null or _search_edit.text.strip_edges() != query:
+		return # superseded by further typing or another search
+	_search_results = results
+	for c in results:
+		_commits_by_oid[c["oid"]] = c
+	_count_label.text = "%d%s matches" % [results.size(), "+" if results.size() >= SEARCH_LIMIT else ""]
+	_apply_filter()
 
 
 func _on_details_toggle_toggled(pressed: bool) -> void:
 	_detail_margin.visible = pressed
 	Settings.set_value(DETAILS_VISIBLE_SETTING_KEY, pressed)
+
+
+## Whole-history search results if there are any, else a case-insensitive filter of the loaded commits by the search mode.
+func _apply_filter() -> void:
+	var query := _search_edit.text.strip_edges().to_lower()
+	var head: String = _repo.get_head_oid()
+	if _search_results != null:
+		_graph.set_commits(_search_results, head)
+		return
+	# Code search needs git (Enter); there's nothing to match locally.
+	if query.is_empty() or _search_mode_key() == "code":
+		_graph.set_commits(_all_commits, head)
+		return
+
+	var by_author := _search_mode_key() == "author"
+	var filtered: Array = []
+	for c in _all_commits:
+		var hit := (String(c["author_name"]).to_lower().contains(query) or String(c["author_email"]).to_lower().contains(query)) if by_author \
+				else (String(c["oid"]).to_lower().begins_with(query) or String(c["summary"]).to_lower().contains(query) or String(c["message"]).to_lower().contains(query))
+		if hit:
+			filtered.append(c)
+	_graph.set_commits(filtered, head)
 
 
 func _on_commit_graph_commit_selected(oid: String) -> void:
@@ -173,6 +344,8 @@ func _build_files_tree(oid: String) -> void:
 		item.set_custom_color(0, GitIcons.delta_color(status))
 		item.set_metadata(0, { "path": path, "status": status })
 		item.set_tooltip_text(0, "%s\nDouble-click to open, right-click for more" % path)
+		if not _path_filter.is_empty() and path == _path_filter:
+			item.select(0)
 
 	if files.is_empty():
 		var empty_item := _files_tree.create_item(root)
@@ -199,6 +372,7 @@ func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_in
 	_file_context_path = item.get_metadata(0)["path"]
 	_file_menu.clear()
 	_file_menu.add_item("Open", ID_FILE_OPEN)
+	_file_menu.add_item("Show History of This File", ID_FILE_HISTORY)
 	_file_menu.add_item("Copy Path", ID_FILE_COPY_PATH)
 	_file_menu.add_separator()
 	_file_menu.add_item("Restore File to This Commit's Version…", ID_FILE_RESTORE_THIS)
@@ -214,6 +388,8 @@ func _on_file_menu_id_pressed(id: int) -> void:
 	match id:
 		ID_FILE_OPEN:
 			EditorOpen.open_file(_repo.get_repo_root(), path)
+		ID_FILE_HISTORY:
+			set_path_filter(path)
 		ID_FILE_COPY_PATH:
 			DisplayServer.clipboard_set(path)
 		ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE:
@@ -277,6 +453,7 @@ func _on_new_branch_dialog_confirmed() -> void:
 		return
 	if _new_branch_checkout_check.button_pressed:
 		EditorOpen.refresh_all_external_changes()
+	_update_branch_option()
 	refresh()
 
 

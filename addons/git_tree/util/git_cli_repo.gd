@@ -226,11 +226,63 @@ func create_branch(name: String, start_point: String, checkout: bool) -> Diction
 	return result
 
 
-## Flat parent-linked commit list (HEAD + local branches, lanes laid out in commit_graph.gd), newest first.
-func get_commit_graph(limit: int = 200) -> Array:
+## Flat parent-linked commit list (HEAD + local branches, lanes laid out in commit_graph.gd); options: {"remotes": bool, "ref": only this ref, "path": only commits touching it, "skip": int}.
+func get_commit_graph(limit: int = 200, options: Dictionary = {}) -> Array:
+	return _parse_commit_graph(GitCli.run(_repo_root, _commit_graph_args(limit, options))["text"])
+
+
+## Searches the whole history (same options as get_commit_graph()) instead of just the loaded page. mode: "message" (also matches a hash), "author", or "code" (commits that add/remove query, git's -S). Coroutine, off the main thread — -S diffs every commit. null if superseded by cancel_search().
+func search_commits(query: String, mode: String, limit: int, options: Dictionary = {}) -> Variant:
+	var args := _commit_graph_args(limit, options)
+	match mode:
+		"author": args.insert(1, "--author=" + query)
+		"code": args.insert(1, "-S" + query)
+		_: args.insert(1, "--grep=" + query)
+	args.insert(1, "-i")
+	if mode != "code":
+		args.insert(1, "--fixed-strings") # "fix(" is text here, not a broken regex
+	cancel_search()
+	var job := GitCli.start(_repo_root, args)
+	_search_job = job
+	var r: Dictionary = await job.finished
+	if _search_job == job:
+		_search_job = null
+	if r["cancelled"]:
+		return null
+	var commits := _parse_commit_graph(r["text"]) if r["exit_code"] == 0 else []
+	if mode == "message" and query.length() >= 4 and query.is_valid_hex_number():
+		var hit := GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", query + "^{commit}"])
+		if hit["exit_code"] == 0 and not commits.any(func(c: Dictionary) -> bool: return c["oid"] == hit["text"].strip_edges()):
+			commits = _parse_commit_graph(GitCli.run(_repo_root, _commit_graph_args(1, { "ref": query }))["text"]) + commits
+	return commits
+
+
+var _search_job: RefCounted = null
+
+
+func cancel_search() -> void:
+	if _search_job != null:
+		_search_job.cancel()
+		_search_job = null
+
+
+func _commit_graph_args(limit: int, options: Dictionary) -> Array:
 	var fmt := "%H" + GitCli.US + "%P" + GitCli.US + "%s" + GitCli.US + "%B" + GitCli.US + "%an" + GitCli.US + "%ae" + GitCli.US + "%at" + GitCli.RS
-	var args := ["log", "--topo-order", "--date-order", "--format=" + fmt, "--max-count=%d" % limit, "HEAD", "--branches"]
-	return _parse_commit_graph(GitCli.run(_repo_root, args)["text"])
+	var args := ["log", "--topo-order", "--date-order", "--format=" + fmt, "--max-count=%d" % limit]
+	if options.get("skip", 0) > 0:
+		args.append("--skip=%d" % options["skip"])
+	var ref: String = options.get("ref", "")
+	if not ref.is_empty():
+		args.append(ref)
+	else:
+		args.append_array(["HEAD", "--branches"])
+		if options.get("remotes", false):
+			args.append("--remotes")
+	var path: String = options.get("path", "")
+	if not path.is_empty():
+		# --parents rewrites %P to the nearest commit that also touched path, so the filtered graph stays connected.
+		args.append_array(["--parents", "--", path])
+	return args
 
 
 func _parse_commit_graph(log_text: String) -> Array:
