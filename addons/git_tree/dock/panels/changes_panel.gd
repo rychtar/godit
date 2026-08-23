@@ -26,8 +26,10 @@ const CHECKBOX_COLUMN := 1
 const CHECKBOX_COLUMN_WIDTH := 28
 
 @onready var _tree: Tree = %ChangesTree
+@onready var _amend_check: CheckBox = %AmendCheck
 @onready var _commit_message: TextEdit = %CommitMessage
 @onready var _commit_button: Button = %CommitButton
+@onready var _commit_push_button: Button = %CommitPushButton
 @onready var _status_label: Label = %StatusLabel
 @onready var _error_dialog: AcceptDialog = %ErrorDialog
 @onready var _context_menu: PopupMenu = %ContextMenu
@@ -54,7 +56,7 @@ func _ready() -> void:
 	_tree.allow_rmb_select = true
 
 	_commit_message.gui_input.connect(_on_commit_message_gui_input)
-	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit"
+	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push"
 
 
 func set_repo(repo: RefCounted) -> void:
@@ -366,7 +368,16 @@ func _on_commit_message_gui_input(event: InputEvent) -> void:
 			and (event.ctrl_pressed or event.meta_pressed):
 		_commit_message.accept_event()
 		if not _commit_button.disabled:
-			_do_commit()
+			_do_commit(event.shift_pressed)
+
+
+func _on_amend_check_toggled(pressed: bool) -> void:
+	if pressed:
+		var head: Dictionary = _repo.get_head_info()
+		_commit_message.text = String(head.get("message", "")).strip_edges()
+	else:
+		_commit_message.text = ""
+	_update_commit_buttons_enabled()
 
 
 func _on_commit_message_text_changed() -> void:
@@ -384,27 +395,45 @@ func _update_commit_buttons_enabled(any_staged: Variant = null) -> void:
 				break
 
 	var has_message := not _commit_message.text.strip_edges().is_empty()
-	_commit_button.disabled = not (has_message and any_staged)
+	var can_commit: bool = has_message and (any_staged or _amend_check.button_pressed)
+	_commit_button.disabled = not can_commit
+	_commit_push_button.disabled = not can_commit
 
 
 func _on_commit_button_pressed() -> void:
-	_do_commit()
+	_do_commit(false)
 
 
-func _do_commit() -> void:
+func _on_commit_push_button_pressed() -> void:
+	_do_commit(true)
+
+
+func _do_commit(push_after: bool) -> void:
 	var message := _commit_message.text.strip_edges()
 	if message.is_empty():
 		_show_error("Commit failed", "Commit message can't be empty.")
 		return
 
-	var result: Dictionary = _repo.commit(message)
+	var result: Dictionary = _repo.commit(message, _amend_check.button_pressed)
 	if not result["ok"]:
 		_show_error("Commit failed", result["error"])
 		return
 
 	_commit_message.text = ""
+	_amend_check.button_pressed = false
 	refresh()
 	_status_label.text = "Committed %s" % String(result["oid"]).substr(0, 8)
+
+	if push_after:
+		_do_push()
+
+
+func _do_push() -> void:
+	var result: Dictionary = _repo.push()
+	if not result["ok"]:
+		_show_error("Push failed", result["error"])
+		return
+	_status_label.text = "Pushed."
 
 
 func _show_error(title: String, message: String) -> void:

@@ -114,9 +114,12 @@ func unstage_file(path: String) -> bool:
 	return GitCli.run(_repo_root, ["rm", "--cached", "--", path])["exit_code"] == 0
 
 
-func commit(message: String) -> Dictionary:
+func commit(message: String, amend: bool = false) -> Dictionary:
 	var result := { "ok": false, "oid": "", "error": "" }
-	var commit_result := GitCli.run(_repo_root, ["commit", "-m", message], true)
+	var args := ["commit", "-m", message]
+	if amend:
+		args.append("--amend")
+	var commit_result := GitCli.run(_repo_root, args, true)
 	if commit_result["exit_code"] != 0:
 		result["error"] = commit_result["text"].strip_edges()
 		return result
@@ -124,6 +127,25 @@ func commit(message: String) -> Dictionary:
 	result["ok"] = true
 	result["oid"] = GitCli.run(_repo_root, ["rev-parse", "HEAD"])["text"].strip_edges()
 	return result
+
+
+func get_head_info() -> Dictionary:
+	var fmt := "%H" + GitCli.US + "%B" + GitCli.US + "%an" + GitCli.US + "%ae" + GitCli.US + "%at"
+	var result := GitCli.run(_repo_root, ["log", "-1", "--format=" + fmt])
+	if result["exit_code"] != 0:
+		return {} # unborn branch, no commits yet
+
+	var text: String = result["text"]
+	var fields := text.split(GitCli.US)
+	if fields.size() < 5:
+		return {}
+	return {
+		"oid": fields[0],
+		"message": fields[1],
+		"author_name": fields[2],
+		"author_email": fields[3],
+		"time": int(fields[4].strip_edges()),
+	}
 
 
 ## Array[{name, is_head, is_remote, track ("[ahead 2, behind 1]" or ""), upstream, gone, oid, summary, date (relative)}].
@@ -178,6 +200,18 @@ func checkout_remote_branch(remote_branch: String) -> Dictionary:
 	if GitCli.run(_repo_root, ["rev-parse", "--verify", "-q", "refs/heads/" + local_name])["exit_code"] == 0:
 		return _checkout(local_name)
 	return _simple(["checkout", "--track", "-b", local_name, remote_branch])
+
+
+## options (all optional): {"remote", "branch"}; empty = plain `git push`. Runs synchronously, so the editor waits for it.
+func push(options: Dictionary = {}) -> Dictionary:
+	var args := ["push"]
+	var remote: String = options.get("remote", "")
+	var branch: String = options.get("branch", "")
+	if not remote.is_empty():
+		args.append(remote)
+		if not branch.is_empty():
+			args.append(branch)
+	return _simple(args)
 
 
 ## Current branch's short name, or "" on a detached HEAD.
