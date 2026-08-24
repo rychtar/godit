@@ -2,6 +2,7 @@
 extends Control
 
 const RepoOpener := preload("res://addons/git_tree/util/repo_opener.gd")
+const ChangesetDialog := preload("res://addons/git_tree/dock/widgets/changeset_dialog.gd")
 
 ## Set by plugin.gd right after instantiation.
 var plugin: EditorPlugin
@@ -26,6 +27,11 @@ func _ready() -> void:
 	_tab_container.visible = true
 	_changes_panel.set_repo(_repo)
 	_branches_panel.set_repo(_repo)
+	_branches_panel.compare_requested.connect(func(title: String, base: String, target: String) -> void:
+		var dialog := ChangesetDialog.new()
+		add_child(dialog)
+		dialog.open(_repo, title, base, target)
+	)
 
 
 func _show_message(text: String) -> void:

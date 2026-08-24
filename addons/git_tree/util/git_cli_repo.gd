@@ -83,6 +83,57 @@ func _status_bits(xy: String) -> int:
 	return bits
 
 
+## options: {"context": int (lines of context, -1 = whole file), "ignore_whitespace": bool}.
+func get_diff(path: String, staged: bool, options: Dictionary = {}) -> String:
+	var flags := _diff_flags(options)
+	if staged:
+		return GitCli.run(_repo_root, ["diff", "--cached"] + flags + ["--", path])["text"]
+
+	# Plain `git diff` shows nothing for an untracked file; diffing against
+	# /dev/null renders it as a full-file addition instead.
+	if is_untracked(path):
+		return GitCli.run(_repo_root, ["diff", "--no-index"] + flags + ["--", "/dev/null", path])["text"]
+
+	return GitCli.run(_repo_root, ["diff"] + flags + ["--", path])["text"]
+
+
+func is_untracked(path: String) -> bool:
+	var status_result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])
+	return status_result["text"].strip_edges().begins_with("??")
+
+
+static func _diff_flags(options: Dictionary) -> Array:
+	var flags: Array = ["--no-color", "--no-ext-diff"]
+	var context: int = options.get("context", 3)
+	flags.append("--unified=%d" % (context if context >= 0 else 1000000))
+	if options.get("ignore_whitespace", false):
+		flags.append("--ignore-all-space")
+	return flags
+
+
+## Files that differ between two revisions; target "" = the working tree. Same shape as get_commit_files().
+func get_changed_files_between(base: String, target: String) -> Array:
+	var args := ["diff", "--name-status", "-M", base]
+	if not target.is_empty():
+		args.append(target)
+	return _parse_name_status(GitCli.run(_repo_root, args)["text"])
+
+
+## Diff of one file between two revisions; target "" = the working tree.
+func get_diff_between(base: String, target: String, path: String, options: Dictionary = {}) -> String:
+	var args := ["diff"] + _diff_flags(options) + [base]
+	if not target.is_empty():
+		args.append(target)
+	args.append_array(["--", path])
+	return GitCli.run(_repo_root, args)["text"]
+
+
+## One file's changes in a single commit (against its first parent, or the empty tree for a root commit).
+func get_commit_file_diff(oid: String, path: String, options: Dictionary = {}) -> String:
+	var args := ["show", "--format=", "-M", "--first-parent"] + _diff_flags(options) + [oid, "--", path]
+	return GitCli.run(_repo_root, args)["text"]
+
+
 ## Overwrites path in the working tree with its content at rev (deleting it if it didn't exist there). The index is left alone, so it shows up as an ordinary unstaged change.
 func restore_file_from(rev: String, path: String) -> Dictionary:
 	if GitCli.run(_repo_root, ["cat-file", "-e", "%s:%s" % [rev, path]])["exit_code"] != 0:
@@ -352,6 +403,18 @@ func _parse_commit_graph(log_text: String) -> Array:
 func get_head_oid() -> String:
 	var r := GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", "HEAD"])
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
+## The empty tree's id in this repo's hash format — the "parent" to diff a root commit against.
+func empty_tree_oid() -> String:
+	if GitCli.run(_repo_root, ["rev-parse", "--show-object-format"])["text"].strip_edges() == "sha256":
+		return "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+	return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+## rev's first parent, or the empty tree if it has none.
+func parent_or_empty_tree(oid: String) -> String:
+	return oid + "^" if has_parent(oid) else empty_tree_oid()
 
 
 func has_parent(oid: String) -> bool:

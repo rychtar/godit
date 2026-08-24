@@ -6,8 +6,11 @@ const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 
 enum {
-	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_RENAME, ID_DELETE, ID_COPY_NAME,
+	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_RENAME, ID_DELETE, ID_COPY_NAME, ID_COMPARE,
 }
+
+## Opens the changeset dialog, wired up by git_tree_dock.gd: (title, base_ref, target_ref). target "" means the working tree.
+signal compare_requested(title: String, base: String, target: String)
 
 @onready var _tree: Tree = %BranchesTree
 @onready var _filter_edit: LineEdit = %FilterEdit
@@ -57,6 +60,7 @@ func refresh() -> void:
 	_setup_columns()
 	var root := _tree.create_item()
 	var filter := _filter_edit.text.strip_edges().to_lower()
+	var current: String = _repo.get_current_branch()
 
 	var branches: Array = _repo.list_branches(false)
 	var local_section := _section(root, "Local")
@@ -227,6 +231,8 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 	_context = meta
 	var m := _context_menu
 	m.clear()
+	var current: String = _repo.get_current_branch()
+	var current_label := current if not current.is_empty() else "HEAD"
 
 	match meta.get("kind", ""):
 		"local":
@@ -234,6 +240,9 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			if not meta["is_head"]:
 				m.add_item("Checkout", ID_CHECKOUT)
 			m.add_item("New Branch from Here…", ID_NEW_BRANCH_FROM)
+			if not meta["is_head"]:
+				m.add_separator()
+				m.add_item("Compare with %s" % current_label, ID_COMPARE)
 			m.add_separator()
 			m.add_item("Rename…", ID_RENAME)
 			m.add_item("Delete…", ID_DELETE)
@@ -242,6 +251,8 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 		"remote_branch":
 			m.add_item("Checkout (as tracking branch)", ID_CHECKOUT)
 			m.add_item("New Branch from Here…", ID_NEW_BRANCH_FROM)
+			m.add_separator()
+			m.add_item("Compare with %s" % current_label, ID_COMPARE)
 			m.add_separator()
 			m.add_item("Copy Name", ID_COPY_NAME)
 		"section":
@@ -267,6 +278,8 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				"remote_branch": _after(_repo.checkout_remote_branch(name), "Checkout failed", true)
 		ID_NEW_BRANCH_FROM:
 			await _new_branch_from(name if not name.is_empty() else "HEAD")
+		ID_COMPARE:
+			compare_requested.emit("%s ↔ %s" % [_current_label(), name], "HEAD", name)
 		ID_RENAME:
 			var new_name: Variant = await Dialogs.prompt(self, "Rename Branch", "New name for \"%s\"" % name, name, "Rename")
 			if new_name != null and not new_name.is_empty() and new_name != name:
@@ -275,6 +288,11 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			await _delete_branch(name)
 		ID_COPY_NAME:
 			DisplayServer.clipboard_set(name)
+
+
+func _current_label() -> String:
+	var current: String = _repo.get_current_branch()
+	return current if not current.is_empty() else "HEAD"
 
 
 func _delete_branch(name: String) -> void:

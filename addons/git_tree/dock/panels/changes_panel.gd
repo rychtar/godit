@@ -5,7 +5,11 @@ const GitStatusFlags := preload("res://addons/git_tree/util/git_status_flags.gd"
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
+const Settings := preload("res://addons/git_tree/util/settings.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
+
+const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
+const LIST_PANE_RATIO := 0.4
 
 const ID_OPEN := 1
 const ID_ADD_TO_VCS := 2
@@ -26,6 +30,8 @@ const CHECKBOX_COLUMN := 1
 const CHECKBOX_COLUMN_WIDTH := 28
 
 @onready var _tree: Tree = %ChangesTree
+@onready var _diff_view: Control = %DiffView
+@onready var _diff_toggle: CheckButton = %DiffToggle
 @onready var _amend_check: CheckBox = %AmendCheck
 @onready var _commit_message: TextEdit = %CommitMessage
 @onready var _commit_button: Button = %CommitButton
@@ -45,6 +51,9 @@ var _suppress_item_edited := false
 ## handler: {"kind": "file"|"untracked_file"|"folder", "path": ...}.
 var _context_target: Dictionary = {}
 
+## Which diff ("unstaged"/"staged") was last viewed per path, for files that have both.
+var _diff_side_by_path := {}
+
 
 func _ready() -> void:
 	_tree.columns = 2
@@ -55,6 +64,18 @@ func _ready() -> void:
 	# item_mouse_selected never fires and the context menu can't open.
 	_tree.allow_rmb_select = true
 
+	_diff_toggle.button_pressed = Settings.get_value(DIFF_VISIBLE_SETTING_KEY, true)
+
+	# File list + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
+	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
+
+	_diff_view.options_changed.connect(_show_selected_diff)
+	_diff_view.tab_selected.connect(_on_diff_tab_selected)
+	_diff_view.open_location_requested.connect(func(path: String, line: int) -> void:
+		var error := EditorOpen.open_file_at_line(_repo.get_repo_root(), path, line)
+		if not error.is_empty():
+			Dialogs.error(self, "Can't open file", error)
+	)
 	_commit_message.gui_input.connect(_on_commit_message_gui_input)
 	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push"
 
@@ -145,12 +166,15 @@ func refresh() -> void:
 	_update_commit_buttons_enabled(any_staged)
 
 
-## Re-selects the file that was selected before the tree was rebuilt, so a refresh doesn't lose your place.
+## Re-selects the file that was selected before the tree was rebuilt (so refreshes and hunk actions don't lose your place), or clears the diff if it's gone.
 func _reselect(root: TreeItem, path: String, scroll_y: float) -> void:
+	var found: TreeItem = null
 	if not path.is_empty():
-		var found := _find_item_by_path(root, path)
-		if found != null:
-			found.select(TEXT_COLUMN)
+		found = _find_item_by_path(root, path)
+	if found != null:
+		found.select(TEXT_COLUMN) # emits item_selected -> _show_selected_diff()
+	else:
+		_diff_view.clear_diff()
 	var bar: VScrollBar = TreeFolders.v_scroll_bar(_tree)
 	if bar != null:
 		bar.set_deferred("value", scroll_y)
@@ -279,6 +303,55 @@ func _on_changes_tree_item_edited() -> void:
 	refresh.call_deferred()
 
 
+func _on_changes_tree_item_selected() -> void:
+	_show_selected_diff()
+
+
+## Diff for whichever file is selected. Tracked files with both staged and unstaged changes get Unstaged/Staged tabs.
+func _show_selected_diff() -> void:
+	var item := _tree.get_selected()
+	if item == null:
+		return
+	var meta: Variant = item.get_metadata(0)
+	if not meta is Dictionary or not meta.has("path"):
+		_diff_view.clear_diff()
+		return
+
+	var path: String = meta["path"]
+	var status: int = meta["status"]
+	var options: Dictionary = _diff_view.get_options()
+	if GitStatusFlags.is_untracked(status):
+		_diff_view.set_tabs([])
+		_diff_view.show_diff(_repo.get_diff(path, false, options), { "path": path, "note": "new file" })
+		return
+
+	var has_staged := GitStatusFlags.is_staged(status)
+	var has_unstaged := GitStatusFlags.is_unstaged(status)
+	var side: String = _diff_side_by_path.get(path, "unstaged" if has_unstaged else "staged")
+	if side == "unstaged" and not has_unstaged:
+		side = "staged"
+	elif side == "staged" and not has_staged:
+		side = "unstaged"
+
+	if has_staged and has_unstaged:
+		_diff_view.set_tabs(["Unstaged", "Staged"], 0 if side == "unstaged" else 1)
+	else:
+		_diff_view.set_tabs([])
+
+	if side == "staged":
+		_diff_view.show_diff(_repo.get_diff(path, true, options), { "path": path, "note": "staged" })
+	else:
+		_diff_view.show_diff(_repo.get_diff(path, false, options), { "path": path, "note": "unstaged" if has_staged else "" })
+
+
+func _on_diff_tab_selected(index: int) -> void:
+	var item := _tree.get_selected()
+	if item == null or not item.get_metadata(0) is Dictionary:
+		return
+	_diff_side_by_path[item.get_metadata(0).get("path", "")] = "unstaged" if index == 0 else "staged"
+	_show_selected_diff()
+
+
 func _on_changes_tree_item_activated() -> void:
 	var item := _tree.get_selected()
 	if item == null:
@@ -369,6 +442,11 @@ func _on_commit_message_gui_input(event: InputEvent) -> void:
 		_commit_message.accept_event()
 		if not _commit_button.disabled:
 			_do_commit(event.shift_pressed)
+
+
+func _on_diff_toggle_toggled(pressed: bool) -> void:
+	_diff_view.visible = pressed
+	Settings.set_value(DIFF_VISIBLE_SETTING_KEY, pressed)
 
 
 func _on_amend_check_toggled(pressed: bool) -> void:

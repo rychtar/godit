@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://cq1kqplw8echr"]
 
 [ext_resource type="Script" uid="uid://d0wpsjunrgi7e" path="res://addons/git_tree/dock/panels/changes_panel.gd" id="1"]
+[ext_resource type="Script" uid="uid://b040bsfipgn6p" path="res://addons/git_tree/dock/widgets/diff_view.gd" id="2"]
 
 [node name="ChangesPanel" type="Control" unique_id=673886398]
 clip_contents = true
@@ -34,6 +35,13 @@ size_flags_horizontal = 3
 [node name="ToolbarRow" type="HBoxContainer" parent="Layout/Split/Left" unique_id=844172871]
 layout_mode = 2
 alignment = 2
+
+[node name="DiffToggle" type="CheckButton" parent="Layout/Split/Left/ToolbarRow" unique_id=1728165140]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Show/hide the diff"
+button_pressed = true
+text = "Diff"
 
 [node name="RefreshButton" type="Button" parent="Layout/Split/Left/ToolbarRow" unique_id=1728165141]
 layout_mode = 2
@@ -88,6 +96,14 @@ layout_mode = 2
 disabled = true
 text = "Commit and Push"
 
+[node name="DiffView" type="VBoxContainer" parent="Layout/Split" unique_id=1456785926]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("2")
+
 [node name="ErrorDialog" type="AcceptDialog" parent="." unique_id=72532236]
 unique_name_in_owner = true
 initial_position = 1
@@ -96,10 +112,12 @@ size = Vector2i(360, 120)
 [node name="ContextMenu" type="PopupMenu" parent="." unique_id=1637247915]
 unique_name_in_owner = true
 
+[connection signal="toggled" from="Layout/Split/Left/ToolbarRow/DiffToggle" to="." method="_on_diff_toggle_toggled"]
 [connection signal="pressed" from="Layout/Split/Left/ToolbarRow/RefreshButton" to="." method="refresh"]
 [connection signal="item_activated" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_activated"]
 [connection signal="item_edited" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_edited"]
 [connection signal="item_mouse_selected" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_mouse_selected"]
+[connection signal="item_selected" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_selected"]
 [connection signal="text_changed" from="Layout/Split/Left/CommitMessage" to="." method="_on_commit_message_text_changed"]
 [connection signal="toggled" from="Layout/Split/Left/CommitRow/AmendCheck" to="." method="_on_amend_check_toggled"]
 [connection signal="pressed" from="Layout/Split/Left/CommitRow/CommitButton" to="." method="_on_commit_button_pressed"]

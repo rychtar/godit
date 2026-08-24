@@ -6,6 +6,8 @@ const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
+const DiffViewScript := preload("res://addons/git_tree/dock/widgets/diff_view.gd")
+const ChangesetDialog := preload("res://addons/git_tree/dock/widgets/changeset_dialog.gd")
 
 const DETAILS_VISIBLE_SETTING_KEY := "history_details_visible"
 const SHOW_REMOTES_SETTING_KEY := "history_show_remotes"
@@ -18,6 +20,7 @@ const PAGE_SIZE := 300
 
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT,
+	ID_COMPARE_WORKTREE, ID_COMPARE_SELECTED, ID_SHOW_CHANGES,
 }
 enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
 
@@ -26,6 +29,7 @@ var _search_mode: OptionButton
 ## Whole-history matches after Enter in the search box, or null while only the loaded commits are filtered.
 var _search_results: Variant = null
 @onready var _split: HSplitContainer = %Split
+@onready var _graph_split: VSplitContainer = %GraphSplit
 @onready var _graph_scroll: ScrollContainer = %GraphScroll
 @onready var _graph: Control = %CommitGraph
 @onready var _detail_margin: Control = %DetailMargin
@@ -61,6 +65,10 @@ var _path_chip: HBoxContainer
 var _path_label: Label
 var _path_filter := ""
 var _count_label: Label
+
+var _file_diff_box: VBoxContainer
+var _file_diff_label: Label
+var _file_diff_view: Control
 var _file_menu: PopupMenu
 
 
@@ -68,10 +76,12 @@ func _ready() -> void:
 	_split.resized.connect(_update_split_offset)
 	_update_split_offset()
 	_files_tree.item_activated.connect(_on_files_tree_item_activated)
+	_files_tree.item_selected.connect(_on_files_tree_item_selected)
 	_files_tree.allow_rmb_select = true
 	_files_tree.item_mouse_selected.connect(_on_files_tree_item_mouse_selected)
 	_details_toggle.button_pressed = Settings.get_value(DETAILS_VISIBLE_SETTING_KEY, true)
 	_build_toolbar()
+	_build_file_diff()
 
 	_file_menu = PopupMenu.new()
 	_file_menu.id_pressed.connect(_on_file_menu_id_pressed)
@@ -147,6 +157,37 @@ func _build_toolbar() -> void:
 	toolbar.move_child(_count_label, toolbar.get_child_count() - 2)
 
 
+func _build_file_diff() -> void:
+	_file_diff_box = VBoxContainer.new()
+	_file_diff_box.visible = false
+	_file_diff_box.custom_minimum_size.y = 120
+	_file_diff_box.size_flags_vertical = SIZE_EXPAND_FILL # shares the height with the graph instead of a thin strip
+	var header := HBoxContainer.new()
+	_file_diff_label = Label.new()
+	_file_diff_label.size_flags_horizontal = SIZE_EXPAND_FILL
+	_file_diff_label.clip_text = true
+	_file_diff_label.modulate.a = 0.75
+	header.add_child(_file_diff_label)
+	var close := Button.new()
+	close.text = "✕"
+	close.flat = true
+	close.tooltip_text = "Close the file diff"
+	close.pressed.connect(func() -> void:
+		_file_diff_box.visible = false
+		_files_tree.deselect_all()
+	)
+	header.add_child(close)
+	_file_diff_box.add_child(header)
+
+	_file_diff_view = DiffViewScript.new()
+	_file_diff_view.options_changed.connect(_on_files_tree_item_selected)
+	_file_diff_view.open_location_requested.connect(func(path: String, line: int) -> void:
+		EditorOpen.open_file_at_line(_repo.get_repo_root(), path, line)
+	)
+	_file_diff_box.add_child(_file_diff_view)
+	_graph_split.add_child(_file_diff_box)
+
+
 ## split_offset is a pixel offset from the container's midpoint, not a
 ## fraction, so it's recomputed on every resize to keep the detail pane at
 ## a constant ~1/3 width.
@@ -210,6 +251,7 @@ func refresh() -> void:
 		_files_tree.clear()
 		_detail_label.text = ""
 		_detail_separator.visible = false
+		_file_diff_box.visible = false
 
 
 func _on_refresh_button_pressed() -> void:
@@ -286,6 +328,7 @@ func _on_commit_graph_commit_selected(oid: String) -> void:
 
 	if not same_commit:
 		_build_files_tree(oid)
+		_file_diff_box.visible = false
 	_detail_separator.visible = true
 
 	var when := Time.get_datetime_string_from_unix_time(int(c["time"]), true)
@@ -343,7 +386,7 @@ func _build_files_tree(oid: String) -> void:
 		item.set_text(0, "%s  %s" % [GitIcons.delta_letter(status), path.get_file()])
 		item.set_custom_color(0, GitIcons.delta_color(status))
 		item.set_metadata(0, { "path": path, "status": status })
-		item.set_tooltip_text(0, "%s\nDouble-click to open, right-click for more" % path)
+		item.set_tooltip_text(0, "%s\nClick for its diff, double-click to open, right-click for more" % path)
 		if not _path_filter.is_empty() and path == _path_filter:
 			item.select(0)
 
@@ -351,6 +394,19 @@ func _build_files_tree(oid: String) -> void:
 		var empty_item := _files_tree.create_item(root)
 		empty_item.set_text(0, "(no file changes)")
 		empty_item.set_selectable(0, false)
+
+
+func _on_files_tree_item_selected() -> void:
+	var item := _files_tree.get_selected()
+	if item == null or _detail_oid.is_empty():
+		return
+	var meta: Variant = item.get_metadata(0)
+	if not meta is Dictionary or not meta.has("path"):
+		return
+	var path: String = meta["path"]
+	_file_diff_label.text = "%s  @ %s" % [path, _detail_oid.substr(0, 8)]
+	_file_diff_box.visible = true
+	_file_diff_view.show_diff(_repo.get_commit_file_diff(_detail_oid, path, _file_diff_view.get_options()), { "path": path })
 
 
 func _on_files_tree_item_activated() -> void:
@@ -416,6 +472,12 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 	m.add_item("Copy Commit Message", ID_COPY_MESSAGE)
 	m.add_separator()
 	if not many:
+		m.add_item("Show Changes…", ID_SHOW_CHANGES)
+		m.add_item("Compare with Working Tree…", ID_COMPARE_WORKTREE)
+	if _context_oids.size() == 2:
+		m.add_item("Compare the Two Selected Commits…", ID_COMPARE_SELECTED)
+	m.add_separator()
+	if not many:
 		m.add_item("Create Branch from Here...", ID_CREATE_BRANCH)
 		m.add_item("Checkout This Commit...", ID_CHECKOUT_COMMIT)
 
@@ -432,6 +494,14 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			if _commits_by_oid.has(_context_oid):
 				var c: Dictionary = _commits_by_oid[_context_oid]
 				DisplayServer.clipboard_set(String(c["message"]).strip_edges())
+		ID_SHOW_CHANGES:
+			_open_changeset("%s  %s" % [_context_oid.substr(0, 8), _summary(_context_oid)],
+					_repo.parent_or_empty_tree(_context_oid), _context_oid)
+		ID_COMPARE_WORKTREE:
+			_open_changeset("%s ↔ working tree" % _context_oid.substr(0, 8), _context_oid, "")
+		ID_COMPARE_SELECTED:
+			# Older one as the base, so additions read as additions.
+			_open_changeset("%s ↔ %s" % [_context_oids[1].substr(0, 8), _context_oids[0].substr(0, 8)], _context_oids[1], _context_oids[0])
 		ID_CREATE_BRANCH:
 			_new_branch_name_edit.text = ""
 			_new_branch_checkout_check.button_pressed = false
@@ -440,6 +510,16 @@ func _on_context_menu_id_pressed(id: int) -> void:
 		ID_CHECKOUT_COMMIT:
 			_checkout_confirm_dialog.dialog_text = "Checkout commit %s?\nThis leaves HEAD detached (not on a branch)." % _context_oid.substr(0, 7)
 			_checkout_confirm_dialog.popup_centered()
+
+
+func _summary(oid: String) -> String:
+	return String(_commits_by_oid.get(oid, {}).get("summary", ""))
+
+
+func _open_changeset(title: String, base: String, target: String) -> void:
+	var dialog := ChangesetDialog.new()
+	add_child(dialog)
+	dialog.open(_repo, title, base, target)
 
 
 func _on_new_branch_dialog_confirmed() -> void:
