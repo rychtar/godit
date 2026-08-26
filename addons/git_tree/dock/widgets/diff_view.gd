@@ -2,9 +2,11 @@
 extends VBoxContainer
 
 const HUNK_HEADER_PATTERN := "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@(.*)$"
+const SyntaxColors := preload("res://addons/git_tree/util/syntax_colors.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 
 const OPT_IGNORE_WHITESPACE := 1
+const OPT_SYNTAX := 2
 const OPT_CONTEXT_3 := 10
 const OPT_CONTEXT_10 := 11
 const OPT_CONTEXT_25 := 12
@@ -126,6 +128,7 @@ func _build_options_menu() -> void:
 	popup.hide_on_checkable_item_selection = false
 	popup.about_to_popup.connect(_sync_options_menu)
 	popup.add_check_item("Ignore whitespace", OPT_IGNORE_WHITESPACE)
+	popup.add_check_item("Syntax highlighting", OPT_SYNTAX)
 	popup.add_separator("Context")
 	popup.add_radio_check_item("3 lines", OPT_CONTEXT_3)
 	popup.add_radio_check_item("10 lines", OPT_CONTEXT_10)
@@ -137,6 +140,7 @@ func _build_options_menu() -> void:
 func _sync_options_menu() -> void:
 	var popup := _options_button.get_popup()
 	popup.set_item_checked(popup.get_item_index(OPT_IGNORE_WHITESPACE), _setting("ignore_whitespace", false))
+	popup.set_item_checked(popup.get_item_index(OPT_SYNTAX), _setting("syntax", true))
 	var context: int = _setting("context", 3)
 	for id in CONTEXT_BY_ID:
 		popup.set_item_checked(popup.get_item_index(id), CONTEXT_BY_ID[id] == context)
@@ -144,6 +148,9 @@ func _sync_options_menu() -> void:
 
 func _on_option_pressed(id: int) -> void:
 	match id:
+		OPT_SYNTAX:
+			Settings.set_value("diff_syntax", not _setting("syntax", true))
+			_rerender()
 		OPT_IGNORE_WHITESPACE:
 			Settings.set_value("diff_ignore_whitespace", not _setting("ignore_whitespace", false))
 			options_changed.emit()
@@ -197,7 +204,9 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_stats_added.text = ("+%d" % parsed["added"]) if parsed["added"] > 0 else ""
 	_stats_removed.text = ("−%d" % parsed["removed"]) if parsed["removed"] > 0 else ""
 
-	_rows_view.set_content(rows)
+	var language := SyntaxColors.language_for(path) if _setting("syntax", true) else ""
+
+	_rows_view.set_content(rows, language)
 	var has_rows := not rows.is_empty()
 	_scroll.visible = has_rows
 	_empty_label.visible = not has_rows
@@ -298,7 +307,7 @@ static func _strip_ab_prefix(path: String) -> String:
 	return path
 
 
-## Custom-drawn rows (RTL's [bgcolor] can't fill a row edge-to-edge): backgrounds, gutters, line numbers; only visible rows are drawn.
+## Custom-drawn rows (RTL's [bgcolor] can't fill a row edge-to-edge): backgrounds, gutters, syntax; only visible rows are drawn.
 class DiffRows:
 	extends Control
 
@@ -320,6 +329,7 @@ class DiffRows:
 	const COLOR_HUNK_TEXT := Color(0.6, 0.68, 0.85)
 
 	var _rows: Array = []
+	var _language := ""
 	var _gutter_width := 30.0
 	var _row_height := 20.0
 	var _baseline_offset := 14.0
@@ -353,8 +363,9 @@ class DiffRows:
 			queue_redraw()
 
 
-	func set_content(rows: Array) -> void:
+	func set_content(rows: Array, language: String) -> void:
 		_rows = rows
+		_language = language
 		_recalculate_layout()
 		queue_redraw()
 
@@ -448,7 +459,32 @@ class DiffRows:
 		draw_string(font, Vector2(number_x, baseline), marker, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
 		var text_x := number_x + MARKER_WIDTH
 
-		draw_string(font, Vector2(text_x, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
+		if _language.is_empty():
+			draw_string(font, Vector2(text_x, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
+			return
+
+		if not row.has("syntax"):
+			row["syntax"] = SyntaxColors.spans(text, _language)
+		var base_color := COLOR_CONTEXT_TEXT if type == "context" else text_color.lerp(Color(0.9, 0.9, 0.92), 0.55)
+		_draw_colored(font, font_size, text, text_x, baseline, row["syntax"], base_color)
+
+
+	## Draws text in segments: spans' colors where covered, base_color in between.
+	func _draw_colored(font: Font, font_size: int, text: String, x: float, baseline: float, spans: Array, base_color: Color) -> void:
+		var pos := 0
+		var cursor := x
+		for span in spans:
+			var start: int = span[0]
+			if start > pos:
+				var gap := text.substr(pos, start - pos)
+				draw_string(font, Vector2(cursor, baseline), gap, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, base_color)
+				cursor += font.get_string_size(gap, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			var piece := text.substr(start, span[1])
+			draw_string(font, Vector2(cursor, baseline), piece, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, span[2])
+			cursor += font.get_string_size(piece, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			pos = start + int(span[1])
+		if pos < text.length():
+			draw_string(font, Vector2(cursor, baseline), text.substr(pos), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, base_color)
 
 
 	func _draw_hunk_row(row: Dictionary, y: float, view_left: float) -> void:
