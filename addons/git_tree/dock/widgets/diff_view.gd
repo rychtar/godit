@@ -5,6 +5,7 @@ const HUNK_HEADER_PATTERN := "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@(.
 const SyntaxColors := preload("res://addons/git_tree/util/syntax_colors.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 
+const OPT_SIDE_BY_SIDE := 0
 const OPT_IGNORE_WHITESPACE := 1
 const OPT_SYNTAX := 2
 const OPT_CONTEXT_3 := 10
@@ -127,6 +128,7 @@ func _build_options_menu() -> void:
 	var popup := _options_button.get_popup()
 	popup.hide_on_checkable_item_selection = false
 	popup.about_to_popup.connect(_sync_options_menu)
+	popup.add_check_item("Side by side", OPT_SIDE_BY_SIDE)
 	popup.add_check_item("Ignore whitespace", OPT_IGNORE_WHITESPACE)
 	popup.add_check_item("Syntax highlighting", OPT_SYNTAX)
 	popup.add_separator("Context")
@@ -139,6 +141,7 @@ func _build_options_menu() -> void:
 
 func _sync_options_menu() -> void:
 	var popup := _options_button.get_popup()
+	popup.set_item_checked(popup.get_item_index(OPT_SIDE_BY_SIDE), _setting("side_by_side", false))
 	popup.set_item_checked(popup.get_item_index(OPT_IGNORE_WHITESPACE), _setting("ignore_whitespace", false))
 	popup.set_item_checked(popup.get_item_index(OPT_SYNTAX), _setting("syntax", true))
 	var context: int = _setting("context", 3)
@@ -148,6 +151,9 @@ func _sync_options_menu() -> void:
 
 func _on_option_pressed(id: int) -> void:
 	match id:
+		OPT_SIDE_BY_SIDE:
+			Settings.set_value("diff_side_by_side", not _setting("side_by_side", false))
+			_rerender()
 		OPT_SYNTAX:
 			Settings.set_value("diff_syntax", not _setting("syntax", true))
 			_rerender()
@@ -206,7 +212,7 @@ func _rerender(keep_scroll: bool = false) -> void:
 
 	var language := SyntaxColors.language_for(path) if _setting("syntax", true) else ""
 
-	_rows_view.set_content(rows, language)
+	_rows_view.set_content(rows, language, _setting("side_by_side", false))
 	var has_rows := not rows.is_empty()
 	_scroll.visible = has_rows
 	_empty_label.visible = not has_rows
@@ -219,7 +225,7 @@ func _rerender(keep_scroll: bool = false) -> void:
 		_scroll.scroll_vertical = 0
 
 
-## {"path", "added", "removed", "binary", "is_new", "is_deleted", "rows"}; rows are line rows {"type", "old_no"/"new_no" (-1 = none), "text", "hunk"} or hunk rows {"type": "hunk", "hunk", "gap", "heading", "header"}.
+## {"path", "added", "removed", "binary", "is_new", "is_deleted", "rows"}; rows are line rows {"type", "old_no"/"new_no" (-1 = none), "text", "hl" (changed ranges), "hunk", "li" (index in hunk body)} or hunk rows {"type": "hunk", "hunk", "gap", "heading", "header"}.
 static func _parse(diff_text: String) -> Dictionary:
 	var result := {"path": "", "added": 0, "removed": 0, "binary": false, "is_new": false, "is_deleted": false, "rows": []}
 	var rows: Array = result["rows"]
@@ -270,35 +276,79 @@ static func _parse(diff_text: String) -> Dictionary:
 		var old_line := old_start
 		var new_line := new_start
 		i += 1
+		var body_start := i
 
 		while i < n and not lines[i].begins_with("@@") and not lines[i].begins_with("diff --git"):
 			var body_line: String = lines[i]
-			i += 1
+
 			if body_line.length() > 0 and body_line[0] == "\\": # "\ No newline at end of file"
+				i += 1
 				continue
-			if body_line.is_empty() and i == n:
+			if body_line.is_empty() and i == n - 1:
 				break # trailing newline of the whole diff
 
 			if body_line.begins_with("-"):
-				rows.append(_line_row("removed", old_line, -1, body_line.substr(1), hunk_index))
-				old_line += 1
-				result["removed"] += 1
-			elif body_line.begins_with("+"):
-				rows.append(_line_row("added", -1, new_line, body_line.substr(1), hunk_index))
+				var removed_start := i
+				while i < n and lines[i].begins_with("-") or (i < n and lines[i].begins_with("\\")):
+					i += 1
+				var added_start := i
+				while i < n and lines[i].begins_with("+") or (i < n and lines[i].begins_with("\\")):
+					i += 1
+				var removed_idx := _indices(lines, removed_start, added_start, "-")
+				var added_idx := _indices(lines, added_start, i, "+")
+
+				var pair_count: int = mini(removed_idx.size(), added_idx.size())
+				for k in pair_count:
+					var old_text: String = lines[removed_idx[k]].substr(1)
+					var new_text: String = lines[added_idx[k]].substr(1)
+					var hl := _word_diff(old_text, new_text)
+					var removed_row := _line_row("removed", old_line, -1, old_text, hl[0], hunk_index, removed_idx[k] - body_start)
+					var added_row := _line_row("added", -1, new_line, new_text, hl[1], hunk_index, added_idx[k] - body_start)
+					rows.append(removed_row)
+					rows.append(added_row)
+					result["removed"] += 1
+					result["added"] += 1
+					old_line += 1
+					new_line += 1
+
+				for k in range(pair_count, removed_idx.size()):
+					rows.append(_line_row("removed", old_line, -1, lines[removed_idx[k]].substr(1), [], hunk_index, removed_idx[k] - body_start))
+					old_line += 1
+					result["removed"] += 1
+				for k in range(pair_count, added_idx.size()):
+					rows.append(_line_row("added", -1, new_line, lines[added_idx[k]].substr(1), [], hunk_index, added_idx[k] - body_start))
+					new_line += 1
+					result["added"] += 1
+				continue
+
+			if body_line.begins_with("+"):
+				rows.append(_line_row("added", -1, new_line, body_line.substr(1), [], hunk_index, i - body_start))
 				new_line += 1
 				result["added"] += 1
-			else:
-				rows.append(_line_row("context", old_line, new_line, body_line.substr(1), hunk_index))
-				old_line += 1
-				new_line += 1
+				i += 1
+				continue
+
+			var content := body_line.substr(1) if body_line.length() > 0 else ""
+			rows.append(_line_row("context", old_line, new_line, content, [], hunk_index, i - body_start))
+			old_line += 1
+			new_line += 1
+			i += 1
 
 		prev_new_end = new_line - 1
 
 	return result
 
 
-static func _line_row(type: String, old_no: int, new_no: int, text: String, hunk: int) -> Dictionary:
-	return {"type": type, "old_no": old_no, "new_no": new_no, "text": text, "hunk": hunk}
+static func _indices(lines: PackedStringArray, from: int, to: int, marker: String) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for k in range(from, to):
+		if lines[k].begins_with(marker):
+			out.append(k)
+	return out
+
+
+static func _line_row(type: String, old_no: int, new_no: int, text: String, hl: Array, hunk: int, li: int) -> Dictionary:
+	return {"type": type, "old_no": old_no, "new_no": new_no, "text": text, "hl": hl, "hunk": hunk, "li": li}
 
 
 static func _strip_ab_prefix(path: String) -> String:
@@ -307,7 +357,102 @@ static func _strip_ab_prefix(path: String) -> String:
 	return path
 
 
-## Custom-drawn rows (RTL's [bgcolor] can't fill a row edge-to-edge): backgrounds, gutters, syntax; only visible rows are drawn.
+## Word-level diff of a changed line pair: [old_ranges, new_ranges], each an Array of Vector2i(start, length) to highlight. Tokens are words, runs of whitespace and single punctuation chars, matched with an LCS; lines that changed almost entirely get no highlight (it'd just be noise).
+static func _word_diff(old_text: String, new_text: String) -> Array:
+	var a := _tokenize(old_text)
+	var b := _tokenize(new_text)
+	if a.size() * b.size() > 90000:
+		return _prefix_suffix_diff(old_text, new_text)
+
+	var rows := a.size() + 1
+	var cols := b.size() + 1
+	var table := PackedInt32Array()
+	table.resize(rows * cols)
+	for x in range(a.size() - 1, -1, -1):
+		for y in range(b.size() - 1, -1, -1):
+			if a[x] == b[y]:
+				table[x * cols + y] = table[(x + 1) * cols + y + 1] + 1
+			else:
+				table[x * cols + y] = maxi(table[(x + 1) * cols + y], table[x * cols + y + 1])
+
+	var old_keep := PackedByteArray()
+	old_keep.resize(a.size())
+	var new_keep := PackedByteArray()
+	new_keep.resize(b.size())
+	var x := 0
+	var y := 0
+	while x < a.size() and y < b.size():
+		if a[x] == b[y]:
+			old_keep[x] = 1
+			new_keep[y] = 1
+			x += 1
+			y += 1
+		elif table[(x + 1) * cols + y] >= table[x * cols + y + 1]:
+			x += 1
+		else:
+			y += 1
+
+	var old_ranges := _ranges(a, old_keep)
+	var new_ranges := _ranges(b, new_keep)
+	if _covered(old_ranges) > old_text.length() * 0.7 and _covered(new_ranges) > new_text.length() * 0.7:
+		return [[], []]
+	return [old_ranges, new_ranges]
+
+
+static func _tokenize(text: String) -> PackedStringArray:
+	var tokens := PackedStringArray()
+	var i := 0
+	var n := text.length()
+	while i < n:
+		var ch := text[i]
+		var j := i + 1
+		if ch == " " or ch == "\t":
+			while j < n and (text[j] == " " or text[j] == "\t"):
+				j += 1
+		elif ch == "_" or ch.to_lower() != ch.to_upper() or ch.is_valid_int():
+			while j < n and (text[j] == "_" or text[j].to_lower() != text[j].to_upper() or text[j].is_valid_int()):
+				j += 1
+		tokens.append(text.substr(i, j - i))
+		i = j
+	return tokens
+
+
+## Merges adjacent non-kept tokens into (start, length) character ranges.
+static func _ranges(tokens: PackedStringArray, keep: PackedByteArray) -> Array:
+	var ranges: Array = []
+	var pos := 0
+	for t in tokens.size():
+		var length := tokens[t].length()
+		if keep[t] == 0:
+			if not ranges.is_empty() and ranges[-1].x + ranges[-1].y == pos:
+				ranges[-1] = Vector2i(ranges[-1].x, ranges[-1].y + length)
+			else:
+				ranges.append(Vector2i(pos, length))
+		pos += length
+	return ranges
+
+
+static func _covered(ranges: Array) -> int:
+	var total := 0
+	for r in ranges:
+		total += r.y
+	return total
+
+
+static func _prefix_suffix_diff(a: String, b: String) -> Array:
+	var max_len: int = mini(a.length(), b.length())
+	var prefix := 0
+	while prefix < max_len and a[prefix] == b[prefix]:
+		prefix += 1
+	var suffix := 0
+	while suffix < max_len - prefix and a[a.length() - 1 - suffix] == b[b.length() - 1 - suffix]:
+		suffix += 1
+	var old_len := a.length() - prefix - suffix
+	var new_len := b.length() - prefix - suffix
+	return [[Vector2i(prefix, old_len)] if old_len > 0 else [], [Vector2i(prefix, new_len)] if new_len > 0 else []]
+
+
+## Custom-drawn rows (RTL's [bgcolor] can't fill a row edge-to-edge): backgrounds, gutters, word highlights, syntax; only visible rows are drawn.
 class DiffRows:
 	extends Control
 
@@ -318,21 +463,29 @@ class DiffRows:
 	const TEXT_RIGHT_PAD := 24.0
 	const LINE_PAD_Y := 6.0
 	const CONTENT_PAD_Y := 4.0
+	const SIDE_GAP := 6.0
 
 	const COLOR_ADDED_BG := Color(0.208, 0.408, 0.235, 0.35)
 	const COLOR_REMOVED_BG := Color(0.443, 0.176, 0.192, 0.35)
+	const COLOR_ADDED_HL := Color(0.239, 0.541, 0.267, 0.9)
+	const COLOR_REMOVED_HL := Color(0.545, 0.157, 0.184, 0.9)
 	const COLOR_ADDED_TEXT := Color(0.643, 0.851, 0.667)
 	const COLOR_REMOVED_TEXT := Color(0.925, 0.588, 0.604)
 	const COLOR_CONTEXT_TEXT := Color(0.78, 0.78, 0.8)
 	const COLOR_LINE_NO := Color(0.45, 0.45, 0.5)
 	const COLOR_HUNK_BG := Color(0.35, 0.5, 0.85, 0.12)
 	const COLOR_HUNK_TEXT := Color(0.6, 0.68, 0.85)
+	const COLOR_EMPTY_SIDE := Color(0, 0, 0, 0.12)
 
 	var _rows: Array = []
+	## What's drawn, one entry per visual row: {"u": row index} (unified / hunk rows) or {"l": idx, "r": idx} (side by side, -1 = blank).
+	var _display: Array = []
 	var _language := ""
+	var _side_by_side := false
 	var _gutter_width := 30.0
 	var _row_height := 20.0
 	var _baseline_offset := 14.0
+	var _side_width := 0.0
 
 
 	func _init() -> void:
@@ -363,11 +516,39 @@ class DiffRows:
 			queue_redraw()
 
 
-	func set_content(rows: Array, language: String) -> void:
+	func set_content(rows: Array, language: String, side_by_side: bool) -> void:
 		_rows = rows
 		_language = language
+		_side_by_side = side_by_side
+		_build_display()
 		_recalculate_layout()
 		queue_redraw()
+
+
+	func _build_display() -> void:
+		_display.clear()
+		if not _side_by_side:
+			for i in _rows.size():
+				_display.append({ "u": i })
+			return
+		# Pair each run of removed rows with the run of added rows that follows it.
+		var i := 0
+		while i < _rows.size():
+			var type: String = _rows[i]["type"]
+			if type == "hunk" or type == "context":
+				_display.append({ "u": i } if type == "hunk" else { "l": i, "r": i })
+				i += 1
+				continue
+			var left: Array = []
+			var right: Array = []
+			while i < _rows.size() and _rows[i]["type"] in ["removed", "added"]:
+				if _rows[i]["old_no"] > 0:
+					left.append(i)
+				else:
+					right.append(i)
+				i += 1
+			for k in maxi(left.size(), right.size()):
+				_display.append({ "l": left[k] if k < left.size() else -1, "r": right[k] if k < right.size() else -1 })
 
 
 	func _recalculate_layout() -> void:
@@ -391,16 +572,28 @@ class DiffRows:
 		var digits := str(max_no).length()
 		_gutter_width = font.get_string_size("0".repeat(digits), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + GUTTER_PAD
 
-		var width := _gutter_width * 2 + MARKER_WIDTH + max_text + TEXT_RIGHT_PAD
-		custom_minimum_size = Vector2(width, _rows.size() * _row_height + CONTENT_PAD_Y * 2)
+		var width: float
+		if _side_by_side:
+			_side_width = _gutter_width + MARKER_WIDTH + max_text + TEXT_RIGHT_PAD
+			var viewport_half := (_viewport_width() - SIDE_GAP) * 0.5
+			_side_width = maxf(_side_width, viewport_half)
+			width = _side_width * 2 + SIDE_GAP
+		else:
+			width = _gutter_width * 2 + MARKER_WIDTH + max_text + TEXT_RIGHT_PAD
+		custom_minimum_size = Vector2(width, _display.size() * _row_height + CONTENT_PAD_Y * 2)
 
 
 	func _scroll_container() -> ScrollContainer:
 		return get_parent() as ScrollContainer
 
 
-	func _row_top(index: int) -> float:
-		return CONTENT_PAD_Y + index * _row_height
+	func _viewport_width() -> float:
+		var sc := _scroll_container()
+		return sc.size.x if sc != null else size.x
+
+
+	func _row_top(display_index: int) -> float:
+		return CONTENT_PAD_Y + display_index * _row_height
 
 
 	func _draw() -> void:
@@ -413,19 +606,37 @@ class DiffRows:
 		var view_left := float(sc.scroll_horizontal) if sc != null else 0.0
 
 		var first := maxi(0, int((view_top - CONTENT_PAD_Y) / _row_height) - 1)
-		var last := mini(_rows.size() - 1, int((view_top + view_height - CONTENT_PAD_Y) / _row_height) + 1)
+		var last := mini(_display.size() - 1, int((view_top + view_height - CONTENT_PAD_Y) / _row_height) + 1)
 
-		for idx in range(first, last + 1):
-			var y := _row_top(idx)
-			var row: Dictionary = _rows[idx]
-			if row["type"] == "hunk":
-				_draw_hunk_row(row, y, view_left)
-			else:
-				_draw_line(row, y)
+		for d in range(first, last + 1):
+			var y := _row_top(d)
+			var entry: Dictionary = _display[d]
+			if entry.has("u"):
+				var row: Dictionary = _rows[entry["u"]]
+				if row["type"] == "hunk":
+					_draw_hunk_row(row, y, view_left)
+				else:
+					_draw_line(entry["u"], 0.0, size.x, y, _gutter_width, true)
+				continue
+			_draw_side(entry["l"], 0.0, y, true)
+			_draw_side(entry["r"], _side_width + SIDE_GAP, y, false)
 
 
-	## Draws one line row: background, old + new line numbers, marker and text.
-	func _draw_line(row: Dictionary, y: float) -> void:
+	func _draw_side(idx: int, x: float, y: float, is_left: bool) -> void:
+		if idx < 0:
+			draw_rect(Rect2(x, y, _side_width, _row_height), COLOR_EMPTY_SIDE)
+			return
+		var row: Dictionary = _rows[idx]
+		if row["type"] == "context":
+			# Context rows are shared by both sides; each side shows its own line number.
+			_draw_line(idx, x, _side_width, y, 0.0, false, row["old_no"] if is_left else row["new_no"])
+			return
+		_draw_line(idx, x, _side_width, y, 0.0, false)
+
+
+	## Draws one line row starting at x with the given width. two_gutters: unified layout (old + new number columns); otherwise a single column showing only_no (or whichever number the row has).
+	func _draw_line(idx: int, x: float, width: float, y: float, _gutter: float, two_gutters: bool, only_no: int = -2) -> void:
+		var row: Dictionary = _rows[idx]
 		var font := _code_font()
 		var font_size := _code_font_size()
 		var baseline := y + _baseline_offset
@@ -446,18 +657,31 @@ class DiffRows:
 				marker = "-"
 
 		if bg_color.a > 0.0:
-			draw_rect(Rect2(0, y, size.x, _row_height), bg_color)
+			draw_rect(Rect2(x, y, width, _row_height), bg_color)
 
-		if row["old_no"] > 0:
-			draw_string(font, Vector2(0, baseline), str(row["old_no"]),
-					HORIZONTAL_ALIGNMENT_RIGHT, _gutter_width - GUTTER_PAD * 0.5, font_size, COLOR_LINE_NO)
-		if row["new_no"] > 0:
-			draw_string(font, Vector2(_gutter_width, baseline), str(row["new_no"]),
-					HORIZONTAL_ALIGNMENT_RIGHT, _gutter_width - GUTTER_PAD * 0.5, font_size, COLOR_LINE_NO)
-		var number_x := _gutter_width * 2
+		var number_x := x
+		if two_gutters:
+			if row["old_no"] > 0:
+				draw_string(font, Vector2(number_x, baseline), str(row["old_no"]),
+						HORIZONTAL_ALIGNMENT_RIGHT, _gutter_width - GUTTER_PAD * 0.5, font_size, COLOR_LINE_NO)
+			if row["new_no"] > 0:
+				draw_string(font, Vector2(number_x + _gutter_width, baseline), str(row["new_no"]),
+						HORIZONTAL_ALIGNMENT_RIGHT, _gutter_width - GUTTER_PAD * 0.5, font_size, COLOR_LINE_NO)
+			number_x += _gutter_width * 2
+		else:
+			var no: int = only_no if only_no != -2 else (row["old_no"] if row["old_no"] > 0 else row["new_no"])
+			if no > 0:
+				draw_string(font, Vector2(number_x, baseline), str(no),
+						HORIZONTAL_ALIGNMENT_RIGHT, _gutter_width - GUTTER_PAD * 0.5, font_size, COLOR_LINE_NO)
+			number_x += _gutter_width
 
 		draw_string(font, Vector2(number_x, baseline), marker, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
 		var text_x := number_x + MARKER_WIDTH
+
+		for r in row["hl"]:
+			var pre_w: float = font.get_string_size(text.substr(0, r.x), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			var mid_w: float = font.get_string_size(text.substr(r.x, r.y), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			draw_rect(Rect2(text_x + pre_w, y + 1.0, mid_w, _row_height - 2.0), COLOR_ADDED_HL if type == "added" else COLOR_REMOVED_HL)
 
 		if _language.is_empty():
 			draw_string(font, Vector2(text_x, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
@@ -505,10 +729,15 @@ class DiffRows:
 		draw_string(code_font, Vector2(view_left + 8.0, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(1, code_size - 1), COLOR_HUNK_TEXT)
 
 
-	## Row index under pos, or -1.
+	## Unified row index under pos (in side-by-side, whichever half was clicked), or -1.
 	func _row_at(pos: Vector2) -> int:
-		var idx := int((pos.y - CONTENT_PAD_Y) / _row_height)
-		return idx if idx >= 0 and idx < _rows.size() else -1
+		var d := int((pos.y - CONTENT_PAD_Y) / _row_height)
+		if d < 0 or d >= _display.size():
+			return -1
+		var entry: Dictionary = _display[d]
+		if entry.has("u"):
+			return entry["u"]
+		return entry["l"] if pos.x < _side_width + SIDE_GAP * 0.5 else entry["r"]
 
 
 	func _gui_input(event: InputEvent) -> void:
