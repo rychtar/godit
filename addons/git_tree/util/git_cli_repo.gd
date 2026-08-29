@@ -165,6 +165,42 @@ func unstage_file(path: String) -> bool:
 	return GitCli.run(_repo_root, ["rm", "--cached", "--", path])["exit_code"] == 0
 
 
+## Discards uncommitted changes to path. Restores from HEAD if committed,
+## otherwise deletes it (nothing to restore to).
+func revert_file(path: String) -> Dictionary:
+	var result := { "ok": false, "error": "" }
+
+	if GitCli.run(_repo_root, ["cat-file", "-e", "HEAD:" + path])["exit_code"] == 0:
+		var checkout_result := GitCli.run(_repo_root, ["checkout", "HEAD", "--", path], true)
+		if checkout_result["exit_code"] != 0:
+			result["error"] = checkout_result["text"].strip_edges()
+			return result
+		result["ok"] = true
+		return result
+
+	GitCli.run(_repo_root, ["rm", "-f", "--cached", "--", path], true) # ok if not staged
+	var abs_path := _repo_root.path_join(path)
+	if FileAccess.file_exists(abs_path):
+		var dir := DirAccess.open(_repo_root)
+		if dir == null or dir.remove(abs_path) != OK:
+			result["error"] = "couldn't delete %s from disk" % path
+			return result
+	result["ok"] = true
+	return result
+
+
+## Deletes path from disk and stages the removal (`git rm -f`) in one step —
+## unlike revert_file(), which restores the file instead of removing it.
+func remove_file(path: String) -> Dictionary:
+	var result := { "ok": false, "error": "" }
+	var rm_result := GitCli.run(_repo_root, ["rm", "-f", "--", path], true)
+	if rm_result["exit_code"] != 0:
+		result["error"] = rm_result["text"].strip_edges()
+		return result
+	result["ok"] = true
+	return result
+
+
 func commit(message: String, amend: bool = false) -> Dictionary:
 	var result := { "ok": false, "oid": "", "error": "" }
 	var args := ["commit", "-m", message]

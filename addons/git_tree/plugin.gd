@@ -28,6 +28,8 @@ func _enter_tree() -> void:
 	history_dock_instance.custom_minimum_size.y = BOTTOM_PANEL_MIN_HEIGHT
 	add_control_to_bottom_panel(history_dock_instance, "Git Log")
 
+	dock_instance.file_history_requested.connect(_show_file_history)
+
 
 func _exit_tree() -> void:
 	remove_control_from_docks(dock_instance)
@@ -37,3 +39,20 @@ func _exit_tree() -> void:
 	history_dock_instance.free()
 
 	GitCli.restore_environment()
+
+
+func _show_file_history(path: String) -> void:
+	_reveal_history_dock()
+	history_dock_instance.show_file_history(path)
+
+
+## Brings Git Log to front wherever it lives — collapsed bottom panel, another bottom tab, or dragged into a side dock or closed (4.6+ wraps it in an EditorDock).
+func _reveal_history_dock() -> void:
+	var node: Node = history_dock_instance
+	while node != null and not node.is_class("EditorDock"):
+		node = node.get_parent()
+	if node != null:
+		node.call("open")
+		node.call("make_visible")
+	else:
+		make_bottom_panel_item_visible(history_dock_instance)

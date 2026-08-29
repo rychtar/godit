@@ -22,3 +22,10 @@ func _ready() -> void:
 	_message_label.visible = false
 	_history_panel.visible = true
 	_history_panel.set_repo(_repo)
+
+
+## Filters the log to one file (Changes panel → Show History).
+func show_file_history(path: String) -> void:
+	if _repo == null:
+		return
+	_history_panel.set_path_filter(path)

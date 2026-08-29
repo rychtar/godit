@@ -22,7 +22,17 @@ const ID_DELETE := 6
 const ID_NEW_CHANGELIST := 7
 const ID_TOGGLE_STAGE := 8
 const ID_MOVE_TO_NEW := 1000 # MoveToMenu: indices 0..N-1 are existing changelists, this is "New Changelist..."
-const ID_ADD_FOLDER_TO_VCS := 9
+const ID_REVERT := 9
+const ID_IGNORE := 10
+const ID_REMOVE := 11
+const ID_REVERT_ALL := 15
+const ID_SHOW_HISTORY := 16
+const ID_COPY_PATH := 18
+const ID_ADD_FOLDER_TO_VCS := 20
+const ID_IGNORE_FOLDER := 21
+
+## "Show History" on a file — git_tree_dock.gd forwards it to the Git Log panel.
+signal file_history_requested(path: String)
 
 ## ChangesTree has two columns: the checkbox needs its own narrow column,
 ## since Godot toggles a CELL_MODE_CHECK cell on any click anywhere inside
@@ -51,6 +61,7 @@ const CHECKBOX_COLUMN_WIDTH := 28
 @onready var _name_dialog: ConfirmationDialog = %NameDialog
 @onready var _name_edit: LineEdit = %NameEdit
 @onready var _create_branch_check: CheckBox = %CreateBranchCheck
+@onready var _revert_confirm_dialog: ConfirmationDialog = %RevertConfirmDialog
 
 ## Set by git_tree_dock.gd; a git_cli_repo.gd instance.
 var _repo: RefCounted
@@ -72,6 +83,9 @@ var _context_target: Dictionary = {}
 ## Which dialog action _name_dialog is currently being used for: "new" or "rename".
 var _name_dialog_mode := ""
 var _name_dialog_rename_target := ""
+
+## Which action _revert_confirm_dialog is currently being used for: "revert" or "remove".
+var _confirm_dialog_action := "revert"
 
 ## Last branch seen by refresh(), to notice checkouts made anywhere (Branches, Git Log, terminal).
 var _last_branch := ""
@@ -282,6 +296,28 @@ func _save_changelist_state() -> void:
 	ChangelistStore.save_state(_repo.get_repo_root(), _changelist_state)
 
 
+## Appends path to the repo's top-level .gitignore, creating it if needed; no-op if already listed.
+func _ignore_path(path: String) -> void:
+	var gitignore_path: String = _repo.get_repo_root().path_join(".gitignore")
+	var existing := ""
+	if FileAccess.file_exists(gitignore_path):
+		var read_file := FileAccess.open(gitignore_path, FileAccess.READ)
+		existing = read_file.get_as_text()
+		read_file.close()
+	if Array(existing.split("\n")).has(path):
+		return
+
+	var new_content := existing
+	if not new_content.is_empty() and not new_content.ends_with("\n"):
+		new_content += "\n"
+	new_content += path + "\n"
+
+	var write_file := FileAccess.open(gitignore_path, FileAccess.WRITE)
+	write_file.store_string(new_content)
+	write_file.close()
+	refresh()
+
+
 ## Stages a previously-untracked file and assigns it to the active
 ## changelist. Right-click-only, deliberate action — also what keeps the
 ## file under its changelist instead of bouncing back to New Files
@@ -384,7 +420,7 @@ func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String
 	item.set_custom_color(TEXT_COLUMN, GitIcons.status_color(status))
 	var meta := { "kind": "file" if in_changelist else "untracked_file", "path": path, "status": status, "staged": staged }
 	item.set_metadata(0, meta)
-	var hint := "Check to stage, uncheck to unstage. Double-click to open." if in_changelist else "Check to add to Git. Double-click to open."
+	var hint := "Check to stage, uncheck to unstage. Double-click to open." if in_changelist else "Check to add to Git. Right-click to ignore. Double-click to open."
 	item.set_tooltip_text(TEXT_COLUMN, "%s — %s\n%s" % [path, GitStatusFlags.short_label(status), hint])
 
 
@@ -522,23 +558,55 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_move_to_menu.set_item_disabled(i, names[i] == _changelist_for_path(meta["path"]))
 			_move_to_menu.add_separator()
 			_move_to_menu.add_item("New Changelist...", ID_MOVE_TO_NEW)
+			_context_menu.add_separator()
+			_context_menu.add_item("Show History", ID_SHOW_HISTORY)
+			_context_menu.add_item("Copy Path", ID_COPY_PATH)
+			_context_menu.add_separator()
+			_context_menu.add_item("Revert...", ID_REVERT)
+			_context_menu.add_item("Remove...", ID_REMOVE)
 		"folder":
+			var folder_paths: Array = []
+			_collect_file_paths(item, folder_paths)
 			var new_paths: Array = []
 			_collect_file_paths(item, new_paths, "untracked_file")
-			if new_paths.is_empty():
+			if folder_paths.is_empty() and new_paths.is_empty():
 				return
-			_context_target = { "kind": "folder", "name": meta.get("name", ""), "new_paths": new_paths }
-			_context_menu.add_item("Add %d New File%s to Git" % [new_paths.size(), "" if new_paths.size() == 1 else "s"], ID_ADD_FOLDER_TO_VCS)
+			var any_path: String = (folder_paths + new_paths)[0]
+			var depth := 0
+			var up := item.get_parent()
+			while up != null and up.get_metadata(0) is Dictionary and up.get_metadata(0).get("kind", "") == "folder":
+				depth += 1
+				up = up.get_parent()
+			# Repo-relative dir of this folder row: the first depth+1 segments of any file under it.
+			var dir := "/".join(any_path.split("/").slice(0, depth + 1))
+			_context_target = { "kind": "folder", "name": meta.get("name", ""), "paths": folder_paths, "new_paths": new_paths, "dir": dir }
+			if not new_paths.is_empty():
+				_context_menu.add_item("Add %d New File%s to Git" % [new_paths.size(), "" if new_paths.size() == 1 else "s"], ID_ADD_FOLDER_TO_VCS)
+				_context_menu.add_item("Ignore Folder (%s/)" % dir, ID_IGNORE_FOLDER)
+			if not folder_paths.is_empty():
+				if not new_paths.is_empty():
+					_context_menu.add_separator()
+				_context_menu.add_item("Revert %d File%s..." % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], ID_REVERT_ALL)
 		"untracked_file":
 			_context_menu.add_item("Add to Git", ID_ADD_TO_VCS)
 			_context_menu.add_item("Open", ID_OPEN)
+			_context_menu.add_separator()
+			_context_menu.add_item("Ignore", ID_IGNORE)
+			_context_menu.add_item("Revert...", ID_REVERT)
 		"untracked_group":
 			_context_menu.add_item("Add All to Git", ID_ADD_ALL_TO_VCS)
 		"changelist_group":
+			var group_paths: Array = []
+			_collect_file_paths(item, group_paths)
+			_context_target = meta.duplicate()
+			_context_target["paths"] = group_paths
 			_context_menu.add_item("Set Active", ID_SET_ACTIVE)
 			if meta["name"] != ChangelistStore.DEFAULT_NAME:
 				_context_menu.add_item("Rename...", ID_RENAME)
 				_context_menu.add_item("Delete", ID_DELETE)
+			if not group_paths.is_empty():
+				_context_menu.add_separator()
+				_context_menu.add_item("Revert All %d File%s..." % [group_paths.size(), "" if group_paths.size() == 1 else "s"], ID_REVERT_ALL)
 			_context_menu.add_separator()
 			_context_menu.add_item("New Changelist...", ID_NEW_CHANGELIST)
 		_:
@@ -568,6 +636,8 @@ func _on_context_menu_id_pressed(id: int) -> void:
 		ID_ADD_FOLDER_TO_VCS:
 			_add_to_vcs(_context_target["new_paths"])
 			refresh.call_deferred()
+		ID_IGNORE_FOLDER:
+			_ignore_path(_context_target["dir"] + "/")
 		ID_SET_ACTIVE:
 			_set_active_changelist(_context_target["name"])
 		ID_RENAME:
@@ -589,6 +659,61 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			else:
 				_repo.stage_file(path)
 			refresh.call_deferred()
+		ID_REVERT:
+			var path: String = _context_target["path"]
+			_confirm_dialog_action = "revert"
+			_revert_confirm_dialog.title = "Revert"
+			_revert_confirm_dialog.ok_button_text = "Revert"
+			_revert_confirm_dialog.dialog_text = "Discard all changes to \"%s\"? This can't be undone." % path.get_file()
+			_revert_confirm_dialog.popup_centered()
+		ID_REMOVE:
+			var path: String = _context_target["path"]
+			_confirm_dialog_action = "remove"
+			_revert_confirm_dialog.title = "Remove File"
+			_revert_confirm_dialog.ok_button_text = "Remove"
+			_revert_confirm_dialog.dialog_text = "Remove \"%s\" from Git and delete it from disk? This can't be undone." % path.get_file()
+			_revert_confirm_dialog.popup_centered()
+		ID_IGNORE:
+			_ignore_path(_context_target["path"])
+		ID_COPY_PATH:
+			DisplayServer.clipboard_set(_context_target["path"])
+		ID_SHOW_HISTORY:
+			file_history_requested.emit(_context_target["path"])
+		ID_REVERT_ALL:
+			var paths: Array = _context_target["paths"]
+			if await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
+				var errors: Array = []
+				for path in paths:
+					var result: Dictionary = _repo.revert_file(path)
+					if not result["ok"]:
+						errors.append("%s: %s" % [path, result["error"]])
+					_changelist_state["assignments"].erase(path)
+				_save_changelist_state()
+				EditorOpen.refresh_all_external_changes()
+				if not errors.is_empty():
+					Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
+				refresh()
+
+
+## Reverts or removes the file, per _confirm_dialog_action (set by whichever menu item opened this dialog).
+func _on_revert_confirm_dialog_confirmed() -> void:
+	var path: String = _context_target["path"]
+	var result: Dictionary = _repo.remove_file(path) if _confirm_dialog_action == "remove" else _repo.revert_file(path)
+	if not result["ok"]:
+		_show_error("Remove failed" if _confirm_dialog_action == "remove" else "Revert failed", result["error"])
+		return
+	_changelist_state["assignments"].erase(path)
+	_save_changelist_state()
+	EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
+	refresh()
+
+
+static func _path_list(paths: Array) -> String:
+	var shown := paths.slice(0, 12)
+	var text := "\n".join(shown)
+	if paths.size() > shown.size():
+		text += "\n… and %d more" % (paths.size() - shown.size())
+	return text
 
 
 func _on_commit_message_gui_input(event: InputEvent) -> void:
