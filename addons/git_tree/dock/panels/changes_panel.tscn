@@ -32,18 +32,40 @@ custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="ToolbarRow" type="HBoxContainer" parent="Layout/Split/Left" unique_id=844172871]
+[node name="ChangelistRow" type="HBoxContainer" parent="Layout/Split/Left" unique_id=844172871]
+unique_name_in_owner = true
 layout_mode = 2
-alignment = 2
 
-[node name="DiffToggle" type="CheckButton" parent="Layout/Split/Left/ToolbarRow" unique_id=1728165140]
+[node name="ChangelistOption" type="OptionButton" parent="Layout/Split/Left/ChangelistRow" unique_id=1311395598]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(90, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Active changelist — Commit commits exactly this changelist's files"
+clip_text = true
+
+[node name="NewChangelistButton" type="Button" parent="Layout/Split/Left/ChangelistRow" unique_id=1719083079]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "New Changelist..."
+text = "+"
+flat = true
+
+[node name="DeleteChangelistButton" type="Button" parent="Layout/Split/Left/ChangelistRow" unique_id=325465101]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Delete the active changelist (its files return to Default)"
+text = "−"
+flat = true
+
+[node name="DiffToggle" type="CheckButton" parent="Layout/Split/Left/ChangelistRow" unique_id=1728165140]
 unique_name_in_owner = true
 layout_mode = 2
 tooltip_text = "Show/hide the diff"
 button_pressed = true
 text = "Diff"
 
-[node name="RefreshButton" type="Button" parent="Layout/Split/Left/ToolbarRow" unique_id=1728165141]
+[node name="RefreshButton" type="Button" parent="Layout/Split/Left/ChangelistRow" unique_id=1728165141]
 layout_mode = 2
 tooltip_text = "Refresh"
 text = "Refresh"
@@ -112,8 +134,41 @@ size = Vector2i(360, 120)
 [node name="ContextMenu" type="PopupMenu" parent="." unique_id=1637247915]
 unique_name_in_owner = true
 
-[connection signal="toggled" from="Layout/Split/Left/ToolbarRow/DiffToggle" to="." method="_on_diff_toggle_toggled"]
-[connection signal="pressed" from="Layout/Split/Left/ToolbarRow/RefreshButton" to="." method="refresh"]
+[node name="MoveToMenu" type="PopupMenu" parent="ContextMenu" unique_id=1974000902]
+unique_name_in_owner = true
+
+[node name="NameDialog" type="ConfirmationDialog" parent="." unique_id=776709291]
+unique_name_in_owner = true
+initial_position = 1
+size = Vector2i(300, 140)
+ok_button_text = "OK"
+
+[node name="NameDialogLayout" type="VBoxContainer" parent="NameDialog" unique_id=707575830]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="NameEdit" type="LineEdit" parent="NameDialog/NameDialogLayout" unique_id=1316066315]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Changelist name"
+
+[node name="CreateBranchCheck" type="CheckBox" parent="NameDialog/NameDialogLayout" unique_id=1997466399]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Also create a git branch with this name and switch to it (changes come along)"
+
+[connection signal="item_selected" from="Layout/Split/Left/ChangelistRow/ChangelistOption" to="." method="_on_changelist_option_item_selected"]
+[connection signal="pressed" from="Layout/Split/Left/ChangelistRow/NewChangelistButton" to="." method="_on_new_changelist_button_pressed"]
+[connection signal="pressed" from="Layout/Split/Left/ChangelistRow/DeleteChangelistButton" to="." method="_on_delete_changelist_button_pressed"]
+[connection signal="toggled" from="Layout/Split/Left/ChangelistRow/DiffToggle" to="." method="_on_diff_toggle_toggled"]
+[connection signal="pressed" from="Layout/Split/Left/ChangelistRow/RefreshButton" to="." method="refresh"]
 [connection signal="item_activated" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_activated"]
 [connection signal="item_edited" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_edited"]
 [connection signal="item_mouse_selected" from="Layout/Split/Left/ChangesTree" to="." method="_on_changes_tree_item_mouse_selected"]
@@ -123,3 +178,5 @@ unique_name_in_owner = true
 [connection signal="pressed" from="Layout/Split/Left/CommitRow/CommitButton" to="." method="_on_commit_button_pressed"]
 [connection signal="pressed" from="Layout/Split/Left/CommitRow/CommitPushButton" to="." method="_on_commit_push_button_pressed"]
 [connection signal="id_pressed" from="ContextMenu" to="." method="_on_context_menu_id_pressed"]
+[connection signal="id_pressed" from="ContextMenu/MoveToMenu" to="." method="_on_move_to_menu_id_pressed"]
+[connection signal="confirmed" from="NameDialog" to="." method="_on_name_dialog_confirmed"]
