@@ -134,6 +134,42 @@ func get_commit_file_diff(oid: String, path: String, options: Dictionary = {}) -
 	return GitCli.run(_repo_root, args)["text"]
 
 
+## Applies a patch built by DiffHunks.build_patch(). cached=true targets the index (stage/unstage), false the working tree (revert); reverse undoes the patch instead of applying it. --recount means partial-hunk patches needn't have exact line counts in their headers.
+func apply_patch(patch: String, cached: bool, reverse: bool, check_only := false) -> Dictionary:
+	var patch_path := OS.get_cache_dir().path_join("git_tree_patch_%d.patch" % Time.get_ticks_usec())
+	var patch_file := FileAccess.open(patch_path, FileAccess.WRITE)
+	if patch_file == null:
+		return { "ok": false, "error": "couldn't write a temp patch file at %s" % patch_path, "output": "" }
+	patch_file.store_string(patch)
+	patch_file.close()
+
+	var args := ["apply", "--recount", "--whitespace=nowarn"]
+	if cached:
+		args.append("--cached")
+	if reverse:
+		args.append("--reverse")
+	if check_only:
+		args.append("--check")
+	args.append(patch_path)
+	var result := _simple(args)
+	DirAccess.remove_absolute(patch_path)
+	return result
+
+
+## Discards a staged hunk (patch from the staged diff) from both the index and the working tree; checks both first so a failure leaves nothing half-reverted.
+func discard_staged_patch(patch: String) -> Dictionary:
+	var worktree_check := apply_patch(patch, false, true, true)
+	if not worktree_check["ok"]:
+		return { "ok": false, "output": "", "error": "The working tree has further changes on these lines — revert or stage those first.\n\n" + worktree_check["error"] }
+	var index_check := apply_patch(patch, true, true, true)
+	if not index_check["ok"]:
+		return index_check
+	var result := apply_patch(patch, false, true)
+	if not result["ok"]:
+		return result
+	return apply_patch(patch, true, true)
+
+
 ## Overwrites path in the working tree with its content at rev (deleting it if it didn't exist there). The index is left alone, so it shows up as an ordinary unstaged change.
 func restore_file_from(rev: String, path: String) -> Dictionary:
 	if GitCli.run(_repo_root, ["cat-file", "-e", "%s:%s" % [rev, path]])["exit_code"] != 0:

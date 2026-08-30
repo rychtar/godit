@@ -2,6 +2,7 @@
 extends VBoxContainer
 
 const HUNK_HEADER_PATTERN := "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@(.*)$"
+const DiffHunks := preload("res://addons/git_tree/util/diff_hunks.gd")
 const SyntaxColors := preload("res://addons/git_tree/util/syntax_colors.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 
@@ -14,6 +15,8 @@ const OPT_CONTEXT_25 := 12
 const OPT_CONTEXT_FULL := 13
 const CONTEXT_BY_ID := { OPT_CONTEXT_3: 3, OPT_CONTEXT_10: 10, OPT_CONTEXT_25: 25, OPT_CONTEXT_FULL: -1 }
 
+## A hunk (or just its selected lines) should be staged/unstaged/reverted. action: "stage"|"unstage"|"revert"; patch is ready for GitCliRepo.apply_patch().
+signal hunk_action_requested(action: String, patch: String)
 ## A diff option changed (context lines, whitespace) — the owner should re-fetch the diff with get_options() and call show_diff() again.
 signal options_changed
 ## Double-click on a line: open the file there (new_line is 1-based, in the new version).
@@ -33,6 +36,8 @@ var _rows_view: Control
 
 var _diff_text := ""
 var _context: Dictionary = {}
+var _hunks: Array = []
+var _file_header := ""
 
 
 func _init() -> void:
@@ -99,6 +104,7 @@ func _init() -> void:
 	add_child(_scroll)
 
 	_rows_view = DiffRows.new()
+	_rows_view.action_pressed.connect(_on_rows_action_pressed)
 	_rows_view.row_double_clicked.connect(func(new_line: int) -> void:
 		if new_line > 0 and not String(_context.get("path", "")).is_empty():
 			open_location_requested.emit(_context["path"], new_line)
@@ -170,7 +176,7 @@ func _on_option_pressed(id: int) -> void:
 # --- content -----------------------------------------------------------------
 
 
-## context (all optional): {"path", "note"}.
+## context (all optional): {"actions": hunk buttons ("stage"/"unstage"/"revert"), "path", "note"}.
 func show_diff(diff_text: String, context: Dictionary = {}) -> void:
 	var previous_path: String = _context.get("path", "")
 	var keep_scroll: bool = previous_path == context.get("path", "") and not previous_path.is_empty() and _diff_text != ""
@@ -199,6 +205,9 @@ func set_tabs(labels: Array, current: int = 0) -> void:
 
 func _rerender(keep_scroll: bool = false) -> void:
 	var parsed := _parse(_diff_text)
+	var split := DiffHunks.split_hunks(_diff_text)
+	_hunks = split["hunks"]
+	_file_header = split["file_header"]
 
 	var path: String = parsed["path"] if not String(parsed["path"]).is_empty() else _context.get("path", "")
 	var rows: Array = parsed["rows"]
@@ -210,9 +219,13 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_stats_added.text = ("+%d" % parsed["added"]) if parsed["added"] > 0 else ""
 	_stats_removed.text = ("−%d" % parsed["removed"]) if parsed["removed"] > 0 else ""
 
+	var actions: Array = _context.get("actions", [])
+	var line_level: bool = not parsed["is_new"] and not parsed["is_deleted"]
+	if _setting("ignore_whitespace", false):
+		actions = [] # a whitespace-insensitive diff doesn't match the file closely enough to apply back
 	var language := SyntaxColors.language_for(path) if _setting("syntax", true) else ""
 
-	_rows_view.set_content(rows, language, _setting("side_by_side", false))
+	_rows_view.set_content(rows, actions, line_level, language, _setting("side_by_side", false))
 	var has_rows := not rows.is_empty()
 	_scroll.visible = has_rows
 	_empty_label.visible = not has_rows
@@ -223,6 +236,13 @@ func _rerender(keep_scroll: bool = false) -> void:
 		# Otherwise the previous file's scroll offset carries over and clips the top of the new diff.
 		_scroll.scroll_horizontal = 0
 		_scroll.scroll_vertical = 0
+
+
+func _on_rows_action_pressed(action: String, hunk_index: int, selected: PackedInt32Array) -> void:
+	if hunk_index < 0 or hunk_index >= _hunks.size():
+		return
+	var reverse := action != "stage"
+	hunk_action_requested.emit(action, DiffHunks.build_patch(_file_header, _hunks[hunk_index], selected, reverse))
 
 
 ## {"path", "added", "removed", "binary", "is_new", "is_deleted", "rows"}; rows are line rows {"type", "old_no"/"new_no" (-1 = none), "text", "hl" (changed ranges), "hunk", "li" (index in hunk body)} or hunk rows {"type": "hunk", "hunk", "gap", "heading", "header"}.
@@ -304,6 +324,9 @@ static func _parse(diff_text: String) -> Dictionary:
 					var hl := _word_diff(old_text, new_text)
 					var removed_row := _line_row("removed", old_line, -1, old_text, hl[0], hunk_index, removed_idx[k] - body_start)
 					var added_row := _line_row("added", -1, new_line, new_text, hl[1], hunk_index, added_idx[k] - body_start)
+					# A modified line is one -/+ pair: partial stage/revert must always take both halves.
+					removed_row["pair_li"] = added_row["li"]
+					added_row["pair_li"] = removed_row["li"]
 					rows.append(removed_row)
 					rows.append(added_row)
 					result["removed"] += 1
@@ -452,10 +475,11 @@ static func _prefix_suffix_diff(a: String, b: String) -> Array:
 	return [[Vector2i(prefix, old_len)] if old_len > 0 else [], [Vector2i(prefix, new_len)] if new_len > 0 else []]
 
 
-## Custom-drawn rows (RTL's [bgcolor] can't fill a row edge-to-edge): backgrounds, gutters, word highlights, syntax; only visible rows are drawn.
+## Custom-drawn rows (RTL's [bgcolor] can't fill a row edge-to-edge): backgrounds, gutters, word highlights, syntax, hunk buttons, line selection; only visible rows are drawn.
 class DiffRows:
 	extends Control
 
+	signal action_pressed(action: String, hunk: int, selected: PackedInt32Array)
 	signal row_double_clicked(new_line: int)
 
 	const GUTTER_PAD := 10.0
@@ -463,6 +487,8 @@ class DiffRows:
 	const TEXT_RIGHT_PAD := 24.0
 	const LINE_PAD_Y := 6.0
 	const CONTENT_PAD_Y := 4.0
+	const BUTTON_PAD_X := 8.0
+	const BUTTON_GAP := 6.0
 	const SIDE_GAP := 6.0
 
 	const COLOR_ADDED_BG := Color(0.208, 0.408, 0.235, 0.35)
@@ -475,17 +501,31 @@ class DiffRows:
 	const COLOR_LINE_NO := Color(0.45, 0.45, 0.5)
 	const COLOR_HUNK_BG := Color(0.35, 0.5, 0.85, 0.12)
 	const COLOR_HUNK_TEXT := Color(0.6, 0.68, 0.85)
+	const COLOR_SELECTED_BG := Color(0.4, 0.6, 1.0, 0.22)
+	const COLOR_SELECTED_BAR := Color(0.45, 0.65, 1.0)
+	const COLOR_BUTTON_BG := Color(1, 1, 1, 0.1)
+	const COLOR_BUTTON_HOVER := Color(1, 1, 1, 0.2)
 	const COLOR_EMPTY_SIDE := Color(0, 0, 0, 0.12)
+
+	const ACTION_LABELS := { "stage": "Stage", "unstage": "Unstage", "revert": "Revert" }
 
 	var _rows: Array = []
 	## What's drawn, one entry per visual row: {"u": row index} (unified / hunk rows) or {"l": idx, "r": idx} (side by side, -1 = blank).
 	var _display: Array = []
+	var _actions: Array = []
+	var _line_level := true
 	var _language := ""
 	var _side_by_side := false
 	var _gutter_width := 30.0
 	var _row_height := 20.0
 	var _baseline_offset := 14.0
 	var _side_width := 0.0
+	## Unified row indices currently selected (only added/removed rows), and the last clicked one (shift-click range anchor).
+	var _selected := {}
+	var _anchor := -1
+	## [{"rect": Rect2, "action": String, "hunk": int}] from the last _draw().
+	var _buttons: Array = []
+	var _hover_button := -1
 
 
 	func _init() -> void:
@@ -516,10 +556,14 @@ class DiffRows:
 			queue_redraw()
 
 
-	func set_content(rows: Array, language: String, side_by_side: bool) -> void:
+	func set_content(rows: Array, actions: Array, line_level: bool, language: String, side_by_side: bool) -> void:
 		_rows = rows
+		_actions = actions
+		_line_level = line_level
 		_language = language
 		_side_by_side = side_by_side
+		_selected.clear()
+		_anchor = -1
 		_build_display()
 		_recalculate_layout()
 		queue_redraw()
@@ -597,6 +641,7 @@ class DiffRows:
 
 
 	func _draw() -> void:
+		_buttons.clear()
 		if _rows.is_empty():
 			return
 
@@ -604,6 +649,7 @@ class DiffRows:
 		var view_top := float(sc.scroll_vertical) if sc != null else 0.0
 		var view_height := sc.size.y if sc != null else size.y
 		var view_left := float(sc.scroll_horizontal) if sc != null else 0.0
+		var view_width := _viewport_width()
 
 		var first := maxi(0, int((view_top - CONTENT_PAD_Y) / _row_height) - 1)
 		var last := mini(_display.size() - 1, int((view_top + view_height - CONTENT_PAD_Y) / _row_height) + 1)
@@ -614,7 +660,7 @@ class DiffRows:
 			if entry.has("u"):
 				var row: Dictionary = _rows[entry["u"]]
 				if row["type"] == "hunk":
-					_draw_hunk_row(row, y, view_left)
+					_draw_hunk_row(row, y, view_left, view_width)
 				else:
 					_draw_line(entry["u"], 0.0, size.x, y, _gutter_width, true)
 				continue
@@ -658,6 +704,9 @@ class DiffRows:
 
 		if bg_color.a > 0.0:
 			draw_rect(Rect2(x, y, width, _row_height), bg_color)
+		if _selected.has(idx):
+			draw_rect(Rect2(x, y, width, _row_height), COLOR_SELECTED_BG)
+			draw_rect(Rect2(x, y, 3.0, _row_height), COLOR_SELECTED_BAR)
 
 		var number_x := x
 		if two_gutters:
@@ -711,7 +760,9 @@ class DiffRows:
 			draw_string(font, Vector2(cursor, baseline), text.substr(pos), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, base_color)
 
 
-	func _draw_hunk_row(row: Dictionary, y: float, view_left: float) -> void:
+	func _draw_hunk_row(row: Dictionary, y: float, view_left: float, view_width: float) -> void:
+		var font := get_theme_default_font()
+		var font_size := get_theme_default_font_size()
 		var code_font := _code_font()
 		var code_size := _code_font_size()
 		draw_rect(Rect2(0, y, size.x, _row_height), COLOR_HUNK_BG)
@@ -728,6 +779,57 @@ class DiffRows:
 		var baseline := y + _baseline_offset
 		draw_string(code_font, Vector2(view_left + 8.0, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(1, code_size - 1), COLOR_HUNK_TEXT)
 
+		if _actions.is_empty():
+			return
+		# Buttons stick to the right edge of the visible area, whatever the horizontal scroll.
+		var hunk: int = row["hunk"]
+		var selected_count := _selected_in_hunk(hunk).size()
+		var right := view_left + view_width - 6.0
+		for a in range(_actions.size() - 1, -1, -1):
+			var action: String = _actions[a]
+			var text: String = ACTION_LABELS.get(action, action)
+			text += (" %d line%s" % [selected_count, "" if selected_count == 1 else "s"]) if selected_count > 0 else " hunk"
+			var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + BUTTON_PAD_X * 2
+			var rect := Rect2(right - w, y + 2.0, w, _row_height - 4.0)
+			var hovered := _buttons.size() == _hover_button
+			draw_style_box(_button_style(hovered, action == "revert"), rect)
+			draw_string(font, Vector2(rect.position.x + BUTTON_PAD_X, y + _baseline_offset), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size,
+					Color(1, 0.75, 0.75) if action == "revert" else Color(0.9, 0.92, 1.0))
+			_buttons.append({ "rect": rect, "action": action, "hunk": hunk })
+			right -= w + BUTTON_GAP
+
+
+	func _button_style(hovered: bool, destructive: bool) -> StyleBoxFlat:
+		var style := StyleBoxFlat.new()
+		style.bg_color = COLOR_BUTTON_HOVER if hovered else COLOR_BUTTON_BG
+		if destructive and hovered:
+			style.bg_color = Color(0.8, 0.3, 0.3, 0.35)
+		style.set_corner_radius_all(3)
+		return style
+
+
+	## hunk-local line indices (row["li"]) of the selected rows in hunk.
+	## with_pairs adds each modified line's other half, so selecting just the + (or -) side of a change still reverts/stages it as a whole.
+	func _selected_in_hunk(hunk: int, with_pairs := false) -> PackedInt32Array:
+		var out := PackedInt32Array()
+		for idx in _selected:
+			var row: Dictionary = _rows[idx]
+			if row["hunk"] != hunk:
+				continue
+			if not out.has(row["li"]):
+				out.append(row["li"])
+			if with_pairs and row.has("pair_li") and not out.has(row["pair_li"]):
+				out.append(row["pair_li"])
+		out.sort()
+		return out
+
+
+	func _button_at(pos: Vector2) -> int:
+		for b in _buttons.size():
+			if (_buttons[b]["rect"] as Rect2).has_point(pos):
+				return b
+		return -1
+
 
 	## Unified row index under pos (in side-by-side, whichever half was clicked), or -1.
 	func _row_at(pos: Vector2) -> int:
@@ -741,13 +843,58 @@ class DiffRows:
 
 
 	func _gui_input(event: InputEvent) -> void:
-		if not (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and event.double_click):
+		if event is InputEventMouseMotion:
+			var hover := _button_at(event.position)
+			if hover != _hover_button:
+				_hover_button = hover
+				mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if hover >= 0 else Control.CURSOR_ARROW
+				queue_redraw()
 			return
-		var idx := _row_at(event.position)
-		if idx >= 0 and _rows[idx]["type"] != "hunk":
-			var row: Dictionary = _rows[idx]
-			row_double_clicked.emit(row["new_no"] if row["new_no"] > 0 else _nearest_new_line(idx))
+
+		if not (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
+			return
+
+		var button := _button_at(event.position)
+		if button >= 0:
+			var b: Dictionary = _buttons[button]
+			action_pressed.emit(b["action"], b["hunk"], _selected_in_hunk(b["hunk"], true))
 			accept_event()
+			return
+
+		var idx := _row_at(event.position)
+		if event.double_click:
+			if idx >= 0 and _rows[idx]["type"] != "hunk":
+				var row: Dictionary = _rows[idx]
+				row_double_clicked.emit(row["new_no"] if row["new_no"] > 0 else _nearest_new_line(idx))
+			return
+
+		if _actions.is_empty() or not _line_level or idx < 0 or not _rows[idx]["type"] in ["added", "removed"]:
+			if not _selected.is_empty():
+				_selected.clear()
+				queue_redraw()
+			return
+
+		var additive: bool = event.ctrl_pressed or event.meta_pressed
+		if event.shift_pressed and _anchor >= 0 and _rows[_anchor]["hunk"] == _rows[idx]["hunk"]:
+			if not additive:
+				_selected.clear()
+			for k in range(mini(_anchor, idx), maxi(_anchor, idx) + 1):
+				if _rows[k]["type"] in ["added", "removed"]:
+					_selected[k] = true
+		elif additive:
+			if _selected.has(idx):
+				_selected.erase(idx)
+			else:
+				_selected[idx] = true
+			_anchor = idx
+		else:
+			var only_this := _selected.size() == 1 and _selected.has(idx)
+			_selected.clear()
+			if not only_this:
+				_selected[idx] = true
+			_anchor = idx
+		accept_event()
+		queue_redraw()
 
 
 	## A removed line has no new-file number — use the closest following one.
@@ -756,3 +903,10 @@ class DiffRows:
 			if _rows[k]["type"] != "hunk" and int(_rows[k]["new_no"]) > 0:
 				return _rows[k]["new_no"]
 		return 1
+
+
+	func _get_tooltip(at_position: Vector2) -> String:
+		if _button_at(at_position) >= 0:
+			return "Applies to the selected lines in this hunk (click +/− lines to select; Shift/Ctrl-click to extend)." \
+					if _line_level else "Applies to the whole hunk."
+		return ""

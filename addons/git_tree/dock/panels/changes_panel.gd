@@ -93,6 +93,8 @@ var _branch_seen := false
 
 ## Which diff ("unstaged"/"staged") was last viewed per path, for files that have both.
 var _diff_side_by_path := {}
+## Which side the diff view is showing right now ("unstaged"/"staged"), so Revert knows where the hunk lives.
+var _diff_side := "unstaged"
 
 
 func _ready() -> void:
@@ -109,6 +111,7 @@ func _ready() -> void:
 	# Changelists + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
 	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
 
+	_diff_view.hunk_action_requested.connect(_on_hunk_action_requested)
 	_diff_view.options_changed.connect(_show_selected_diff)
 	_diff_view.tab_selected.connect(_on_diff_tab_selected)
 	_diff_view.open_location_requested.connect(func(path: String, line: int) -> void:
@@ -469,7 +472,7 @@ func _on_changes_tree_item_selected() -> void:
 	_show_selected_diff()
 
 
-## Diff for whichever file is selected. Tracked files with both staged and unstaged changes get Unstaged/Staged tabs.
+## Diff for whichever file is selected. Tracked files with both staged and unstaged changes get Unstaged/Staged tabs; hunk buttons follow the side shown.
 func _show_selected_diff() -> void:
 	var item := _tree.get_selected()
 	if item == null:
@@ -500,10 +503,16 @@ func _show_selected_diff() -> void:
 	else:
 		_diff_view.set_tabs([])
 
+	_diff_side = side
 	if side == "staged":
-		_diff_view.show_diff(_repo.get_diff(path, true, options), { "path": path, "note": "staged" })
+		_diff_view.show_diff(_repo.get_diff(path, true, options), {
+			"path": path, "actions": ["unstage", "revert"], "note": "staged",
+		})
 	else:
-		_diff_view.show_diff(_repo.get_diff(path, false, options), { "path": path, "note": "unstaged" if has_staged else "" })
+		_diff_view.show_diff(_repo.get_diff(path, false, options), {
+			"path": path, "actions": ["stage", "revert"],
+			"note": "unstaged" if has_staged else "",
+		})
 
 
 func _on_diff_tab_selected(index: int) -> void:
@@ -512,6 +521,26 @@ func _on_diff_tab_selected(index: int) -> void:
 		return
 	_diff_side_by_path[item.get_metadata(0).get("path", "")] = "unstaged" if index == 0 else "staged"
 	_show_selected_diff()
+
+
+func _on_hunk_action_requested(action: String, patch: String) -> void:
+	var item := _tree.get_selected()
+	var path: String = item.get_metadata(0).get("path", "") if item != null and item.get_metadata(0) is Dictionary else ""
+	var result: Dictionary
+	match action:
+		"stage":
+			result = _repo.apply_patch(patch, true, false)
+		"unstage":
+			result = _repo.apply_patch(patch, true, true)
+		"revert":
+			if not await Dialogs.confirm(self, "Revert Changes", "Discard these changes from the working tree? This can't be undone.", "Revert"):
+				return
+			# A staged hunk is also in the working tree: discard it from both.
+			result = _repo.discard_staged_patch(patch) if _diff_side == "staged" else _repo.apply_patch(patch, false, true)
+			EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
+	if not result["ok"]:
+		await Dialogs.error(self, "Couldn't %s" % action, result["error"])
+	refresh()
 
 
 func _on_changes_tree_item_activated() -> void:
