@@ -41,7 +41,7 @@ static func run(repo_root: String, args: Array, include_stderr: bool = false) ->
 	return { "exit_code": exit_code, "text": text }
 
 
-## Starts `git <args>` on a worker thread and returns a Job; `await job.finished` yields the same {"exit_code", "text", "cancelled"} shape as run() (stderr always included). For slow commands, which would otherwise freeze the editor.
+## Starts `git <args>` on a worker thread and returns a Job; `await job.finished` yields the same {"exit_code", "text", "cancelled"} shape as run() (stderr always included). For network operations, which would otherwise freeze the editor.
 static func start(repo_root: String, args: Array) -> Job:
 	var job := Job.new()
 	job.start(repo_root, args)
@@ -81,7 +81,14 @@ static func restore_environment() -> void:
 class Job:
 	extends RefCounted
 
+	# Per instance, built on the main thread: a static var here was still null on the worker thread in the editor, killing _run() so finished never fired.
+	var _progress_re := RegEx.create_from_string("^(remote: )?[A-Za-z ]+:\\s+\\d+% \\(")
+	## Everything --progress adds on top of the meters themselves.
+	var _progress_noise_re := RegEx.create_from_string("^(remote: )?([A-Za-z ]+:\\s+\\d+% \\(|Enumerating objects: \\d+, done|Delta compression using|Total \\d+ \\(delta)")
+
 	signal finished(result: Dictionary)
+	## Latest progress line from git's stderr ("Receiving objects:  45% (9/20)"), for commands run with --progress.
+	signal progress(text: String)
 
 	var args: PackedStringArray
 	var is_running := false
@@ -123,10 +130,10 @@ class Job:
 		_mutex.unlock()
 		var stdio: FileAccess = info["stdio"]
 		var stderr: FileAccess = info["stderr"]
-		# Both pipes drained at once, so neither can fill up and stall git.
+		# Both pipes drained at once, so neither can fill up and stall git; stderr here, since that's where progress arrives.
 		var out_thread := Thread.new()
-		out_thread.start(_drain.bind(stdio))
-		var err := _drain(stderr)
+		out_thread.start(_drain.bind(stdio, false))
+		var err := _strip_progress(_drain(stderr, true))
 		var out: String = out_thread.wait_to_finish()
 		if _cancelled:
 			# OS.kill() already reaped the process — querying it again would only log "process does not exist".
@@ -140,15 +147,48 @@ class Job:
 
 
 	## Reads until EOF. The pipe is blocking, so an empty read only happens once git has closed its end — a short read isn't EOF, and get_error() flags those too, so it can't be used here.
-	func _drain(pipe: FileAccess) -> String:
+	func _drain(pipe: FileAccess, report_progress: bool) -> String:
 		var bytes := PackedByteArray()
+		var last_progress := ""
 		while pipe.is_open():
 			var chunk := pipe.get_buffer(4096)
 			if chunk.is_empty():
 				break
 			bytes.append_array(chunk)
+			if report_progress:
+				var line := _last_progress_line(bytes)
+				if line != last_progress:
+					last_progress = line
+					_emit_progress.call_deferred(line)
 		pipe.close()
 		return bytes.get_string_from_utf8()
+
+
+	## Progress lines are rewritten in place with \r; only the tail is decoded (ASCII) since a chunk may end mid-UTF-8.
+	func _last_progress_line(bytes: PackedByteArray) -> String:
+		var tail := bytes.slice(maxi(0, bytes.size() - 256)).get_string_from_ascii()
+		var pieces := tail.replace("\r", "\n").split("\n", false)
+		for i in range(pieces.size() - 1, -1, -1):
+			var piece := pieces[i].strip_edges()
+			if _progress_re.search(piece) != null:
+				return piece.trim_prefix("remote: ").trim_suffix(", done.")
+		return ""
+
+
+	## Drops the progress meter lines --progress adds, so error text reads as it did without it.
+	func _strip_progress(text: String) -> String:
+		var kept := PackedStringArray()
+		for line in text.split("\n"):
+			var pieces := line.split("\r", false)
+			var last := pieces[pieces.size() - 1] if not pieces.is_empty() else ""
+			if _progress_noise_re.search(last) == null:
+				kept.append(last)
+		return "\n".join(kept)
+
+
+	func _emit_progress(text: String) -> void:
+		if is_running:
+			progress.emit(text)
 
 
 	func _finish(result: Dictionary) -> void:

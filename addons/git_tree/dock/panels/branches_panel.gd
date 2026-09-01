@@ -4,9 +4,13 @@ extends Control
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
+const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
+const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
 
 enum {
-	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_RENAME, ID_DELETE, ID_COPY_NAME, ID_COMPARE,
+	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_PUSH_BRANCH, ID_SET_UPSTREAM,
+	ID_UNSET_UPSTREAM, ID_RENAME, ID_DELETE, ID_COPY_NAME,
+	ID_FETCH_REMOTE, ID_FETCH_PRUNE, ID_COMPARE,
 }
 
 ## Opens the changeset dialog, wired up by git_tree_dock.gd: (title, base_ref, target_ref). target "" means the working tree.
@@ -18,6 +22,8 @@ signal compare_requested(title: String, base: String, target: String)
 
 ## Set by git_tree_dock.gd; a git_cli_repo.gd instance.
 var _repo: RefCounted
+var _operation_bar: HBoxContainer
+var _sync_bar: VBoxContainer
 ## Below this width the tree drops to a single column (side-dock mode).
 const WIDE_MIN_WIDTH := 520.0
 var _wide := true
@@ -30,6 +36,11 @@ var _collapsed_sections := {}
 
 
 func _ready() -> void:
+	_sync_bar = SyncBar.new()
+	$Layout/Toolbar.add_child(_sync_bar)
+	$Layout/Toolbar.move_child(_sync_bar, 0)
+	_sync_bar.changed.connect(refresh)
+	_operation_bar = _sync_bar.operation_bar
 	_tree.resized.connect(func() -> void:
 		if (_tree.size.x >= WIDE_MIN_WIDTH) != _wide and _repo != null:
 			refresh()
@@ -48,12 +59,14 @@ func _ready() -> void:
 
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
+	_sync_bar.set_repo(repo)
 	refresh()
 
 
 func refresh() -> void:
 	if _repo == null:
 		return
+	_sync_bar.refresh()
 
 	var scroll := _tree.get_scroll()
 	_tree.clear()
@@ -184,14 +197,11 @@ func _on_new_branch_button_pressed() -> void:
 
 
 func _new_branch_from(start_point: String) -> void:
-	var answer: Variant = await Dialogs.form(self, "New Branch", [
-		{ "key": "name", "label": "Name", "placeholder": "feature/my-branch" },
-		{ "key": "start", "label": "Start point", "default": start_point },
-		{ "key": "checkout", "label": "Switch to it (uncommitted changes come along)", "type": "check", "default": true },
-	], "Create")
-	if answer == null or String(answer["name"]).strip_edges().is_empty():
-		return
-	_after(_repo.create_branch(String(answer["name"]).strip_edges(), String(answer["start"]).strip_edges(), answer["checkout"]), "Create branch failed", answer["checkout"])
+	await _sync_bar.new_branch_dialog(start_point)
+
+
+func _push_branch_to(branch: String) -> void:
+	await _sync_bar.push_branch_to(branch)
 
 
 # --- tree ------------------------------------------------------------------
@@ -244,6 +254,11 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 				m.add_separator()
 				m.add_item("Compare with %s" % current_label, ID_COMPARE)
 			m.add_separator()
+			m.add_item("Push…", ID_PUSH_BRANCH)
+			m.add_item("Set Upstream…", ID_SET_UPSTREAM)
+			if not meta["upstream"].is_empty():
+				m.add_item("Unset Upstream", ID_UNSET_UPSTREAM)
+			m.add_separator()
 			m.add_item("Rename…", ID_RENAME)
 			m.add_item("Delete…", ID_DELETE)
 			m.set_item_disabled(m.get_item_index(ID_DELETE), meta["is_head"])
@@ -255,11 +270,14 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("Compare with %s" % current_label, ID_COMPARE)
 			m.add_separator()
 			m.add_item("Copy Name", ID_COPY_NAME)
+		"remote":
+			m.add_item("Fetch", ID_FETCH_REMOTE)
 		"section":
-			if meta["title"] == "Local":
-				m.add_item("New Branch…", ID_NEW_BRANCH_FROM)
-			else:
-				return
+			match meta["title"]:
+				"Remote":
+					m.add_item("Fetch All and Prune Deleted Branches", ID_FETCH_PRUNE)
+				_:
+					m.add_item("New Branch…", ID_NEW_BRANCH_FROM)
 		_:
 			return
 
@@ -280,6 +298,12 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			await _new_branch_from(name if not name.is_empty() else "HEAD")
 		ID_COMPARE:
 			compare_requested.emit("%s ↔ %s" % [_current_label(), name], "HEAD", name)
+		ID_PUSH_BRANCH:
+			await _push_branch_to(name)
+		ID_SET_UPSTREAM:
+			await _set_upstream(name, _context.get("upstream", ""))
+		ID_UNSET_UPSTREAM:
+			_after(_repo.set_upstream(name, ""), "Unset upstream failed")
 		ID_RENAME:
 			var new_name: Variant = await Dialogs.prompt(self, "Rename Branch", "New name for \"%s\"" % name, name, "Rename")
 			if new_name != null and not new_name.is_empty() and new_name != name:
@@ -288,11 +312,36 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			await _delete_branch(name)
 		ID_COPY_NAME:
 			DisplayServer.clipboard_set(name)
+		ID_FETCH_REMOTE:
+			await RemoteActions.fetch(self, _repo, _operation_bar, name)
+			refresh()
+		ID_FETCH_PRUNE:
+			await RemoteActions.fetch(self, _repo, _operation_bar, "", true)
+			refresh()
 
 
 func _current_label() -> String:
 	var current: String = _repo.get_current_branch()
 	return current if not current.is_empty() else "HEAD"
+
+
+func _set_upstream(branch: String, current_upstream: String) -> void:
+	var options: Array = []
+	for b in _repo.list_branches(false):
+		if b["is_remote"]:
+			options.append(b["name"])
+	if options.is_empty():
+		await Dialogs.error(self, "No remote branches", "There are no remote-tracking branches to track. Fetch or push first.")
+		return
+	var default_choice: String = current_upstream
+	if default_choice.is_empty():
+		var guess := "%s/%s" % [RemoteActions.default_remote(_repo), branch]
+		default_choice = guess if options.has(guess) else options[0]
+	var answer: Variant = await Dialogs.form(self, "Set Upstream of \"%s\"" % branch, [
+		{ "key": "upstream", "label": "Track", "type": "option", "options": options, "default": default_choice },
+	], "Set")
+	if answer != null:
+		_after(_repo.set_upstream(branch, answer["upstream"]), "Set upstream failed")
 
 
 func _delete_branch(name: String) -> void:

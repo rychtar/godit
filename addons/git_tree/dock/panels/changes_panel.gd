@@ -7,9 +7,11 @@ const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 const ChangelistStore := preload("res://addons/git_tree/util/changelist_store.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
+const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
+const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
 const LIST_PANE_RATIO := 0.4
 
 const MENU_MOVE_TO_SUBMENU := "MoveToMenu"
@@ -87,7 +89,10 @@ var _name_dialog_rename_target := ""
 ## Which action _revert_confirm_dialog is currently being used for: "revert" or "remove".
 var _confirm_dialog_action := "revert"
 
-## Last branch seen by refresh(), to notice checkouts made anywhere (Branches, Git Log, terminal).
+var _operation_bar: HBoxContainer
+## Branch switcher + Fetch/Pull/Push header (shared widget, also on the Branches tab).
+var _sync_bar: VBoxContainer
+## Last branch seen by refresh(), to notice checkouts made anywhere (sync bar, Branches, Git Log, terminal).
 var _last_branch := ""
 var _branch_seen := false
 
@@ -108,6 +113,12 @@ func _ready() -> void:
 
 	_diff_toggle.button_pressed = Settings.get_value(DIFF_VISIBLE_SETTING_KEY, true)
 
+	_sync_bar = SyncBar.new()
+	$Layout.add_child(_sync_bar)
+	$Layout.move_child(_sync_bar, 0)
+	_sync_bar.changed.connect(refresh)
+	_operation_bar = _sync_bar.operation_bar
+
 	# Changelists + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
 	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
 
@@ -125,6 +136,7 @@ func _ready() -> void:
 
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
+	_sync_bar.set_repo(repo)
 	_changelist_state = ChangelistStore.load_state(_repo.get_repo_root())
 	_sync_staging_to_active_changelist()
 	refresh()
@@ -141,6 +153,7 @@ func refresh() -> void:
 	if selected_item != null and selected_item.get_metadata(0) is Dictionary:
 		selected_path = selected_item.get_metadata(0).get("path", "")
 	var scroll_y := _tree.get_scroll().y
+	_sync_bar.refresh()
 
 	_suppress_item_edited = true
 	_tree.clear()
@@ -292,7 +305,7 @@ func _follow_branch_switch() -> void:
 	_branch_seen = true
 	if not first_time and _changelist_state["names"].has(branch) and _changelist_state["active"] != branch:
 		_set_active_changelist(branch)
-		_status_label.text = "Switched to branch %s — its changelist is now active." % branch
+		_operation_bar.done("Switched to branch %s — its changelist is now active." % branch)
 
 
 func _save_changelist_state() -> void:
@@ -333,7 +346,7 @@ func _add_to_vcs(paths: Array) -> void:
 	for path in paths:
 		_changelist_state["assignments"][path] = _changelist_state["active"]
 	_save_changelist_state()
-	_status_label.text = "Added %s to \"%s\"." % [paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size(), _changelist_state["active"]]
+	_operation_bar.done("Added %s to \"%s\"." % [paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size(), _changelist_state["active"]])
 
 
 ## Stages files in the active changelist, unstages tracked files outside
@@ -817,7 +830,7 @@ func _maybe_create_branch(name: String) -> void:
 		_show_error("Couldn't create branch", result["error"])
 		return
 	_last_branch = name
-	_status_label.text = "Created and switched to branch %s." % name
+	_operation_bar.done("Created and switched to branch %s." % name)
 	refresh.call_deferred()
 
 
@@ -955,11 +968,8 @@ func _do_commit(push_after: bool) -> void:
 
 
 func _do_push() -> void:
-	var result: Dictionary = _repo.push()
-	if not result["ok"]:
-		_show_error("Push failed", result["error"])
-		return
-	_status_label.text = "Pushed."
+	await RemoteActions.push(self, _repo, _operation_bar)
+	refresh()
 
 
 func _show_error(title: String, message: String) -> void:

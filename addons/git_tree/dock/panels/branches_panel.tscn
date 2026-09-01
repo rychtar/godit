@@ -38,12 +38,6 @@ size_flags_horizontal = 3
 placeholder_text = "Filter branches"
 clear_button_enabled = true
 
-[node name="RefreshButton" type="Button" parent="Layout/Toolbar/Row3" unique_id=363961291]
-layout_mode = 2
-tooltip_text = "Refresh"
-text = "Refresh"
-flat = true
-
 [node name="BranchesTree" type="Tree" parent="Layout" unique_id=1764193318]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 160)
@@ -59,7 +53,6 @@ unique_name_in_owner = true
 
 [connection signal="pressed" from="Layout/Toolbar/Row3/NewBranchButton" to="." method="_on_new_branch_button_pressed"]
 [connection signal="text_changed" from="Layout/Toolbar/Row3/FilterEdit" to="." method="_on_filter_edit_text_changed"]
-[connection signal="pressed" from="Layout/Toolbar/Row3/RefreshButton" to="." method="refresh"]
 [connection signal="item_activated" from="Layout/BranchesTree" to="." method="_on_branches_tree_item_activated"]
 [connection signal="item_mouse_selected" from="Layout/BranchesTree" to="." method="_on_branches_tree_item_mouse_selected"]
 [connection signal="id_pressed" from="ContextMenu" to="." method="_on_context_menu_id_pressed"]

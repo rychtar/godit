@@ -316,6 +316,13 @@ func rename_branch(old_name: String, new_name: String) -> Dictionary:
 	return _simple(["branch", "-m", old_name, new_name])
 
 
+## upstream "" unsets it.
+func set_upstream(branch: String, upstream: String) -> Dictionary:
+	if upstream.is_empty():
+		return _simple(["branch", "--unset-upstream", branch])
+	return _simple(["branch", "--set-upstream-to=" + upstream, branch])
+
+
 ## Checks out remote_branch ("origin/foo") as a local branch tracking it — or just switches to the local branch if one with that name already exists.
 func checkout_remote_branch(remote_branch: String) -> Dictionary:
 	var slash := remote_branch.find("/")
@@ -325,22 +332,123 @@ func checkout_remote_branch(remote_branch: String) -> Dictionary:
 	return _simple(["checkout", "--track", "-b", local_name, remote_branch])
 
 
-## options (all optional): {"remote", "branch"}; empty = plain `git push`. Runs synchronously, so the editor waits for it.
+## Relays the running job's progress line ("Receiving objects:  45% (9/20)") for OperationBar.
+signal job_progress(text: String)
+
+## The background job currently running for this repo (fetch/pull/push...), or null. See cancel_current().
+var current_job: RefCounted = null
+
+
+## Kills whatever network operation is in flight; its awaiting caller gets {"ok": false, "cancelled": true}.
+func cancel_current() -> void:
+	if current_job != null:
+		current_job.cancel()
+
+
+func is_busy() -> bool:
+	return current_job != null
+
+
+## Runs git on a worker thread (see GitCli.start()). Coroutine — callers must await it. {"ok", "error", "output", "cancelled"}.
+func _run_async(args: Array) -> Dictionary:
+	var job := GitCli.start(_repo_root, args)
+	job.progress.connect(job_progress.emit)
+	current_job = job
+	var r: Dictionary = await job.finished
+	if current_job == job:
+		current_job = null
+	var text: String = String(r["text"]).strip_edges()
+	return {
+		"ok": r["exit_code"] == 0,
+		"error": "" if r["exit_code"] == 0 else text,
+		"output": text,
+		"cancelled": r.get("cancelled", false),
+	}
+
+
+## Updates remote-tracking refs from remote_name, or every remote if empty.
+## Doesn't touch any local branch or the working tree — see pull() for that.
+## Coroutine (runs in the background).
+func fetch(remote_name: String = "", prune: bool = false) -> Dictionary:
+	var args := ["fetch", "--progress", "--all"] if remote_name.is_empty() else ["fetch", "--progress", remote_name]
+	if prune:
+		args.append("--prune")
+	args.append("--tags")
+	return await _run_async(args)
+
+
+## Fetches and integrates the upstream; strategy "" (git config), "merge", "rebase" or "ff-only". Conflicts leave the repo mid-merge. Coroutine.
+func pull(strategy: String = "", autostash: bool = false) -> Dictionary:
+	var args := ["pull", "--progress"]
+	match strategy:
+		"merge": args.append("--no-rebase")
+		"rebase": args.append("--rebase")
+		"ff-only": args.append("--ff-only")
+	if autostash:
+		args.append("--autostash")
+	return await _run_async(args)
+
+
+## options (all optional): {"remote", "branch", "set_upstream", "force_with_lease", "tags"}; empty = plain `git push`. Coroutine.
 func push(options: Dictionary = {}) -> Dictionary:
-	var args := ["push"]
+	var args := ["push", "--progress"]
+	if options.get("set_upstream", false):
+		args.append("--set-upstream")
+	if options.get("force_with_lease", false):
+		args.append("--force-with-lease")
+	if options.get("tags", false):
+		args.append("--follow-tags")
 	var remote: String = options.get("remote", "")
 	var branch: String = options.get("branch", "")
 	if not remote.is_empty():
 		args.append(remote)
 		if not branch.is_empty():
 			args.append(branch)
-	return _simple(args)
+	return await _run_async(args)
 
 
 ## Current branch's short name, or "" on a detached HEAD.
 func get_current_branch() -> String:
 	var r := GitCli.run(_repo_root, ["symbolic-ref", "--short", "-q", "HEAD"])
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
+## Short name of branch's upstream (e.g. "origin/main"), or "" if it has none. Empty branch = current.
+func get_upstream(branch: String = "") -> String:
+	var r := GitCli.run(_repo_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", branch + "@{upstream}"])
+	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
+## {"branch", "upstream"} for the current HEAD; upstream is "" when there's none.
+func get_sync_status() -> Dictionary:
+	var info := { "branch": get_current_branch(), "upstream": "" }
+	if not info["branch"].is_empty():
+		info["upstream"] = get_upstream()
+	return info
+
+
+## Array[{"name", "fetch_url", "push_url"}].
+func list_remotes() -> Array:
+	var r := GitCli.run(_repo_root, ["remote", "-v"])
+	var by_name := {}
+	var order: Array = []
+	for line in GitCli.lines(r["text"]):
+		var parts := line.split("\t")
+		if parts.size() < 2:
+			continue
+		var name := parts[0]
+		var url_and_kind := parts[1].split(" ")
+		if not by_name.has(name):
+			by_name[name] = { "name": name, "fetch_url": "", "push_url": "" }
+			order.append(name)
+		if url_and_kind.size() > 1 and url_and_kind[1] == "(push)":
+			by_name[name]["push_url"] = url_and_kind[0]
+		else:
+			by_name[name]["fetch_url"] = url_and_kind[0]
+	var result: Array = []
+	for name in order:
+		result.append(by_name[name])
+	return result
 
 
 ## Runs a quick mutating command synchronously -> {"ok", "error", "output"}.
