@@ -6,6 +6,7 @@ const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
 const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
+const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 
 enum {
 	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_PUSH_BRANCH, ID_SET_UPSTREAM,
@@ -362,5 +363,5 @@ func _after(result: Dictionary, error_title: String, reload_editor: bool = false
 	if reload_editor:
 		EditorOpen.refresh_all_external_changes()
 	if not result["ok"]:
-		Dialogs.error(self, error_title, result["error"])
+		Dialogs.error(self, error_title, GitErrors.explain(result["error"]))
 	refresh()

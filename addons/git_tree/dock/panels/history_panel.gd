@@ -6,6 +6,7 @@ const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
+const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 const DiffViewScript := preload("res://addons/git_tree/dock/widgets/diff_view.gd")
 const ChangesetDialog := preload("res://addons/git_tree/dock/widgets/changeset_dialog.gd")
 
@@ -540,7 +541,7 @@ func _on_new_branch_dialog_confirmed() -> void:
 func _on_checkout_confirm_dialog_confirmed() -> void:
 	var result: Dictionary = _repo.checkout_commit(_context_oid)
 	if not result["ok"]:
-		_show_error("Checkout failed", result["error"])
+		_show_error("Checkout failed", GitErrors.explain(result["error"]))
 		return
 	EditorOpen.refresh_all_external_changes()
 	refresh()

@@ -1,7 +1,8 @@
-## Fetch/Pull/Push flows shared by the Changes and Branches panels: runs the operation in the background, with an OperationBar showing progress and Cancel, and reports failures. Every function is a coroutine returning whether it succeeded. No class_name: internal helper, addressed via preload.
+## Fetch/Pull/Push flows shared by the Changes and Branches panels: runs the operation in the background (with an OperationBar showing progress and Cancel), then turns the usual failures into a question with the obvious fix — set upstream, pull first, force-with-lease, merge vs rebase, autostash. Every function is a coroutine returning whether it succeeded. No class_name: internal helper, addressed via preload.
 extends RefCounted
 
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
+const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 
 
@@ -15,7 +16,7 @@ static func fetch(parent: Control, repo: RefCounted, bar: Control, remote: Strin
 		return true
 	bar.done("Fetch cancelled." if r["cancelled"] else "Fetch failed.", not r["cancelled"])
 	if not r["cancelled"]:
-		await Dialogs.error(parent, "Fetch failed", r["error"])
+		await Dialogs.error(parent, "Fetch failed", GitErrors.explain(r["error"]))
 	return false
 
 
@@ -32,7 +33,20 @@ static func pull(parent: Control, repo: RefCounted, bar: Control, strategy: Stri
 		bar.done("Pull cancelled.")
 		return false
 	bar.done("Pull failed.", true)
-	await Dialogs.error(parent, "Pull failed", r["error"])
+
+	match GitErrors.classify(r["error"]):
+		GitErrors.DIVERGED:
+			var choice := await Dialogs.error_with_actions(parent, "Pull needs a strategy", GitErrors.explain(r["error"]),
+					{ "merge": "Pull (Merge)", "rebase": "Pull (Rebase)" })
+			if not choice.is_empty():
+				return await pull(parent, repo, bar, choice, autostash)
+		GitErrors.DIRTY:
+			var choice := await Dialogs.error_with_actions(parent, "Pull blocked by local changes", GitErrors.explain(r["error"]),
+					{ "autostash": "Stash, Pull, Re-apply" })
+			if choice == "autostash":
+				return await pull(parent, repo, bar, strategy, true)
+		_:
+			await Dialogs.error(parent, "Pull failed", GitErrors.explain(r["error"]))
 	return false
 
 
@@ -49,7 +63,33 @@ static func push(parent: Control, repo: RefCounted, bar: Control, options: Dicti
 		bar.done("Push cancelled.")
 		return false
 	bar.done("Push failed.", true)
-	await Dialogs.error(parent, "Push failed", r["error"])
+
+	match GitErrors.classify(r["error"]):
+		GitErrors.NO_UPSTREAM:
+			var branch: String = repo.get_current_branch()
+			var remote := default_remote(repo)
+			if branch.is_empty() or remote.is_empty():
+				await Dialogs.error(parent, "Push failed", GitErrors.explain(r["error"]))
+				return false
+			if await Dialogs.confirm(parent, "Publish Branch",
+					"\"%s\" doesn't track a remote branch yet.\n\nPush it to %s/%s and track it from now on?" % [branch, remote, branch], "Push"):
+				var next := options.duplicate()
+				next.merge({ "remote": remote, "branch": branch, "set_upstream": true }, true)
+				return await push(parent, repo, bar, next)
+		GitErrors.NON_FAST_FORWARD:
+			var choice := await Dialogs.error_with_actions(parent, "Push rejected", GitErrors.explain(r["error"]),
+					{ "pull": "Pull, then Push", "force": "Force Push…" })
+			if choice == "pull":
+				if await pull(parent, repo, bar):
+					return await push(parent, repo, bar, options)
+			elif choice == "force":
+				if await Dialogs.confirm(parent, "Force Push",
+						"Overwrite the remote branch with your local one?\n\nUses --force-with-lease: it still refuses if someone pushed commits you haven't fetched.", "Force Push"):
+					var next := options.duplicate()
+					next["force_with_lease"] = true
+					return await push(parent, repo, bar, next)
+		_:
+			await Dialogs.error(parent, "Push failed", GitErrors.explain(r["error"]))
 	return false
 
 

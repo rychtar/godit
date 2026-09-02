@@ -21,6 +21,18 @@ static func confirm(parent: Node, title: String, message: String, ok_text: Strin
 	return await _run(parent, dialog) == true
 
 
+## Error with extra action buttons (e.g. "Pull" after a rejected push). Returns the chosen action id, or "" if just dismissed.
+static func error_with_actions(parent: Node, title: String, message: String, actions: Dictionary) -> String:
+	var dialog := AcceptDialog.new()
+	dialog.title = title
+	dialog.ok_button_text = "Close"
+	dialog.add_child(_message_label(message))
+	for action_id in actions:
+		dialog.add_button(actions[action_id], true, action_id)
+	var answer: Variant = await _run(parent, dialog)
+	return answer if answer is String else ""
+
+
 ## Single line of text input; null on cancel.
 static func prompt(parent: Node, title: String, label: String, default_text: String = "", ok_text: String = "OK") -> Variant:
 	var answer: Variant = await form(parent, title, [{ "key": "value", "label": label, "type": "text", "default": default_text }], ok_text)
@@ -116,11 +128,15 @@ static func form(parent: Node, title: String, fields: Array, ok_text: String = "
 	return values
 
 
-## Pops the dialog up and waits for an answer: true (OK) or false (cancel/close).
+## Pops the dialog up and waits for an answer: true (OK), false (cancel/close), or the custom action's String id.
 static func _run(parent: Node, dialog: AcceptDialog) -> Variant:
 	var waiter := _Waiter.new()
 	dialog.confirmed.connect(waiter.finish.bind(true))
 	dialog.canceled.connect(waiter.finish.bind(false))
+	dialog.custom_action.connect(func(action: StringName) -> void:
+		dialog.hide()
+		waiter.finish(String(action))
+	)
 	parent.add_child(dialog)
 	dialog.popup_centered(Vector2i(TEXT_WIDTH + 40, 0))
 	var answer: Variant = await waiter.done

@@ -5,6 +5,7 @@ extends VBoxContainer
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 const OperationBar := preload("res://addons/git_tree/dock/widgets/operation_bar.gd")
 const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
+const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 
 ## Something this bar did (checkout, fetch, pull, push…) may have changed the repo — the owning panel should refresh.
@@ -141,7 +142,7 @@ func refresh() -> void:
 	_upstream_label.tooltip_text = _upstream_label.text
 
 	_pull_button.tooltip_text = "Fetch and integrate %s's upstream" % s["branch"]
-	_push_button.tooltip_text = "Push %s" % s["branch"]
+	_push_button.tooltip_text = "Push %s%s" % [s["branch"], "" if not s["upstream"].is_empty() else " — publishes it, since it has no upstream yet"]
 	for control in [_pull_button, _pull_menu, _push_button, _push_menu]:
 		control.disabled = detached
 	if detached:
@@ -173,7 +174,7 @@ func _on_branch_menu_id_pressed(id: int) -> void:
 	var result: Dictionary = _repo.checkout_branch(_menu_branches[id])
 	EditorOpen.refresh_all_external_changes()
 	if not result["ok"]:
-		await Dialogs.error(self, "Checkout failed", result["error"])
+		await Dialogs.error(self, "Checkout failed", GitErrors.explain(result["error"]))
 	else:
 		operation_bar.done("Switched to %s." % _menu_branches[id])
 	_finish()
@@ -190,7 +191,7 @@ func new_branch_dialog(start_point: String) -> void:
 		return
 	var result: Dictionary = _repo.create_branch(String(answer["name"]).strip_edges(), String(answer["start"]).strip_edges(), answer["checkout"])
 	if not result["ok"]:
-		await Dialogs.error(self, "Create branch failed", result["error"])
+		await Dialogs.error(self, "Create branch failed", GitErrors.explain(result["error"]))
 	elif answer["checkout"]:
 		EditorOpen.refresh_all_external_changes()
 	_finish()
