@@ -307,6 +307,37 @@ func list_branches(local_only: bool = true) -> Array:
 	return entries
 
 
+## Array[{"name", "oid", "summary", "annotated"}], newest first.
+func list_tags() -> Array:
+	var fmt := US.join(["%(refname:short)", "%(objectname:short)", "%(*objectname:short)", "%(contents:subject)", "%(objecttype)"])
+	var r := GitCli.run(_repo_root, ["for-each-ref", "--sort=-creatordate", "--format=" + fmt, "refs/tags"])
+	var tags: Array = []
+	for line in GitCli.lines(r["text"]):
+		var f := line.split(US)
+		if f.size() < 5:
+			continue
+		tags.append({
+			"name": f[0],
+			"oid": f[2] if not f[2].is_empty() else f[1],
+			"summary": f[3],
+			"annotated": f[4] == "tag",
+		})
+	return tags
+
+
+## message non-empty makes an annotated tag.
+func create_tag(name: String, target: String, message: String = "") -> Dictionary:
+	var args := ["tag"]
+	if not message.is_empty():
+		args.append_array(["-a", "-m", message])
+	args.append_array([name, target if not target.is_empty() else "HEAD"])
+	return _simple(args)
+
+
+func delete_tag(name: String) -> Dictionary:
+	return _simple(["tag", "-d", name])
+
+
 ## force=true deletes even if it isn't merged anywhere (-D).
 func delete_branch(name: String, force: bool = false) -> Dictionary:
 	return _simple(["branch", "-D" if force else "-d", name])
@@ -407,6 +438,11 @@ func push(options: Dictionary = {}) -> Dictionary:
 	return await _run_async(args)
 
 
+## Pushes a single ref (tag or `:branch` deletion etc.) to remote. Coroutine.
+func push_refspec(remote: String, refspec: String) -> Dictionary:
+	return await _run_async(["push", "--progress", remote, refspec])
+
+
 ## Current branch's short name, or "" on a detached HEAD.
 func get_current_branch() -> String:
 	var r := GitCli.run(_repo_root, ["symbolic-ref", "--short", "-q", "HEAD"])
@@ -449,6 +485,22 @@ func list_remotes() -> Array:
 	for name in order:
 		result.append(by_name[name])
 	return result
+
+
+func add_remote(name: String, url: String) -> Dictionary:
+	return _simple(["remote", "add", name, url])
+
+
+func remove_remote(name: String) -> Dictionary:
+	return _simple(["remote", "remove", name])
+
+
+func rename_remote(old_name: String, new_name: String) -> Dictionary:
+	return _simple(["remote", "rename", old_name, new_name])
+
+
+func set_remote_url(name: String, url: String) -> Dictionary:
+	return _simple(["remote", "set-url", name, url])
 
 
 ## Runs a quick mutating command synchronously -> {"ok", "error", "output"}.

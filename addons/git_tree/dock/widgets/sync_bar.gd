@@ -247,7 +247,7 @@ func push_branch_to(branch: String) -> void:
 		return
 	var remote_names: Array = _repo.list_remotes().map(func(r: Dictionary) -> String: return r["name"])
 	if remote_names.is_empty():
-		await Dialogs.error(self, "No remotes", "Add a remote first (`git remote add <name> <url>`).")
+		await Dialogs.error(self, "No remotes", "Add a remote first (Branches → right-click Remotes).")
 		return
 	var answer: Variant = await Dialogs.form(self, "Push \"%s\"" % branch, [
 		{ "key": "remote", "label": "Remote", "type": "option", "options": remote_names, "default": RemoteActions.default_remote(_repo) },

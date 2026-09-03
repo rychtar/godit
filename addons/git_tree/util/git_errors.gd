@@ -53,7 +53,7 @@ static func explain(text: String) -> String:
 		DIRTY:
 			hint = "Uncommitted changes are in the way. Commit or stash them first."
 		NO_REMOTE:
-			hint = "No usable remote is configured. Add one with `git remote add <name> <url>`."
+			hint = "No usable remote is configured. Add one in the Branches panel (Remotes)."
 	if hint.is_empty():
 		return text
 	return "%s\n\n%s" % [hint, text]

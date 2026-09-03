@@ -21,7 +21,7 @@ const PAGE_SIZE := 300
 
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT,
-	ID_COMPARE_WORKTREE, ID_COMPARE_SELECTED, ID_SHOW_CHANGES,
+	ID_CREATE_TAG, ID_COMPARE_WORKTREE, ID_COMPARE_SELECTED, ID_SHOW_CHANGES,
 }
 enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
 
@@ -480,6 +480,7 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 	m.add_separator()
 	if not many:
 		m.add_item("Create Branch from Here...", ID_CREATE_BRANCH)
+		m.add_item("Create Tag Here...", ID_CREATE_TAG)
 		m.add_item("Checkout This Commit...", ID_CHECKOUT_COMMIT)
 
 	m.position = screen_position
@@ -508,6 +509,13 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_new_branch_checkout_check.button_pressed = false
 			_new_branch_dialog.popup_centered()
 			_new_branch_name_edit.grab_focus()
+		ID_CREATE_TAG:
+			var answer: Variant = await Dialogs.form(self, "New Tag at %s" % _context_oid.substr(0, 7), [
+				{ "key": "name", "label": "Tag name", "placeholder": "v1.0.0" },
+				{ "key": "message", "label": "Message (leave empty for a lightweight tag)", "type": "multiline" },
+			], "Create")
+			if answer != null and not String(answer["name"]).strip_edges().is_empty():
+				_after(_repo.create_tag(String(answer["name"]).strip_edges(), _context_oid, String(answer["message"]).strip_edges()), "Create tag failed")
 		ID_CHECKOUT_COMMIT:
 			_checkout_confirm_dialog.dialog_text = "Checkout commit %s?\nThis leaves HEAD detached (not on a branch)." % _context_oid.substr(0, 7)
 			_checkout_confirm_dialog.popup_centered()
@@ -521,6 +529,14 @@ func _open_changeset(title: String, base: String, target: String) -> void:
 	var dialog := ChangesetDialog.new()
 	add_child(dialog)
 	dialog.open(_repo, title, base, target)
+
+
+func _after(result: Dictionary, error_title: String, reload_editor: bool = false) -> void:
+	if reload_editor:
+		EditorOpen.refresh_all_external_changes()
+	if not result["ok"]:
+		Dialogs.error(self, error_title, GitErrors.explain(result["error"]))
+	refresh()
 
 
 func _on_new_branch_dialog_confirmed() -> void:

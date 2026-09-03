@@ -10,8 +10,10 @@ const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 
 enum {
 	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_PUSH_BRANCH, ID_SET_UPSTREAM,
-	ID_UNSET_UPSTREAM, ID_RENAME, ID_DELETE, ID_COPY_NAME,
-	ID_FETCH_REMOTE, ID_FETCH_PRUNE, ID_COMPARE,
+	ID_UNSET_UPSTREAM, ID_RENAME, ID_DELETE, ID_DELETE_REMOTE_BRANCH, ID_COPY_NAME,
+	ID_PUSH_TAG, ID_DELETE_TAG, ID_DELETE_REMOTE_TAG, ID_FETCH_REMOTE, ID_EDIT_REMOTE_URL,
+	ID_RENAME_REMOTE, ID_REMOVE_REMOTE, ID_ADD_REMOTE, ID_FETCH_PRUNE, ID_NEW_TAG,
+	ID_COMPARE,
 }
 
 ## Opens the changeset dialog, wired up by git_tree_dock.gd: (title, base_ref, target_ref). target "" means the working tree.
@@ -29,11 +31,11 @@ var _sync_bar: VBoxContainer
 const WIDE_MIN_WIDTH := 520.0
 var _wide := true
 
-## {"kind": "local"|"remote_branch"|"remote"|"section", ...} for whatever the context menu was opened on.
+## {"kind": "local"|"remote_branch"|"tag"|"remote"|"section", ...} for whatever the context menu was opened on.
 var _context: Dictionary = {}
 
 ## Section headers' collapsed state, kept across refreshes (keyed by section title).
-var _collapsed_sections := {}
+var _collapsed_sections := { "Tags": true }
 
 
 func _ready() -> void:
@@ -116,6 +118,36 @@ func refresh() -> void:
 		item.set_tooltip_text(0, "%s — %s %s (%s)\nDouble-click to check out as a local tracking branch" % [b["name"], b["oid"], b["summary"], b["date"]])
 		item.set_custom_color(0, Color(0.72, 0.78, 0.9))
 	_finish_section(remote_section, remote_count)
+
+	var tags_section := _section(root, "Tags")
+	var tag_count := 0
+	for t in _repo.list_tags():
+		if not _matches(filter, t["name"]):
+			continue
+		tag_count += 1
+		var item := _tree.create_item(tags_section)
+		_fill_row(item, t["name"], "annotated" if t["annotated"] else "", { "oid": t["oid"], "summary": t["summary"], "date": "" })
+		item.set_metadata(0, { "kind": "tag", "name": t["name"] })
+		item.set_tooltip_text(0, "%s — %s %s%s" % [t["name"], t["oid"], t["summary"], "  (annotated)" if t["annotated"] else ""])
+		item.set_custom_color(0, Color(0.95, 0.85, 0.55))
+	_finish_section(tags_section, tag_count)
+
+	var remotes_section := _section(root, "Remotes")
+	var remotes: Array = _repo.list_remotes()
+	for r in remotes:
+		var item := _tree.create_item(remotes_section)
+		_fill_row(item, r["name"], r["fetch_url"], {})
+		item.set_icon(0, _icon(&"Remote"))
+		item.set_metadata(0, { "kind": "remote", "name": r["name"], "url": r["fetch_url"] })
+		var push_note: String = "\nPush URL: " + r["push_url"] if r["push_url"] != r["fetch_url"] else ""
+		item.set_tooltip_text(0, "%s\nFetch URL: %s%s\nDouble-click to edit URL" % [r["name"], r["fetch_url"], push_note])
+	_finish_section(remotes_section, remotes.size())
+	if remotes.is_empty():
+		var hint := _tree.create_item(remotes_section)
+		hint.set_text(0, "No remotes — right-click to add one")
+		hint.set_custom_color(0, Color(1, 1, 1, 0.45))
+		hint.set_metadata(0, { "kind": "section", "title": "Remotes" })
+		remotes_section.collapsed = false
 
 	_restore_scroll.call_deferred(scroll)
 
@@ -221,10 +253,19 @@ func _on_branches_tree_item_activated() -> void:
 				_checkout(meta["name"])
 		"remote_branch":
 			_after(_repo.checkout_remote_branch(meta["name"]), "Checkout failed", true)
+		"tag":
+			await _checkout_detached(meta["name"])
+		"remote":
+			await _edit_remote_url(meta["name"])
 
 
 func _checkout(name: String) -> void:
 	_after(_repo.checkout_branch(name), "Checkout failed", true)
+
+
+func _checkout_detached(ref: String) -> void:
+	if await Dialogs.confirm(self, "Checkout", "Checkout %s?\nThis leaves HEAD detached (not on a branch)." % ref, "Checkout"):
+		_after(_repo.checkout_commit(ref), "Checkout failed", true)
 
 
 func _on_branches_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_index: int) -> void:
@@ -251,6 +292,7 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			if not meta["is_head"]:
 				m.add_item("Checkout", ID_CHECKOUT)
 			m.add_item("New Branch from Here…", ID_NEW_BRANCH_FROM)
+			m.add_item("New Tag Here…", ID_NEW_TAG)
 			if not meta["is_head"]:
 				m.add_separator()
 				m.add_item("Compare with %s" % current_label, ID_COMPARE)
@@ -270,13 +312,31 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_separator()
 			m.add_item("Compare with %s" % current_label, ID_COMPARE)
 			m.add_separator()
+			m.add_item("Delete from Remote…", ID_DELETE_REMOTE_BRANCH)
+			m.add_item("Copy Name", ID_COPY_NAME)
+		"tag":
+			m.add_item("Checkout (detached)…", ID_CHECKOUT)
+			m.add_item("New Branch from Here…", ID_NEW_BRANCH_FROM)
+			m.add_item("Compare with %s" % current_label, ID_COMPARE)
+			m.add_separator()
+			m.add_item("Push Tag", ID_PUSH_TAG)
+			m.add_item("Delete…", ID_DELETE_TAG)
+			m.add_item("Delete from Remote…", ID_DELETE_REMOTE_TAG)
 			m.add_item("Copy Name", ID_COPY_NAME)
 		"remote":
 			m.add_item("Fetch", ID_FETCH_REMOTE)
+			m.add_item("Edit URL…", ID_EDIT_REMOTE_URL)
+			m.add_item("Rename…", ID_RENAME_REMOTE)
+			m.add_item("Remove…", ID_REMOVE_REMOTE)
+			m.add_separator()
+			m.add_item("Add Remote…", ID_ADD_REMOTE)
 		"section":
 			match meta["title"]:
-				"Remote":
+				"Remotes", "Remote":
+					m.add_item("Add Remote…", ID_ADD_REMOTE)
 					m.add_item("Fetch All and Prune Deleted Branches", ID_FETCH_PRUNE)
+				"Tags":
+					m.add_item("New Tag at HEAD…", ID_NEW_TAG)
 				_:
 					m.add_item("New Branch…", ID_NEW_BRANCH_FROM)
 		_:
@@ -295,8 +355,11 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			match kind:
 				"local": _checkout(name)
 				"remote_branch": _after(_repo.checkout_remote_branch(name), "Checkout failed", true)
+				"tag": await _checkout_detached(name)
 		ID_NEW_BRANCH_FROM:
 			await _new_branch_from(name if not name.is_empty() else "HEAD")
+		ID_NEW_TAG:
+			await _new_tag(name if kind == "local" else "HEAD")
 		ID_COMPARE:
 			compare_requested.emit("%s ↔ %s" % [_current_label(), name], "HEAD", name)
 		ID_PUSH_BRANCH:
@@ -311,19 +374,58 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				_after(_repo.rename_branch(name, new_name), "Rename failed")
 		ID_DELETE:
 			await _delete_branch(name)
+		ID_DELETE_REMOTE_BRANCH:
+			var remote: String = _context["remote"]
+			var branch := name.substr(remote.length() + 1)
+			if await Dialogs.confirm(self, "Delete Remote Branch", "Delete branch \"%s\" on %s?\n\nThis affects everyone using that remote." % [branch, remote], "Delete"):
+				await _push_refspec(remote, ":refs/heads/" + branch, "Deleted %s." % name)
 		ID_COPY_NAME:
 			DisplayServer.clipboard_set(name)
+		ID_PUSH_TAG:
+			var remote := RemoteActions.default_remote(_repo)
+			if remote.is_empty():
+				await Dialogs.error(self, "No remotes", "Add a remote first.")
+			else:
+				await _push_refspec(remote, "refs/tags/" + name, "Pushed tag %s." % name)
+		ID_DELETE_TAG:
+			if await Dialogs.confirm(self, "Delete Tag", "Delete local tag \"%s\"?" % name, "Delete"):
+				_after(_repo.delete_tag(name), "Delete tag failed")
+		ID_DELETE_REMOTE_TAG:
+			var remote := RemoteActions.default_remote(_repo)
+			if not remote.is_empty() and await Dialogs.confirm(self, "Delete Remote Tag", "Delete tag \"%s\" on %s?" % [name, remote], "Delete"):
+				await _push_refspec(remote, ":refs/tags/" + name, "Deleted tag %s on %s." % [name, remote])
 		ID_FETCH_REMOTE:
 			await RemoteActions.fetch(self, _repo, _operation_bar, name)
 			refresh()
 		ID_FETCH_PRUNE:
 			await RemoteActions.fetch(self, _repo, _operation_bar, "", true)
 			refresh()
+		ID_EDIT_REMOTE_URL:
+			await _edit_remote_url(name)
+		ID_RENAME_REMOTE:
+			var new_name: Variant = await Dialogs.prompt(self, "Rename Remote", "New name for \"%s\"" % name, name, "Rename")
+			if new_name != null and not new_name.is_empty() and new_name != name:
+				_after(_repo.rename_remote(name, new_name), "Rename remote failed")
+		ID_REMOVE_REMOTE:
+			if await Dialogs.confirm(self, "Remove Remote", "Remove remote \"%s\"?\nIts remote-tracking branches are deleted locally; nothing on the server changes." % name, "Remove"):
+				_after(_repo.remove_remote(name), "Remove remote failed")
+		ID_ADD_REMOTE:
+			await _add_remote()
 
 
 func _current_label() -> String:
 	var current: String = _repo.get_current_branch()
 	return current if not current.is_empty() else "HEAD"
+
+
+func _new_tag(target: String) -> void:
+	var answer: Variant = await Dialogs.form(self, "New Tag at %s" % target, [
+		{ "key": "name", "label": "Tag name", "placeholder": "v1.0.0" },
+		{ "key": "message", "label": "Message (leave empty for a lightweight tag)", "type": "multiline" },
+	], "Create")
+	if answer == null or String(answer["name"]).strip_edges().is_empty():
+		return
+	_after(_repo.create_tag(String(answer["name"]).strip_edges(), target, String(answer["message"]).strip_edges()), "Create tag failed")
 
 
 func _set_upstream(branch: String, current_upstream: String) -> void:
@@ -356,6 +458,54 @@ func _delete_branch(name: String) -> void:
 		else:
 			return
 	_after(result, "Delete branch failed")
+
+
+func _edit_remote_url(name: String) -> void:
+	var current_url := ""
+	for r in _repo.list_remotes():
+		if r["name"] == name:
+			current_url = r["fetch_url"]
+	var url: Variant = await Dialogs.prompt(self, "Edit Remote URL", "URL of \"%s\"" % name, current_url, "Save")
+	if url != null and not url.is_empty() and url != current_url:
+		_after(_repo.set_remote_url(name, url), "Set remote URL failed")
+
+
+func _add_remote() -> void:
+	var has_origin: bool = _repo.list_remotes().any(func(r: Dictionary) -> bool: return r["name"] == "origin")
+	var answer: Variant = await Dialogs.form(self, "Add Remote", [
+		{ "key": "name", "label": "Name", "default": "upstream" if has_origin else "origin" },
+		{ "key": "url", "label": "URL", "placeholder": "git@github.com:user/repo.git" },
+		{ "key": "fetch", "label": "Fetch it now", "type": "check", "default": true },
+	], "Add")
+	if answer == null:
+		return
+	var name := String(answer["name"]).strip_edges()
+	var url := String(answer["url"]).strip_edges()
+	if name.is_empty() or url.is_empty():
+		await Dialogs.error(self, "Add remote failed", "Both a name and a URL are needed.")
+		return
+	var result: Dictionary = _repo.add_remote(name, url)
+	if not result["ok"]:
+		await Dialogs.error(self, "Add remote failed", result["error"])
+		return
+	if answer["fetch"]:
+		await RemoteActions.fetch(self, _repo, _operation_bar, name)
+	refresh()
+
+
+func _push_refspec(remote: String, refspec: String, success_text: String) -> void:
+	if _repo.is_busy():
+		await Dialogs.error(self, "Busy", "Another git operation is still running.")
+		return
+	_operation_bar.busy("Pushing to %s…" % remote, _repo)
+	var result: Dictionary = await _repo.push_refspec(remote, refspec)
+	if result["ok"]:
+		_operation_bar.done(success_text)
+	else:
+		_operation_bar.done("Cancelled." if result["cancelled"] else "Push failed.", not result["cancelled"])
+		if not result["cancelled"]:
+			await Dialogs.error(self, "Push failed", GitErrors.explain(result["error"]))
+	refresh()
 
 
 ## Shows result's error if it failed; reload_editor re-scans the project after anything that rewrote the working tree.
