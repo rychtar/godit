@@ -97,6 +97,11 @@ func get_diff(path: String, staged: bool, options: Dictionary = {}) -> String:
 	return GitCli.run(_repo_root, ["diff"] + flags + ["--", path])["text"]
 
 
+## For a conflicted file: its working-tree content (with conflict markers) against "ours".
+func get_conflict_diff(path: String) -> String:
+	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--", path])["text"]
+
+
 func is_untracked(path: String) -> bool:
 	var status_result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])
 	return status_result["text"].strip_edges().begins_with("??")
@@ -527,7 +532,122 @@ func _simple(args: Array) -> Dictionary:
 	return { "ok": r["exit_code"] == 0, "error": "" if r["exit_code"] == 0 else text, "output": text }
 
 
-## mode: "" (fast-forward when possible), "no-ff", "ff-only" or "squash" (stages the result without committing). A conflict leaves the repo mid-merge.
+var _git_dir := ""
+
+
+## Absolute .git directory (per-worktree for linked worktrees). Cached — it can't move while the repo is open.
+func get_git_dir() -> String:
+	if _git_dir.is_empty():
+		_git_dir = GitCli.run(_repo_root, ["rev-parse", "--absolute-git-dir"])["text"].strip_edges()
+	return _git_dir
+
+
+## In-progress operation from git's marker files: {"kind": "merge"|"rebase"|"cherry-pick"|"revert"|"", "conflicts": int, "detail": e.g. "main, step 2/5"}.
+func get_operation_state() -> Dictionary:
+	var state := { "kind": "", "conflicts": 0, "detail": "" }
+	var git_dir := get_git_dir()
+	if git_dir.is_empty():
+		return state
+
+	for rebase_dir in ["rebase-merge", "rebase-apply"]:
+		var dir_path := git_dir.path_join(rebase_dir)
+		if DirAccess.dir_exists_absolute(dir_path):
+			state["kind"] = "rebase"
+			var step := _read_small(dir_path.path_join("msgnum" if rebase_dir == "rebase-merge" else "next"))
+			var total := _read_small(dir_path.path_join("end" if rebase_dir == "rebase-merge" else "last"))
+			var head_name := _read_small(dir_path.path_join("head-name")).trim_prefix("refs/heads/")
+			var parts: Array = []
+			if not head_name.is_empty():
+				parts.append(head_name)
+			if not step.is_empty() and not total.is_empty():
+				parts.append("step %s/%s" % [step, total])
+			state["detail"] = ", ".join(parts)
+			break
+
+	if state["kind"].is_empty():
+		for marker in [["MERGE_HEAD", "merge"], ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"]]:
+			if FileAccess.file_exists(git_dir.path_join(marker[0])):
+				state["kind"] = marker[1]
+				state["detail"] = _read_small(git_dir.path_join("MERGE_MSG")).get_slice("\n", 0)
+				break
+
+	if not state["kind"].is_empty():
+		state["conflicts"] = list_conflicts().size()
+	return state
+
+
+func _read_small(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	return FileAccess.get_file_as_string(path).strip_edges()
+
+
+## The message git prepared for the pending merge commit (MERGE_MSG), without its # comment lines.
+func get_merge_message() -> String:
+	var lines: Array = []
+	for line in _read_small(get_git_dir().path_join("MERGE_MSG")).split("\n"):
+		if not line.begins_with("#"):
+			lines.append(line)
+	return "\n".join(lines).strip_edges()
+
+
+## Repo-relative paths git still considers unmerged.
+func list_conflicts() -> PackedStringArray:
+	var r := GitCli.run(_repo_root, ["diff", "--name-only", "--diff-filter=U"])
+	return GitCli.lines(r["text"])
+
+
+## Finishes the in-progress operation once all conflicts are resolved (a merge is concluded with its prepared message).
+func continue_operation() -> Dictionary:
+	match get_operation_state()["kind"]:
+		"merge": return _with_conflict_flag(_simple(["commit", "--no-edit"]))
+		"rebase": return _with_conflict_flag(_simple(["rebase", "--continue"]))
+		"cherry-pick": return _with_conflict_flag(_simple(["cherry-pick", "--continue"]))
+		"revert": return _with_conflict_flag(_simple(["revert", "--continue"]))
+	return { "ok": false, "error": "Nothing to continue.", "output": "", "conflicts": false }
+
+
+## Drops the commit currently being applied and moves on (rebase / cherry-pick / revert only).
+func skip_operation() -> Dictionary:
+	var kind: String = get_operation_state()["kind"]
+	if kind in ["rebase", "cherry-pick", "revert"]:
+		return _with_conflict_flag(_simple([kind, "--skip"]))
+	return { "ok": false, "error": "Only a rebase, cherry-pick or revert can skip a commit.", "output": "", "conflicts": false }
+
+
+## Returns the repo to how it was before the operation started.
+func abort_operation() -> Dictionary:
+	var kind: String = get_operation_state()["kind"]
+	if kind.is_empty():
+		return { "ok": false, "error": "Nothing to abort.", "output": "" }
+	return _simple([kind, "--abort"])
+
+
+## Takes one side ("ours"/"theirs"; in a rebase ours = onto, theirs = replayed commit) wholesale and marks it resolved — a deletion if that side deleted it.
+func resolve_conflict(path: String, side: String) -> Dictionary:
+	var checkout := GitCli.run(_repo_root, ["checkout", "--" + side, "--", path], true)
+	if checkout["exit_code"] != 0:
+		return _simple(["rm", "--quiet", "--", path])
+	return _simple(["add", "--", path])
+
+
+## Marks a conflicted file resolved as it currently is on disk (after fixing the markers by hand).
+func mark_resolved(path: String) -> Dictionary:
+	if FileAccess.file_exists(_repo_root.path_join(path)):
+		return _simple(["add", "--", path])
+	return _simple(["rm", "--quiet", "--", path])
+
+
+## True if the file on disk still contains conflict markers.
+func has_conflict_markers(path: String) -> bool:
+	var abs_path := _repo_root.path_join(path)
+	if not FileAccess.file_exists(abs_path):
+		return false
+	var text := FileAccess.get_file_as_string(abs_path)
+	return text.contains("\n<<<<<<< ") or text.begins_with("<<<<<<< ") or text.contains("\n>>>>>>> ")
+
+
+## mode: "" (fast-forward when possible), "no-ff", "ff-only" or "squash" (stages the result without committing). A conflict leaves the repo mid-merge — see get_operation_state().
 func merge(ref: String, mode: String = "") -> Dictionary:
 	var args := ["merge"]
 	match mode:
@@ -535,12 +655,18 @@ func merge(ref: String, mode: String = "") -> Dictionary:
 		"ff-only": args.append("--ff-only")
 		"squash": args.append("--squash")
 	args.append(ref)
-	return _simple(args)
+	return _with_conflict_flag(_simple(args))
 
 
 ## Replays the current branch's commits on top of onto.
 func rebase(onto: String) -> Dictionary:
-	return _simple(["rebase", onto])
+	return _with_conflict_flag(_simple(["rebase", onto]))
+
+
+## Adds "conflicts": true when a failed command left the repo in an in-progress state with unmerged files, so the UI can say "resolve them" instead of showing a raw error.
+func _with_conflict_flag(result: Dictionary) -> Dictionary:
+	result["conflicts"] = not result["ok"] and not get_operation_state()["kind"].is_empty()
+	return result
 
 
 ## Checks out a local branch, moving HEAD and updating the working tree.

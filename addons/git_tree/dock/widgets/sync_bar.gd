@@ -131,7 +131,10 @@ func refresh() -> void:
 	_branch_button.text = ("⎇ " + s["branch"]) if not detached else "⎇ detached HEAD"
 	_branch_button.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 
+	var op: Dictionary = _repo.get_operation_state()
 	var parts: Array = []
+	if not op["kind"].is_empty():
+		parts.append("%s in progress" % op["kind"].capitalize())
 	if detached:
 		parts.append("not on a branch")
 	elif s["upstream"].is_empty():

@@ -49,7 +49,7 @@ static func explain(text: String) -> String:
 		AUTH:
 			hint = "Authentication failed. Git Tree can't answer password prompts — set up an SSH agent or a credential helper, then retry."
 		CONFLICT:
-			hint = "There are conflicts. Fix the conflicted files and stage them, then continue (or abort)."
+			hint = "There are conflicts. Resolve them in the Changes panel, then Continue (or Abort)."
 		DIRTY:
 			hint = "Uncommitted changes are in the way. Commit or stash them first."
 		NO_REMOTE:

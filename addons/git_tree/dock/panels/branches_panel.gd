@@ -556,12 +556,12 @@ func _after(result: Dictionary, error_title: String, reload_editor: bool = false
 	refresh()
 
 
-## Like _after(), but a stop on conflicts gets its own explanation instead of git's raw output.
+## Like _after(), but a stop on conflicts isn't an error — it points to the Changes panel, where they're resolved.
 func _after_operation(result: Dictionary, verb: String) -> void:
 	EditorOpen.refresh_all_external_changes()
-	if not result["ok"] and GitErrors.classify(result["error"]) == GitErrors.CONFLICT:
+	if result.get("conflicts", false):
 		Dialogs.error(self, "%s Stopped on Conflicts" % verb,
-				"%s hit conflicts. Fix the conflicted files and stage them, then run `git %s --continue` — or `git %s --abort` to undo." % [verb, verb.to_lower(), verb.to_lower()])
+				"%s hit conflicts. Resolve them in the Changes tab (Accept Ours/Theirs, or edit and Mark Resolved), then press Continue there — or Abort to undo." % verb)
 	elif not result["ok"]:
 		Dialogs.error(self, "%s failed" % verb, GitErrors.explain(result["error"]))
 	else:

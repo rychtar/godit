@@ -9,6 +9,7 @@ const ChangelistStore := preload("res://addons/git_tree/util/changelist_store.gd
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
+const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
@@ -27,6 +28,9 @@ const ID_MOVE_TO_NEW := 1000 # MoveToMenu: indices 0..N-1 are existing changelis
 const ID_REVERT := 9
 const ID_IGNORE := 10
 const ID_REMOVE := 11
+const ID_ACCEPT_OURS := 12
+const ID_ACCEPT_THEIRS := 13
+const ID_MARK_RESOLVED := 14
 const ID_REVERT_ALL := 15
 const ID_SHOW_HISTORY := 16
 const ID_COPY_PATH := 18
@@ -90,6 +94,12 @@ var _name_dialog_rename_target := ""
 var _confirm_dialog_action := "revert"
 
 var _operation_bar: HBoxContainer
+
+## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar (see _update_operation_banner()).
+var _op_banner: PanelContainer
+var _op_label: Label
+var _op_continue_button: Button
+var _op_skip_button: Button
 ## Branch switcher + Fetch/Pull/Push header (shared widget, also on the Branches tab).
 var _sync_bar: VBoxContainer
 ## Last branch seen by refresh(), to notice checkouts made anywhere (sync bar, Branches, Git Log, terminal).
@@ -118,6 +128,7 @@ func _ready() -> void:
 	$Layout.move_child(_sync_bar, 0)
 	_sync_bar.changed.connect(refresh)
 	_operation_bar = _sync_bar.operation_bar
+	_build_operation_banner()
 
 	# Changelists + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
 	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
@@ -153,11 +164,20 @@ func refresh() -> void:
 	if selected_item != null and selected_item.get_metadata(0) is Dictionary:
 		selected_path = selected_item.get_metadata(0).get("path", "")
 	var scroll_y := _tree.get_scroll().y
+	var op := _update_operation_banner()
 	_sync_bar.refresh()
 
 	_suppress_item_edited = true
 	_tree.clear()
 	var root := _tree.create_item()
+
+	var conflict_group := _tree.create_item(root)
+	conflict_group.set_selectable(TEXT_COLUMN, false)
+	conflict_group.set_selectable(CHECKBOX_COLUMN, false)
+	conflict_group.set_metadata(0, { "kind": "conflict_group" })
+	conflict_group.set_custom_color(TEXT_COLUMN, GitIcons.COLOR_DELETED)
+	var conflict_folders: Dictionary = {}
+	var conflict_count := 0
 
 	var changelist_groups: Dictionary = {} # name -> TreeItem
 	var changelist_folders: Dictionary = {} # name -> {dir_path: TreeItem}
@@ -199,6 +219,10 @@ func refresh() -> void:
 	for entry in entries:
 		var path: String = entry["path"]
 		var status: int = entry["status"]
+		if status & GitStatusFlags.CONFLICTED:
+			conflict_count += 1
+			_add_conflict_item(conflict_group, conflict_folders, path)
+			continue
 		var staged := GitStatusFlags.is_staged(status)
 		any_staged = any_staged or staged
 
@@ -231,6 +255,9 @@ func refresh() -> void:
 		# Changelist"); keep the active one visible even when empty.
 		group.set_visible(count > 0 or is_active)
 
+	conflict_group.set_text(TEXT_COLUMN, "⚠ Conflicts  %d %s — resolve, then Continue" % [conflict_count, "file" if conflict_count == 1 else "files"])
+	conflict_group.set_visible(conflict_count > 0)
+
 	var untracked_agg := _aggregate_files(untracked_group)
 	var untracked_count: int = untracked_agg["count"]
 	untracked_group.set_text(TEXT_COLUMN, "New Files  %d — not in Git yet, check to add to \"%s\"" % [untracked_count, _changelist_state["active"]])
@@ -241,6 +268,8 @@ func refresh() -> void:
 
 	_update_changelist_option(counts)
 	_reselect(root, selected_path, scroll_y)
+	if op["kind"] == "merge" and _commit_message.text.strip_edges().is_empty() and not op["detail"].is_empty():
+		_commit_message.text = _repo.get_merge_message()
 
 	if untracked_count == 0 and tracked_count == 0:
 		_status_label.text = "No changes."
@@ -275,6 +304,106 @@ func _find_item_by_path(item: TreeItem, path: String) -> TreeItem:
 			return nested
 		child = child.get_next()
 	return null
+
+
+func _add_conflict_item(group: TreeItem, folder_cache: Dictionary, path: String) -> void:
+	var parent := TreeFolders.get_or_create_folder(_tree, group, folder_cache, path.get_base_dir(), TEXT_COLUMN)
+	var item := _tree.create_item(parent)
+	item.set_selectable(CHECKBOX_COLUMN, false)
+	item.set_text(TEXT_COLUMN, "!  %s" % path.get_file())
+	item.set_custom_color(TEXT_COLUMN, GitIcons.COLOR_DELETED)
+	item.set_metadata(0, { "kind": "conflict_file", "path": path, "staged": false, "status": GitStatusFlags.CONFLICTED })
+	item.set_tooltip_text(TEXT_COLUMN, "%s — conflicted\nRight-click: Accept Ours / Theirs, or Mark Resolved after editing it yourself." % path)
+
+
+func _build_operation_banner() -> void:
+	_op_banner = PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.85, 0.55, 0.2, 0.18)
+	style.border_color = Color(0.95, 0.65, 0.25, 0.6)
+	style.border_width_left = 3
+	style.content_margin_left = 8
+	style.content_margin_right = 4
+	style.content_margin_top = 3
+	style.content_margin_bottom = 3
+	_op_banner.add_theme_stylebox_override("panel", style)
+	_op_banner.visible = false
+
+	var row := HBoxContainer.new()
+	_op_label = Label.new()
+	_op_label.size_flags_horizontal = SIZE_EXPAND_FILL
+	_op_label.clip_text = true
+	_op_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	row.add_child(_op_label)
+
+	_op_continue_button = Button.new()
+	_op_continue_button.text = "Continue"
+	_op_continue_button.pressed.connect(_on_op_continue_pressed)
+	row.add_child(_op_continue_button)
+
+	_op_skip_button = Button.new()
+	_op_skip_button.text = "Skip"
+	_op_skip_button.tooltip_text = "Drop the commit being applied and move on to the next one"
+	_op_skip_button.pressed.connect(_on_op_skip_pressed)
+	row.add_child(_op_skip_button)
+
+	var abort := Button.new()
+	abort.text = "Abort"
+	abort.tooltip_text = "Undo the whole operation and go back to how things were before it started"
+	abort.pressed.connect(_on_op_abort_pressed)
+	row.add_child(abort)
+
+	_op_banner.add_child(row)
+	$Layout.add_child(_op_banner)
+	$Layout.move_child(_op_banner, 1)
+
+
+## Shows/hides the in-progress banner; returns the operation state it used.
+func _update_operation_banner() -> Dictionary:
+	var op: Dictionary = _repo.get_operation_state()
+	var kind: String = op["kind"]
+	_op_banner.visible = not kind.is_empty()
+	if kind.is_empty():
+		return op
+	var verb: String = { "merge": "Merging", "rebase": "Rebasing", "cherry-pick": "Cherry-picking", "revert": "Reverting" }.get(kind, kind)
+	var conflicts: int = op["conflicts"]
+	var detail: String = op["detail"]
+	_op_label.text = "%s%s — %s" % [verb, " " + detail if not detail.is_empty() else "", "%d conflict%s left" % [conflicts, "" if conflicts == 1 else "s"] if conflicts > 0 else "no conflicts left"]
+	_op_label.tooltip_text = _op_label.text
+	_op_continue_button.disabled = conflicts > 0
+	_op_continue_button.tooltip_text = "Resolve every conflict first" if conflicts > 0 else "Commit the resolution and carry on"
+	_op_skip_button.visible = kind != "merge"
+	return op
+
+
+func _on_op_continue_pressed() -> void:
+	var result: Dictionary = _repo.continue_operation()
+	await _after_operation_step(result, "Continue")
+
+
+func _on_op_skip_pressed() -> void:
+	if await Dialogs.confirm(self, "Skip Commit", "Drop the commit currently being applied (its changes are discarded) and continue with the next one?", "Skip"):
+		await _after_operation_step(_repo.skip_operation(), "Skip")
+
+
+func _on_op_abort_pressed() -> void:
+	if await Dialogs.confirm(self, "Abort", "Abort the %s and return to the state before it started?\nAny conflict resolutions made so far are lost." % _repo.get_operation_state()["kind"], "Abort"):
+		await _after_operation_step(_repo.abort_operation(), "Abort")
+
+
+func _after_operation_step(result: Dictionary, title: String) -> void:
+	EditorOpen.refresh_all_external_changes()
+	if result.get("conflicts", false):
+		_operation_bar.done("Stopped on the next conflicts — resolve them, then Continue.", true)
+	elif not result["ok"]:
+		var error: String = result["error"]
+		if error.contains("nothing to commit") or error.contains("is now empty"):
+			error += "\n\nThe commit being applied ended up empty — use Skip to drop it."
+		await Dialogs.error(self, "%s failed" % title, GitErrors.explain(error))
+	else:
+		_operation_bar.done("%s done." % title)
+		_commit_message.text = ""
+	refresh()
 
 
 func _changelist_for_path(path: String) -> String:
@@ -498,6 +627,10 @@ func _show_selected_diff() -> void:
 	var path: String = meta["path"]
 	var status: int = meta["status"]
 	var options: Dictionary = _diff_view.get_options()
+	if meta["kind"] == "conflict_file":
+		_diff_view.set_tabs([])
+		_diff_view.show_diff(_repo.get_conflict_diff(path), { "path": path, "note": "conflict markers vs. ours" })
+		return
 	if GitStatusFlags.is_untracked(status):
 		_diff_view.set_tabs([])
 		_diff_view.show_diff(_repo.get_diff(path, false, options), { "path": path, "note": "new file" })
@@ -635,6 +768,17 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 			_context_menu.add_separator()
 			_context_menu.add_item("Ignore", ID_IGNORE)
 			_context_menu.add_item("Revert...", ID_REVERT)
+		"conflict_file":
+			var op_kind: String = _repo.get_operation_state()["kind"]
+			var ours := "upstream / branch being rebased onto" if op_kind == "rebase" else "current branch"
+			var theirs := "your commit being replayed" if op_kind == "rebase" else ("incoming branch" if op_kind == "merge" else "commit being applied")
+			_context_menu.add_item("Open", ID_OPEN)
+			_context_menu.add_separator()
+			_context_menu.add_item("Accept Ours (%s)" % ours, ID_ACCEPT_OURS)
+			_context_menu.add_item("Accept Theirs (%s)" % theirs, ID_ACCEPT_THEIRS)
+			_context_menu.add_item("Mark Resolved (as edited)", ID_MARK_RESOLVED)
+			_context_menu.add_separator()
+			_context_menu.add_item("Copy Path", ID_COPY_PATH)
 		"untracked_group":
 			_context_menu.add_item("Add All to Git", ID_ADD_ALL_TO_VCS)
 		"changelist_group":
@@ -721,6 +865,22 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			DisplayServer.clipboard_set(_context_target["path"])
 		ID_SHOW_HISTORY:
 			file_history_requested.emit(_context_target["path"])
+		ID_ACCEPT_OURS, ID_ACCEPT_THEIRS:
+			var path: String = _context_target["path"]
+			var result: Dictionary = _repo.resolve_conflict(path, "ours" if id == ID_ACCEPT_OURS else "theirs")
+			if not result["ok"]:
+				Dialogs.error(self, "Resolve failed", result["error"])
+			EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
+			refresh()
+		ID_MARK_RESOLVED:
+			var path: String = _context_target["path"]
+			if _repo.has_conflict_markers(path) and not await Dialogs.confirm(self, "Conflict Markers Left",
+					"\"%s\" still contains <<<<<<< / >>>>>>> markers. Mark it resolved anyway?" % path, "Mark Resolved"):
+				return
+			var result: Dictionary = _repo.mark_resolved(path)
+			if not result["ok"]:
+				Dialogs.error(self, "Resolve failed", result["error"])
+			refresh()
 		ID_REVERT_ALL:
 			var paths: Array = _context_target["paths"]
 			if await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
