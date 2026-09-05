@@ -271,7 +271,7 @@ func get_head_info() -> Dictionary:
 	}
 
 
-## Array[{name, is_head, is_remote, track ("[ahead 2, behind 1]" or ""), upstream, gone, oid, summary, date (relative)}].
+## Array[{name, is_head, is_remote, track ("[ahead 2, behind 1]" or ""), upstream, ahead, behind, gone, oid, summary, date (relative)}].
 func list_branches(local_only: bool = true) -> Array:
 	var patterns := ["refs/heads"]
 	if not local_only:
@@ -299,12 +299,21 @@ func list_branches(local_only: bool = true) -> Array:
 			"is_remote": is_remote,
 			"track": track,
 			"upstream": fields[3],
+			"ahead": _track_count(track, "ahead"),
+			"behind": _track_count(track, "behind"),
 			"gone": track.contains("gone"),
 			"oid": fields[4],
 			"summary": fields[5],
 			"date": fields[6],
 		})
 	return entries
+
+
+static func _track_count(track: String, word: String) -> int:
+	var at := track.find(word + " ")
+	if at == -1:
+		return 0
+	return track.substr(at + word.length() + 1).to_int()
 
 
 ## Array[{"name", "oid", "summary", "annotated"}], newest first.
@@ -455,11 +464,19 @@ func get_upstream(branch: String = "") -> String:
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
 
 
-## {"branch", "upstream"} for the current HEAD; upstream is "" when there's none.
+## {"branch", "upstream", "ahead", "behind"} for the current HEAD; ahead/behind are 0 without an upstream.
 func get_sync_status() -> Dictionary:
-	var info := { "branch": get_current_branch(), "upstream": "" }
-	if not info["branch"].is_empty():
-		info["upstream"] = get_upstream()
+	var info := { "branch": get_current_branch(), "upstream": "", "ahead": 0, "behind": 0 }
+	if info["branch"].is_empty():
+		return info
+	info["upstream"] = get_upstream()
+	if info["upstream"].is_empty():
+		return info
+	var r := GitCli.run(_repo_root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+	var counts: PackedStringArray = r["text"].strip_edges().split("\t")
+	if r["exit_code"] == 0 and counts.size() == 2:
+		info["ahead"] = counts[0].to_int()
+		info["behind"] = counts[1].to_int()
 	return info
 
 
@@ -508,6 +525,22 @@ func _simple(args: Array) -> Dictionary:
 	var r := GitCli.run(_repo_root, args, true)
 	var text: String = r["text"].strip_edges()
 	return { "ok": r["exit_code"] == 0, "error": "" if r["exit_code"] == 0 else text, "output": text }
+
+
+## mode: "" (fast-forward when possible), "no-ff", "ff-only" or "squash" (stages the result without committing). A conflict leaves the repo mid-merge.
+func merge(ref: String, mode: String = "") -> Dictionary:
+	var args := ["merge"]
+	match mode:
+		"no-ff": args.append("--no-ff")
+		"ff-only": args.append("--ff-only")
+		"squash": args.append("--squash")
+	args.append(ref)
+	return _simple(args)
+
+
+## Replays the current branch's commits on top of onto.
+func rebase(onto: String) -> Dictionary:
+	return _simple(["rebase", onto])
 
 
 ## Checks out a local branch, moving HEAD and updating the working tree.

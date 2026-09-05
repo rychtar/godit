@@ -1,4 +1,4 @@
-## Header shared by the Changes and Branches panels: a branch switcher, its upstream, and compact Fetch / Pull / Push (with their option menus) over an OperationBar for progress.
+## Header shared by the Changes and Branches panels: a branch switcher, upstream + ahead/behind, and compact Fetch / Pull / Push (with their option menus) over an OperationBar for progress.
 @tool
 extends VBoxContainer
 
@@ -122,7 +122,7 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 
 
-## Re-reads branch and upstream (cheap: a few rev-parse calls).
+## Re-reads branch, upstream and ahead/behind (cheap: a few rev-parse calls).
 func refresh() -> void:
 	if _repo == null:
 		return
@@ -137,12 +137,14 @@ func refresh() -> void:
 	elif s["upstream"].is_empty():
 		parts.append("not published yet")
 	else:
-		parts.append("→ " + s["upstream"])
+		parts.append("→ " + s["upstream"] + ("  ✓ up to date" if s["ahead"] == 0 and s["behind"] == 0 else ""))
 	_upstream_label.text = " · ".join(parts)
 	_upstream_label.tooltip_text = _upstream_label.text
 
-	_pull_button.tooltip_text = "Fetch and integrate %s's upstream" % s["branch"]
-	_push_button.tooltip_text = "Push %s%s" % [s["branch"], "" if not s["upstream"].is_empty() else " — publishes it, since it has no upstream yet"]
+	_pull_button.text = "Pull ↓%d" % s["behind"] if s["behind"] > 0 else "Pull"
+	_pull_button.tooltip_text = "Fetch and integrate %s's upstream%s" % [s["branch"], " (%d new commit%s)" % [s["behind"], "" if s["behind"] == 1 else "s"] if s["behind"] > 0 else ""]
+	_push_button.text = "Push ↑%d" % s["ahead"] if s["ahead"] > 0 else "Push"
+	_push_button.tooltip_text = "Push %s%s" % [s["branch"], " (%d commit%s)" % [s["ahead"], "" if s["ahead"] == 1 else "s"] if s["ahead"] > 0 else "" if not s["upstream"].is_empty() else " — publishes it, since it has no upstream yet"]
 	for control in [_pull_button, _pull_menu, _push_button, _push_menu]:
 		control.disabled = detached
 	if detached:

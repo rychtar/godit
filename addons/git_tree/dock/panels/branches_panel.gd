@@ -9,7 +9,7 @@ const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_action
 const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 
 enum {
-	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_PUSH_BRANCH, ID_SET_UPSTREAM,
+	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_MERGE, ID_REBASE, ID_PUSH_BRANCH, ID_SET_UPSTREAM,
 	ID_UNSET_UPSTREAM, ID_RENAME, ID_DELETE, ID_DELETE_REMOTE_BRANCH, ID_COPY_NAME,
 	ID_PUSH_TAG, ID_DELETE_TAG, ID_DELETE_REMOTE_TAG, ID_FETCH_REMOTE, ID_EDIT_REMOTE_URL,
 	ID_RENAME_REMOTE, ID_REMOVE_REMOTE, ID_ADD_REMOTE, ID_FETCH_PRUNE, ID_NEW_TAG,
@@ -88,7 +88,8 @@ func refresh() -> void:
 		var item := _tree.create_item(local_section)
 		var tracking := ""
 		if not b["upstream"].is_empty():
-			tracking = "%s%s" % [b["upstream"], "  (gone)" if b["gone"] else ""]
+			var sync := _sync_text(b["ahead"], b["behind"])
+			tracking = "%s%s%s" % [b["upstream"], "  " + sync if not sync.is_empty() else "", "  (gone)" if b["gone"] else ""]
 		_fill_row(item, ("● " if b["is_head"] else "") + b["name"], tracking, b)
 		item.set_metadata(0, { "kind": "local", "name": b["name"], "upstream": b["upstream"], "is_head": b["is_head"] })
 		item.set_tooltip_text(0, "%s — %s %s (%s)\nDouble-click to checkout, right-click for more" % [b["name"], b["oid"], b["summary"], b["date"]])
@@ -218,6 +219,15 @@ func _icon(name: StringName) -> Texture2D:
 	return get_theme_icon(name, &"EditorIcons") if has_theme_icon(name, &"EditorIcons") else null
 
 
+static func _sync_text(ahead: int, behind: int) -> String:
+	var parts: Array = []
+	if ahead > 0:
+		parts.append("↑%d" % ahead)
+	if behind > 0:
+		parts.append("↓%d" % behind)
+	return " ".join(parts)
+
+
 # --- toolbar ---------------------------------------------------------------
 
 
@@ -296,6 +306,9 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			if not meta["is_head"]:
 				m.add_separator()
 				m.add_item("Compare with %s" % current_label, ID_COMPARE)
+				m.add_item("Merge into %s…" % current_label, ID_MERGE)
+				m.add_item("Rebase %s onto This…" % current_label, ID_REBASE)
+				m.set_item_disabled(m.get_item_index(ID_REBASE), current.is_empty())
 			m.add_separator()
 			m.add_item("Push…", ID_PUSH_BRANCH)
 			m.add_item("Set Upstream…", ID_SET_UPSTREAM)
@@ -311,6 +324,9 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("New Branch from Here…", ID_NEW_BRANCH_FROM)
 			m.add_separator()
 			m.add_item("Compare with %s" % current_label, ID_COMPARE)
+			m.add_item("Merge into %s…" % current_label, ID_MERGE)
+			m.add_item("Rebase %s onto This…" % current_label, ID_REBASE)
+			m.set_item_disabled(m.get_item_index(ID_REBASE), current.is_empty())
 			m.add_separator()
 			m.add_item("Delete from Remote…", ID_DELETE_REMOTE_BRANCH)
 			m.add_item("Copy Name", ID_COPY_NAME)
@@ -318,6 +334,7 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("Checkout (detached)…", ID_CHECKOUT)
 			m.add_item("New Branch from Here…", ID_NEW_BRANCH_FROM)
 			m.add_item("Compare with %s" % current_label, ID_COMPARE)
+			m.add_item("Merge into %s…" % current_label, ID_MERGE)
 			m.add_separator()
 			m.add_item("Push Tag", ID_PUSH_TAG)
 			m.add_item("Delete…", ID_DELETE_TAG)
@@ -362,6 +379,12 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			await _new_tag(name if kind == "local" else "HEAD")
 		ID_COMPARE:
 			compare_requested.emit("%s ↔ %s" % [_current_label(), name], "HEAD", name)
+		ID_MERGE:
+			await _merge(name)
+		ID_REBASE:
+			if await Dialogs.confirm(self, "Rebase",
+					"Replay the commits of %s on top of %s?\n\nThis rewrites %s's history — don't do it to commits others already pulled." % [_current_label(), name, _current_label()], "Rebase"):
+				_after_operation(_repo.rebase(name), "Rebase")
 		ID_PUSH_BRANCH:
 			await _push_branch_to(name)
 		ID_SET_UPSTREAM:
@@ -426,6 +449,22 @@ func _new_tag(target: String) -> void:
 	if answer == null or String(answer["name"]).strip_edges().is_empty():
 		return
 	_after(_repo.create_tag(String(answer["name"]).strip_edges(), target, String(answer["message"]).strip_edges()), "Create tag failed")
+
+
+func _merge(ref: String) -> void:
+	var modes := {
+		"Default (fast-forward when possible)": "",
+		"Always create a merge commit (--no-ff)": "no-ff",
+		"Fast-forward only": "ff-only",
+		"Squash (stage the changes, commit them yourself)": "squash",
+	}
+	var answer: Variant = await Dialogs.form(self, "Merge", [
+		{ "type": "label", "label": "Merge %s into %s." % [ref, _current_label()] },
+		{ "key": "mode", "label": "Mode", "type": "option", "options": modes.keys(), "default": modes.keys()[0] },
+	], "Merge")
+	if answer == null:
+		return
+	_after_operation(_repo.merge(ref, modes[answer["mode"]]), "Merge")
 
 
 func _set_upstream(branch: String, current_upstream: String) -> void:
@@ -514,4 +553,17 @@ func _after(result: Dictionary, error_title: String, reload_editor: bool = false
 		EditorOpen.refresh_all_external_changes()
 	if not result["ok"]:
 		Dialogs.error(self, error_title, GitErrors.explain(result["error"]))
+	refresh()
+
+
+## Like _after(), but a stop on conflicts gets its own explanation instead of git's raw output.
+func _after_operation(result: Dictionary, verb: String) -> void:
+	EditorOpen.refresh_all_external_changes()
+	if not result["ok"] and GitErrors.classify(result["error"]) == GitErrors.CONFLICT:
+		Dialogs.error(self, "%s Stopped on Conflicts" % verb,
+				"%s hit conflicts. Fix the conflicted files and stage them, then run `git %s --continue` — or `git %s --abort` to undo." % [verb, verb.to_lower(), verb.to_lower()])
+	elif not result["ok"]:
+		Dialogs.error(self, "%s failed" % verb, GitErrors.explain(result["error"]))
+	else:
+		_operation_bar.done("%s done." % verb)
 	refresh()
