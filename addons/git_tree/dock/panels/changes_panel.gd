@@ -10,6 +10,7 @@ const Settings := preload("res://addons/git_tree/util/settings.gd")
 const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
+const ConflictResolver := preload("res://addons/git_tree/dock/widgets/conflict_resolver.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
@@ -34,6 +35,7 @@ const ID_MARK_RESOLVED := 14
 const ID_REVERT_ALL := 15
 const ID_SHOW_HISTORY := 16
 const ID_COPY_PATH := 18
+const ID_RESOLVE := 19
 const ID_ADD_FOLDER_TO_VCS := 20
 const ID_IGNORE_FOLDER := 21
 
@@ -313,7 +315,7 @@ func _add_conflict_item(group: TreeItem, folder_cache: Dictionary, path: String)
 	item.set_text(TEXT_COLUMN, "!  %s" % path.get_file())
 	item.set_custom_color(TEXT_COLUMN, GitIcons.COLOR_DELETED)
 	item.set_metadata(0, { "kind": "conflict_file", "path": path, "staged": false, "status": GitStatusFlags.CONFLICTED })
-	item.set_tooltip_text(TEXT_COLUMN, "%s — conflicted\nRight-click: Accept Ours / Theirs, or Mark Resolved after editing it yourself." % path)
+	item.set_tooltip_text(TEXT_COLUMN, "%s — conflicted\nDouble-click to resolve side by side. Right-click: Accept Ours / Theirs, or Mark Resolved after editing it yourself." % path)
 
 
 func _build_operation_banner() -> void:
@@ -696,9 +698,22 @@ func _on_changes_tree_item_activated() -> void:
 	var meta: Dictionary = item.get_metadata(0)
 	if meta.is_empty() or not meta.has("path"):
 		return
+
+	if meta.get("kind", "") == "conflict_file" and _repo.has_conflict_markers(meta["path"]):
+		_open_conflict_resolver(meta["path"])
+		return
 	var error := EditorOpen.open_file(_repo.get_repo_root(), meta["path"])
 	if not error.is_empty():
 		_show_error("Can't open file", error)
+
+
+func _open_conflict_resolver(path: String) -> void:
+	var resolver := ConflictResolver.new()
+	add_child(resolver)
+	resolver.saved.connect(func(_p: String, _marked: bool) -> void: refresh())
+	if not resolver.open(_repo, path):
+		resolver.queue_free()
+		Dialogs.error(self, "Nothing to resolve", "\"%s\" has no conflict markers — use Accept Ours / Theirs or Mark Resolved instead." % path)
 
 
 ## Left click is checkbox-only (stage/unstage) and row selection; right
@@ -772,6 +787,8 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 			var op_kind: String = _repo.get_operation_state()["kind"]
 			var ours := "upstream / branch being rebased onto" if op_kind == "rebase" else "current branch"
 			var theirs := "your commit being replayed" if op_kind == "rebase" else ("incoming branch" if op_kind == "merge" else "commit being applied")
+			_context_menu.add_item("Resolve Conflicts…", ID_RESOLVE)
+			_context_menu.set_item_disabled(_context_menu.get_item_index(ID_RESOLVE), not _repo.has_conflict_markers(meta["path"]))
 			_context_menu.add_item("Open", ID_OPEN)
 			_context_menu.add_separator()
 			_context_menu.add_item("Accept Ours (%s)" % ours, ID_ACCEPT_OURS)
@@ -863,6 +880,8 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_ignore_path(_context_target["path"])
 		ID_COPY_PATH:
 			DisplayServer.clipboard_set(_context_target["path"])
+		ID_RESOLVE:
+			_open_conflict_resolver(_context_target["path"])
 		ID_SHOW_HISTORY:
 			file_history_requested.emit(_context_target["path"])
 		ID_ACCEPT_OURS, ID_ACCEPT_THEIRS:
