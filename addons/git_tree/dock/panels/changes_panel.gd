@@ -34,6 +34,7 @@ const ID_ACCEPT_THEIRS := 13
 const ID_MARK_RESOLVED := 14
 const ID_REVERT_ALL := 15
 const ID_SHOW_HISTORY := 16
+const ID_STASH_GROUP := 17
 const ID_COPY_PATH := 18
 const ID_RESOLVE := 19
 const ID_ADD_FOLDER_TO_VCS := 20
@@ -131,6 +132,13 @@ func _ready() -> void:
 	_sync_bar.changed.connect(refresh)
 	_operation_bar = _sync_bar.operation_bar
 	_build_operation_banner()
+
+	var stash_button := Button.new()
+	stash_button.text = "Stash…"
+	stash_button.flat = true
+	stash_button.tooltip_text = "Stash uncommitted changes (put them aside and clean the working tree)"
+	stash_button.pressed.connect(_on_stash_button_pressed)
+	%DeleteChangelistButton.add_sibling(stash_button)
 
 	# Changelists + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
 	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
@@ -413,7 +421,7 @@ func _changelist_for_path(path: String) -> String:
 	return name if _changelist_state["names"].has(name) else ChangelistStore.DEFAULT_NAME
 
 
-## Forgets assignments of files that are no longer changed (committed, reverted), so a file edited again later starts in the active changelist instead of a stale one.
+## Forgets assignments of files that are no longer changed (committed, reverted, stashed — a stash remembers them itself), so a file edited again later starts in the active changelist instead of a stale one.
 func _prune_assignments(entries: Array) -> void:
 	var present := {}
 	for entry in entries:
@@ -777,6 +785,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				if not new_paths.is_empty():
 					_context_menu.add_separator()
 				_context_menu.add_item("Revert %d File%s..." % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], ID_REVERT_ALL)
+				_context_menu.add_item("Stash %d File%s..." % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], ID_STASH_GROUP)
 		"untracked_file":
 			_context_menu.add_item("Add to Git", ID_ADD_TO_VCS)
 			_context_menu.add_item("Open", ID_OPEN)
@@ -809,6 +818,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_context_menu.add_item("Delete", ID_DELETE)
 			if not group_paths.is_empty():
 				_context_menu.add_separator()
+				_context_menu.add_item("Shelve (Stash) This Changelist...", ID_STASH_GROUP)
 				_context_menu.add_item("Revert All %d File%s..." % [group_paths.size(), "" if group_paths.size() == 1 else "s"], ID_REVERT_ALL)
 			_context_menu.add_separator()
 			_context_menu.add_item("New Changelist...", ID_NEW_CHANGELIST)
@@ -914,6 +924,9 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				if not errors.is_empty():
 					Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
 				refresh()
+		ID_STASH_GROUP:
+			var group_name: String = _context_target.get("name", "")
+			await _stash_dialog(PackedStringArray(_context_target["paths"]), group_name)
 
 
 ## Reverts or removes the file, per _confirm_dialog_action (set by whichever menu item opened this dialog).
@@ -935,6 +948,34 @@ static func _path_list(paths: Array) -> String:
 	if paths.size() > shown.size():
 		text += "\n… and %d more" % (paths.size() - shown.size())
 	return text
+
+
+func _on_stash_button_pressed() -> void:
+	await _stash_dialog(PackedStringArray(), "")
+
+
+## paths empty = stash everything.
+func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
+	var fields: Array = [
+		{ "key": "message", "label": "Message", "default": suggested_message, "placeholder": "WIP: what these changes are" },
+		{ "key": "untracked", "label": "Include untracked (new) files", "type": "check", "default": paths.is_empty() },
+	]
+	if paths.is_empty():
+		fields.append({ "key": "keep_index", "label": "Keep staged changes in the working tree too", "type": "check", "default": false })
+	else:
+		fields.push_front({ "type": "label", "label": "Stash %d file%s:\n%s" % [paths.size(), "" if paths.size() == 1 else "s", _path_list(Array(paths))] })
+	var answer: Variant = await Dialogs.form(self, "Stash Changes", fields, "Stash")
+	if answer == null:
+		return
+	var result: Dictionary = _repo.stash_push(String(answer["message"]).strip_edges(), answer["untracked"], paths, answer.get("keep_index", false))
+	EditorOpen.refresh_all_external_changes()
+	if not result["ok"]:
+		await Dialogs.error(self, "Stash failed", result["error"])
+	elif result["output"].contains("No local changes"):
+		_operation_bar.done("Nothing to stash.")
+	else:
+		_operation_bar.done("Stashed. Restore it from Branches → Stashes.")
+	refresh()
 
 
 func _on_commit_message_gui_input(event: InputEvent) -> void:

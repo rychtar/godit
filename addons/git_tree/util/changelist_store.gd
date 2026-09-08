@@ -12,11 +12,11 @@ static func _section(repo_root: String) -> String:
 	return "repo:" + repo_root.md5_text()
 
 
-## Loaded state per repo root, shared by every panel so a change made in one is seen by the others.
+## Loaded state per repo root, shared by every panel so a change made in one (e.g. Branches restoring a shelved stash) is seen by the others.
 static var _cache: Dictionary = {}
 
 
-## {"names": Array[String], "assignments": Dictionary[path, name], "active": String}. A path missing from assignments is just in Default.
+## {"names": Array[String], "assignments": Dictionary[path, name], "active": String, "shelved": Dictionary[stash oid, Dictionary[path, name]]}. A path missing from assignments is just in Default.
 static func load_state(repo_root: String) -> Dictionary:
 	if _cache.has(repo_root):
 		return _cache[repo_root]
@@ -36,6 +36,7 @@ static func load_state(repo_root: String) -> Dictionary:
 		"names": names,
 		"assignments": cfg.get_value(section, "assignments", {}),
 		"active": active,
+		"shelved": cfg.get_value(section, "shelved", {}),
 	}
 	_cache[repo_root] = state
 	return state
@@ -48,4 +49,41 @@ static func save_state(repo_root: String, state: Dictionary) -> void:
 	cfg.set_value(section, "names", state["names"])
 	cfg.set_value(section, "assignments", state["assignments"])
 	cfg.set_value(section, "active", state["active"])
+	cfg.set_value(section, "shelved", state.get("shelved", {}))
 	cfg.save(CONFIG_PATH)
+
+
+## Remembers which changelist each stashed path was in, keyed by the stash's commit oid (stable, unlike stash@{n}).
+static func remember_shelved(repo_root: String, stash_oid: String, paths: Array) -> void:
+	var state := load_state(repo_root)
+	var snapshot := {}
+	for path in paths:
+		snapshot[path] = state["assignments"].get(path, DEFAULT_NAME)
+	state["shelved"][stash_oid] = snapshot
+	save_state(repo_root, state)
+
+
+## Puts a re-applied stash's files back into the changelists they were stashed from (recreating any that were deleted since). drop=true forgets the record (pop/drop).
+static func restore_shelved(repo_root: String, stash_oid: String, drop: bool) -> void:
+	var state := load_state(repo_root)
+	var shelved: Dictionary = state["shelved"]
+	if not shelved.has(stash_oid):
+		return
+	var snapshot: Dictionary = shelved[stash_oid]
+	for path in snapshot:
+		var name: String = snapshot[path]
+		if name == DEFAULT_NAME:
+			state["assignments"].erase(path)
+			continue
+		if not state["names"].has(name):
+			state["names"].append(name)
+		state["assignments"][path] = name
+	if drop:
+		shelved.erase(stash_oid)
+	save_state(repo_root, state)
+
+
+static func forget_shelved(repo_root: String, stash_oid: String) -> void:
+	var state := load_state(repo_root)
+	if state["shelved"].erase(stash_oid):
+		save_state(repo_root, state)

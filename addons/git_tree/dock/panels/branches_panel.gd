@@ -13,7 +13,7 @@ enum {
 	ID_UNSET_UPSTREAM, ID_RENAME, ID_DELETE, ID_DELETE_REMOTE_BRANCH, ID_COPY_NAME,
 	ID_PUSH_TAG, ID_DELETE_TAG, ID_DELETE_REMOTE_TAG, ID_FETCH_REMOTE, ID_EDIT_REMOTE_URL,
 	ID_RENAME_REMOTE, ID_REMOVE_REMOTE, ID_ADD_REMOTE, ID_FETCH_PRUNE, ID_NEW_TAG,
-	ID_COMPARE,
+	ID_COMPARE, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_SHOW, ID_STASH_BRANCH,
 }
 
 ## Opens the changeset dialog, wired up by git_tree_dock.gd: (title, base_ref, target_ref). target "" means the working tree.
@@ -31,11 +31,11 @@ var _sync_bar: VBoxContainer
 const WIDE_MIN_WIDTH := 520.0
 var _wide := true
 
-## {"kind": "local"|"remote_branch"|"tag"|"remote"|"section", ...} for whatever the context menu was opened on.
+## {"kind": "local"|"remote_branch"|"tag"|"remote"|"stash"|"section", ...} for whatever the context menu was opened on.
 var _context: Dictionary = {}
 
 ## Section headers' collapsed state, kept across refreshes (keyed by section title).
-var _collapsed_sections := { "Tags": true }
+var _collapsed_sections := { "Tags": true, "Stashes": false }
 
 
 func _ready() -> void:
@@ -132,6 +132,15 @@ func refresh() -> void:
 		item.set_tooltip_text(0, "%s — %s %s%s" % [t["name"], t["oid"], t["summary"], "  (annotated)" if t["annotated"] else ""])
 		item.set_custom_color(0, Color(0.95, 0.85, 0.55))
 	_finish_section(tags_section, tag_count)
+
+	var stash_section := _section(root, "Stashes")
+	var stashes: Array = _repo.list_stashes()
+	for st in stashes:
+		var item := _tree.create_item(stash_section)
+		_fill_row(item, st["message"], st["ref"], { "oid": "", "summary": "", "date": st["date"] })
+		item.set_metadata(0, { "kind": "stash", "ref": st["ref"], "message": st["message"] })
+		item.set_tooltip_text(0, "%s — %s\nDouble-click to apply, right-click for more" % [st["ref"], st["message"]])
+	_finish_section(stash_section, stashes.size())
 
 	var remotes_section := _section(root, "Remotes")
 	var remotes: Array = _repo.list_remotes()
@@ -265,6 +274,8 @@ func _on_branches_tree_item_activated() -> void:
 			_after(_repo.checkout_remote_branch(meta["name"]), "Checkout failed", true)
 		"tag":
 			await _checkout_detached(meta["name"])
+		"stash":
+			_after(_repo.stash_apply(meta["ref"], false), "Apply stash failed", true)
 		"remote":
 			await _edit_remote_url(meta["name"])
 
@@ -340,6 +351,13 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("Delete…", ID_DELETE_TAG)
 			m.add_item("Delete from Remote…", ID_DELETE_REMOTE_TAG)
 			m.add_item("Copy Name", ID_COPY_NAME)
+		"stash":
+			m.add_item("Show Changes", ID_STASH_SHOW)
+			m.add_item("Apply", ID_STASH_APPLY)
+			m.add_item("Pop (apply and drop)", ID_STASH_POP)
+			m.add_item("New Branch from Stash…", ID_STASH_BRANCH)
+			m.add_separator()
+			m.add_item("Drop…", ID_STASH_DROP)
 		"remote":
 			m.add_item("Fetch", ID_FETCH_REMOTE)
 			m.add_item("Edit URL…", ID_EDIT_REMOTE_URL)
@@ -434,6 +452,20 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				_after(_repo.remove_remote(name), "Remove remote failed")
 		ID_ADD_REMOTE:
 			await _add_remote()
+		ID_STASH_SHOW:
+			compare_requested.emit("Stash: %s" % _context["message"], _context["ref"] + "^", _context["ref"])
+		ID_STASH_APPLY:
+			_after(_repo.stash_apply(_context["ref"], false), "Apply stash failed", true)
+		ID_STASH_POP:
+			_after(_repo.stash_apply(_context["ref"], true), "Pop stash failed", true)
+		ID_STASH_DROP:
+			if await Dialogs.confirm(self, "Drop Stash", "Permanently delete %s (\"%s\")?" % [_context["ref"], _context["message"]], "Drop"):
+				_after(_repo.stash_drop(_context["ref"]), "Drop stash failed")
+		ID_STASH_BRANCH:
+			var branch_name: Variant = await Dialogs.prompt(self, "Branch from Stash",
+					"New branch name (created at the commit the stash was made on, with the stash applied and dropped)", "", "Create")
+			if branch_name != null and not branch_name.is_empty():
+				_after(_repo.stash_branch(branch_name, _context["ref"]), "Branch from stash failed", true)
 
 
 func _current_label() -> String:

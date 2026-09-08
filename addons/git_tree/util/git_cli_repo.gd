@@ -8,6 +8,7 @@ extends RefCounted
 const GitCli := preload("res://addons/git_tree/util/git_cli.gd")
 const GitStatusFlags := preload("res://addons/git_tree/util/git_status_flags.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
+const ChangelistStore := preload("res://addons/git_tree/util/changelist_store.gd")
 
 const US := GitCli.US
 
@@ -525,6 +526,70 @@ func set_remote_url(name: String, url: String) -> Dictionary:
 	return _simple(["remote", "set-url", name, url])
 
 
+## Array[{"ref": "stash@{0}", "message", "date"}], newest first.
+func list_stashes() -> Array:
+	var r := GitCli.run(_repo_root, ["stash", "list", "--format=%gd" + US + "%gs" + US + "%cr"])
+	var stashes: Array = []
+	for line in GitCli.lines(r["text"]):
+		var f := line.split(US)
+		if f.size() < 3:
+			continue
+		stashes.append({ "ref": f[0], "message": f[1], "date": f[2] })
+	return stashes
+
+
+## Stashes uncommitted changes. paths empty = everything; include_untracked also stashes new files.
+func stash_push(message: String, include_untracked: bool, paths: PackedStringArray = PackedStringArray(), keep_index: bool = false) -> Dictionary:
+	var args := ["stash", "push"]
+	if include_untracked:
+		args.append("--include-untracked")
+	if keep_index:
+		args.append("--keep-index")
+	if not message.is_empty():
+		args.append_array(["-m", message])
+	if not paths.is_empty():
+		args.append("--")
+		args.append_array(paths)
+	var stashed: Array = Array(paths) if not paths.is_empty() else get_status().map(func(e: Dictionary) -> String: return e["path"])
+	var result := _simple(args)
+	if result["ok"] and not result["output"].contains("No local changes"):
+		ChangelistStore.remember_shelved(_repo_root, _stash_oid("stash@{0}"), stashed)
+	return result
+
+
+func _stash_oid(ref: String) -> String:
+	return GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", ref])["text"].strip_edges()
+
+
+## pop=true also drops the stash if it applied cleanly. --index restores what was staged as staged.
+func stash_apply(ref: String, pop: bool) -> Dictionary:
+	var oid := _stash_oid(ref)
+	var result := _simple(["stash", "pop" if pop else "apply", "--index", ref])
+	if not result["ok"] and result["error"].contains("--index"):
+		result = _simple(["stash", "pop" if pop else "apply", ref]) # index can't be restored (conflicts there) — apply to the working tree only
+	result = _with_conflict_flag(result)
+	if result["ok"] or result["conflicts"]:
+		# A pop that stopped on conflicts keeps the stash, so its record stays too.
+		ChangelistStore.restore_shelved(_repo_root, oid, pop and result["ok"])
+	return result
+
+
+func stash_drop(ref: String) -> Dictionary:
+	var oid := _stash_oid(ref)
+	var result := _simple(["stash", "drop", ref])
+	if result["ok"]:
+		ChangelistStore.forget_shelved(_repo_root, oid)
+	return result
+
+
+func stash_branch(branch: String, ref: String) -> Dictionary:
+	var oid := _stash_oid(ref)
+	var result := _simple(["stash", "branch", branch, ref])
+	if result["ok"]:
+		ChangelistStore.restore_shelved(_repo_root, oid, true)
+	return result
+
+
 ## Runs a quick mutating command synchronously -> {"ok", "error", "output"}.
 func _simple(args: Array) -> Dictionary:
 	var r := GitCli.run(_repo_root, args, true)
@@ -806,6 +871,12 @@ func empty_tree_oid() -> String:
 ## rev's first parent, or the empty tree if it has none.
 func parent_or_empty_tree(oid: String) -> String:
 	return oid + "^" if has_parent(oid) else empty_tree_oid()
+
+
+## Untracked files saved by `stash push -u` live in a third, parentless commit; "" if the stash has none.
+func stash_untracked_rev(ref: String) -> String:
+	var rev := ref + "^3"
+	return rev if GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", rev])["exit_code"] == 0 else ""
 
 
 func has_parent(oid: String) -> bool:

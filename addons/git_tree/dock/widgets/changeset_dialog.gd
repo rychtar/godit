@@ -1,4 +1,4 @@
-## Resizable window listing the files that differ between two revisions (base → target, target "" = working tree) with a diff of the selected one. Used for Compare branches and Compare with working tree.
+## Resizable window listing the files that differ between two revisions (base → target, target "" = working tree) with a diff of the selected one. Used for Compare branches, Show stash and Compare with working tree.
 @tool
 extends AcceptDialog
 
@@ -58,6 +58,14 @@ func open(repo: RefCounted, dialog_title: String, base: String, target: String) 
 	title = dialog_title
 
 	var files: Array = repo.get_changed_files_between(base, target)
+	# Stash's untracked files aren't in stash^..stash; each entry carries its own revisions instead.
+	var untracked_rev: String = repo.stash_untracked_rev(target) if target.begins_with("stash@{") else ""
+	if not untracked_rev.is_empty():
+		for f in repo.get_changed_files_between(repo.empty_tree_oid(), untracked_rev):
+			f["base"] = repo.empty_tree_oid()
+			f["target"] = untracked_rev
+			f["untracked"] = true
+			files.append(f)
 	_summary.text = "%d file%s changed · %s → %s" % [files.size(), "" if files.size() == 1 else "s", base, target if not target.is_empty() else "working tree"]
 	_tree.clear()
 	var root := _tree.create_item()
@@ -69,8 +77,8 @@ func open(repo: RefCounted, dialog_title: String, base: String, target: String) 
 		var item := _tree.create_item(parent)
 		item.set_text(0, "%s  %s" % [GitIcons.delta_letter(f["status"]), path.get_file()])
 		item.set_custom_color(0, GitIcons.delta_color(f["status"]))
-		item.set_tooltip_text(0, path + ("\n(renamed from %s)" % f["old_path"] if f.has("old_path") else ""))
-		item.set_metadata(0, { "path": path, "status": f["status"] })
+		item.set_tooltip_text(0, path + ("\n(renamed from %s)" % f["old_path"] if f.has("old_path") else "") + ("\n(untracked when stashed)" if f.get("untracked", false) else ""))
+		item.set_metadata(0, { "path": path, "status": f["status"], "base": f.get("base", base), "target": f.get("target", target) })
 		if first == null:
 			first = item
 	if files.is_empty():
@@ -92,7 +100,9 @@ func _on_item_selected() -> void:
 	if not meta is Dictionary:
 		return
 	var path: String = meta["path"]
-	_diff_view.show_diff(_repo.get_diff_between(_base, _target, path, _diff_view.get_options()), { "path": path })
+	var base: String = meta.get("base", _base)
+	var target: String = meta.get("target", _target)
+	_diff_view.show_diff(_repo.get_diff_between(base, target, path, _diff_view.get_options()), { "path": path })
 
 
 func _on_item_activated() -> void:
