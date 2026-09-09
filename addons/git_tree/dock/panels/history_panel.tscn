@@ -127,6 +127,34 @@ initial_position = 1
 size = Vector2i(360, 120)
 ok_button_text = "Checkout"
 
+[node name="ResetDialog" type="ConfirmationDialog" parent="."]
+unique_name_in_owner = true
+initial_position = 1
+size = Vector2i(360, 140)
+ok_button_text = "Reset"
+
+[node name="ResetDialogLayout" type="VBoxContainer" parent="ResetDialog"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ResetMessageLabel" type="Label" parent="ResetDialog/ResetDialogLayout"]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 2
+
+[node name="ResetHardCheck" type="CheckBox" parent="ResetDialog/ResetDialogLayout"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Hard reset (also discard uncommitted changes in the working tree)"
+
 [node name="NewBranchDialog" type="ConfirmationDialog" parent="."]
 unique_name_in_owner = true
 title = "New Branch"
@@ -163,4 +191,5 @@ text = "Checkout after creating"
 [connection signal="commit_context_requested" from="Layout/Split/GraphSplit/GraphScroll/CommitGraph" to="." method="_on_commit_graph_commit_context_requested"]
 [connection signal="id_pressed" from="ContextMenu" to="." method="_on_context_menu_id_pressed"]
 [connection signal="confirmed" from="CheckoutConfirmDialog" to="." method="_on_checkout_confirm_dialog_confirmed"]
+[connection signal="confirmed" from="ResetDialog" to="." method="_on_reset_dialog_confirmed"]
 [connection signal="confirmed" from="NewBranchDialog" to="." method="_on_new_branch_dialog_confirmed"]

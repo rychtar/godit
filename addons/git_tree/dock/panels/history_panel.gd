@@ -20,8 +20,9 @@ const DETAIL_PANE_RATIO := 1.0 / 3.0
 const PAGE_SIZE := 300
 
 enum {
-	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT,
-	ID_CREATE_TAG, ID_COMPARE_WORKTREE, ID_COMPARE_SELECTED, ID_SHOW_CHANGES,
+	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT, ID_RESET_TO_HERE,
+	ID_CREATE_TAG, ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT, ID_REVERT_COMMIT, ID_COMPARE_WORKTREE,
+	ID_COMPARE_SELECTED, ID_SHOW_CHANGES,
 }
 enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
 
@@ -41,6 +42,9 @@ var _search_results: Variant = null
 @onready var _context_menu: PopupMenu = %ContextMenu
 @onready var _error_dialog: AcceptDialog = %ErrorDialog
 @onready var _checkout_confirm_dialog: ConfirmationDialog = %CheckoutConfirmDialog
+@onready var _reset_dialog: ConfirmationDialog = %ResetDialog
+@onready var _reset_message_label: Label = %ResetMessageLabel
+@onready var _reset_hard_check: CheckBox = %ResetHardCheck
 @onready var _new_branch_dialog: ConfirmationDialog = %NewBranchDialog
 @onready var _new_branch_name_edit: LineEdit = %NewBranchNameEdit
 @onready var _new_branch_checkout_check: CheckBox = %NewBranchCheckoutCheck
@@ -466,6 +470,9 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 	if not _context_oids.has(oid):
 		_context_oids = PackedStringArray([oid])
 	var many := _context_oids.size() > 1
+	var current: String = _repo.get_current_branch()
+	var target := current if not current.is_empty() else "HEAD"
+	var in_head_history: bool = _repo.is_ancestor_of_head(oid)
 
 	var m := _context_menu
 	m.clear()
@@ -482,6 +489,17 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 		m.add_item("Create Branch from Here...", ID_CREATE_BRANCH)
 		m.add_item("Create Tag Here...", ID_CREATE_TAG)
 		m.add_item("Checkout This Commit...", ID_CHECKOUT_COMMIT)
+	m.add_separator()
+	m.add_item("Cherry-pick %sinto %s" % ["%d Commits " % _context_oids.size() if many else "", target], ID_CHERRY_PICK)
+	m.add_item("Cherry-pick without Committing", ID_CHERRY_PICK_NO_COMMIT)
+	if in_head_history and not many:
+		m.set_item_disabled(m.get_item_index(ID_CHERRY_PICK), true)
+		m.set_item_tooltip(m.get_item_index(ID_CHERRY_PICK), "Already part of %s" % target)
+	if not many:
+		m.add_item("Revert Commit (new commit undoing it)", ID_REVERT_COMMIT)
+	if not many:
+		m.add_separator()
+		m.add_item("Reset Current Branch to Here...", ID_RESET_TO_HERE)
 
 	m.position = screen_position
 	m.reset_size()
@@ -519,10 +537,28 @@ func _on_context_menu_id_pressed(id: int) -> void:
 		ID_CHECKOUT_COMMIT:
 			_checkout_confirm_dialog.dialog_text = "Checkout commit %s?\nThis leaves HEAD detached (not on a branch)." % _context_oid.substr(0, 7)
 			_checkout_confirm_dialog.popup_centered()
+		ID_RESET_TO_HERE:
+			_reset_hard_check.button_pressed = false
+			_reset_message_label.text = "Move the current branch to %s?%s" % [_context_oid.substr(0, 7), _pushed_warning(_context_oid)]
+			_reset_dialog.popup_centered()
+		ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT:
+			_after_operation(_repo.cherry_pick(_context_oids, id == ID_CHERRY_PICK_NO_COMMIT), "Cherry-pick")
+		ID_REVERT_COMMIT:
+			if await Dialogs.confirm(self, "Revert Commit",
+					"Create a new commit that undoes %s \"%s\"?\n\nHistory isn't rewritten — safe for commits that were already pushed." % [_context_oid.substr(0, 7), _summary(_context_oid)], "Revert"):
+				_after_operation(_repo.revert_commit(_context_oid), "Revert")
 
 
 func _summary(oid: String) -> String:
 	return String(_commits_by_oid.get(oid, {}).get("summary", ""))
+
+
+## Extra warning line when oid is already on a remote branch — moving the branch behind it means a force-push.
+func _pushed_warning(oid: String) -> String:
+	for name in _repo.branches_containing(oid):
+		if name.contains("/") and _repo.list_remotes().any(func(r: Dictionary) -> bool: return name.begins_with(r["name"] + "/")):
+			return "\n\n⚠ This commit is already on %s — moving the branch behind it means you'll have to force-push." % name
+	return ""
 
 
 func _open_changeset(title: String, base: String, target: String) -> void:
@@ -536,6 +572,17 @@ func _after(result: Dictionary, error_title: String, reload_editor: bool = false
 		EditorOpen.refresh_all_external_changes()
 	if not result["ok"]:
 		Dialogs.error(self, error_title, GitErrors.explain(result["error"]))
+	refresh()
+
+
+## A stop on conflicts isn't an error — it points to the Changes panel, where they're resolved.
+func _after_operation(result: Dictionary, verb: String) -> void:
+	EditorOpen.refresh_all_external_changes()
+	if result.get("conflicts", false):
+		Dialogs.error(self, "%s Stopped on Conflicts" % verb,
+				"%s hit conflicts. Resolve them in the Changes tab (Accept Ours/Theirs, or edit and Mark Resolved), then press Continue there — or Abort to undo." % verb)
+	elif not result["ok"]:
+		Dialogs.error(self, "%s failed" % verb, GitErrors.explain(result["error"]))
 	refresh()
 
 
@@ -560,6 +607,16 @@ func _on_checkout_confirm_dialog_confirmed() -> void:
 		_show_error("Checkout failed", GitErrors.explain(result["error"]))
 		return
 	EditorOpen.refresh_all_external_changes()
+	refresh()
+
+
+func _on_reset_dialog_confirmed() -> void:
+	var result: Dictionary = _repo.reset_branch_to(_context_oid, _reset_hard_check.button_pressed)
+	if not result["ok"]:
+		_show_error("Reset failed", result["error"])
+		return
+	if _reset_hard_check.button_pressed:
+		EditorOpen.refresh_all_external_changes()
 	refresh()
 
 

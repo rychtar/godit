@@ -755,6 +755,23 @@ func _checkout(target: String) -> Dictionary:
 	return result
 
 
+## Moves the current branch's tip to oid. hard=false leaves the working
+## tree untouched (mixed reset); hard=true also discards uncommitted
+## changes to match oid. Refuses on a detached HEAD.
+func reset_branch_to(oid: String, hard: bool) -> Dictionary:
+	var result := { "ok": false, "error": "" }
+	if GitCli.run(_repo_root, ["symbolic-ref", "-q", "HEAD"])["exit_code"] != 0:
+		result["error"] = "HEAD is detached — nothing to reset (checkout a branch first)"
+		return result
+
+	var reset_result := GitCli.run(_repo_root, ["reset", "--hard" if hard else "--mixed", oid], true)
+	if reset_result["exit_code"] != 0:
+		result["error"] = reset_result["text"].strip_edges()
+		return result
+	result["ok"] = true
+	return result
+
+
 func create_branch(name: String, start_point: String, checkout: bool) -> Dictionary:
 	var result := { "ok": false, "error": "" }
 	var point := start_point if not start_point.is_empty() else "HEAD"
@@ -861,6 +878,10 @@ func get_head_oid() -> String:
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
 
 
+func is_ancestor_of_head(oid: String) -> bool:
+	return GitCli.run(_repo_root, ["merge-base", "--is-ancestor", oid, "HEAD"])["exit_code"] == 0
+
+
 ## The empty tree's id in this repo's hash format — the "parent" to diff a root commit against.
 func empty_tree_oid() -> String:
 	if GitCli.run(_repo_root, ["rev-parse", "--show-object-format"])["text"].strip_edges() == "sha256":
@@ -881,6 +902,35 @@ func stash_untracked_rev(ref: String) -> String:
 
 func has_parent(oid: String) -> bool:
 	return GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", oid + "^"])["exit_code"] == 0
+
+
+## Applies commits (given newest first, as the log shows them) on top of HEAD, oldest first. no_commit leaves the result staged instead.
+func cherry_pick(oids: PackedStringArray, no_commit: bool = false) -> Dictionary:
+	var args := ["cherry-pick"]
+	if no_commit:
+		args.append("--no-commit")
+	var ordered := Array(oids)
+	ordered.reverse()
+	if ordered.size() == 1 and _parent_count(ordered[0]) > 1:
+		args.append_array(["-m", "1"]) # a merge: take the changes relative to its first parent
+	args.append_array(ordered)
+	return _with_conflict_flag(_simple(args))
+
+
+## Creates a new commit undoing oid (-m 1 for merges: undo what the merge brought in).
+func revert_commit(oid: String, no_commit: bool = false) -> Dictionary:
+	var args := ["revert"]
+	if no_commit:
+		args.append("--no-commit")
+	if _parent_count(oid) > 1:
+		args.append_array(["-m", "1"])
+	args.append(oid)
+	return _with_conflict_flag(_simple(args))
+
+
+func _parent_count(oid: String) -> int:
+	var r := GitCli.run(_repo_root, ["rev-list", "--parents", "-n", "1", oid])
+	return maxi(0, r["text"].strip_edges().split(" ").size() - 1)
 
 
 ## Files changed by this commit, diffed against its first parent (--root
