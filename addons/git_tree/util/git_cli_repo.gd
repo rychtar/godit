@@ -904,6 +904,16 @@ func has_parent(oid: String) -> bool:
 	return GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", oid + "^"])["exit_code"] == 0
 
 
+## True if any merge commit lies between oid (exclusive) and HEAD — history rewriting through merges would flatten them, so those actions refuse.
+func has_merges_since(oid: String) -> bool:
+	var r := GitCli.run(_repo_root, ["rev-list", "--merges", "%s..HEAD" % oid])
+	return not r["text"].strip_edges().is_empty()
+
+
+func has_staged_changes() -> bool:
+	return GitCli.run(_repo_root, ["diff", "--cached", "--quiet"])["exit_code"] != 0
+
+
 ## Applies commits (given newest first, as the log shows them) on top of HEAD, oldest first. no_commit leaves the result staged instead.
 func cherry_pick(oids: PackedStringArray, no_commit: bool = false) -> Dictionary:
 	var args := ["cherry-pick"]
@@ -931,6 +941,76 @@ func revert_commit(oid: String, no_commit: bool = false) -> Dictionary:
 func _parent_count(oid: String) -> int:
 	var r := GitCli.run(_repo_root, ["rev-list", "--parents", "-n", "1", oid])
 	return maxi(0, r["text"].strip_edges().split(" ").size() - 1)
+
+
+## Moves the branch back one commit, keeping that commit's changes staged.
+func undo_last_commit() -> Dictionary:
+	if not has_parent("HEAD"):
+		return { "ok": false, "error": "This is the first commit — there's nothing before it to go back to.", "output": "" }
+	return _simple(["reset", "--soft", "HEAD~1"])
+
+
+## Changes a commit's message. HEAD is simply amended (message only — staged changes stay staged); an older commit goes through an autosquashed "amend!" fixup, rewriting everything after it.
+func reword_commit(oid: String, message: String) -> Dictionary:
+	if oid == get_head_oid():
+		return _simple(["commit", "--amend", "--only", "--allow-empty", "-m", message])
+	# The same "amend! <subject>" commit `git commit --fixup=reword:` would make (autosquash then swaps the message in), built with commit-tree so it neither needs an editor nor picks up anything staged.
+	var subject: String = GitCli.run(_repo_root, ["log", "-1", "--format=%s", oid])["text"].strip_edges()
+	var made := _simple(["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "amend! " + subject, "-m", message])
+	if not made["ok"]:
+		return made
+	var moved := _simple(["update-ref", "-m", "git-tree: reword " + oid.substr(0, 7), "HEAD", made["output"]])
+	if not moved["ok"]:
+		return moved
+	return _autosquash_onto(oid)
+
+
+## Folds the currently staged changes into commit oid (rewrites everything after it).
+func fixup_commit(oid: String) -> Dictionary:
+	if not has_staged_changes():
+		return { "ok": false, "error": "Nothing is staged — stage the changes to fold in first.", "output": "" }
+	if oid == get_head_oid():
+		return _simple(["commit", "--amend", "--no-edit"])
+	var fixup := _simple(["commit", "--fixup=" + oid])
+	if not fixup["ok"]:
+		return fixup
+	return _autosquash_onto(oid)
+
+
+func _autosquash_onto(oid: String) -> Dictionary:
+	var base := oid + "^" if has_parent(oid) else "--root"
+	var args := ["rebase", "--interactive", "--autosquash", "--autostash"]
+	args.append(base)
+	return _with_conflict_flag(_simple(args))
+
+
+## Squashes oid and every commit after it up to HEAD into one commit with message.
+func squash_to_head(oid: String, message: String) -> Dictionary:
+	if has_staged_changes():
+		return { "ok": false, "error": "There are staged changes — commit or unstage them first, or they'd end up in the squashed commit.", "output": "" }
+	if not has_parent(oid):
+		return { "ok": false, "error": "Can't squash down to the very first commit.", "output": "" }
+	var reset := _simple(["reset", "--soft", oid + "^"])
+	if not reset["ok"]:
+		return reset
+	return _simple(["commit", "-m", message])
+
+
+## Removes commit oid from the current branch, replaying the ones after it.
+func drop_commit(oid: String) -> Dictionary:
+	if not has_parent(oid):
+		return { "ok": false, "error": "Can't drop the very first commit.", "output": "" }
+	return _with_conflict_flag(_simple(["rebase", "--autostash", "--onto", oid + "^", oid]))
+
+
+## Messages of oid..HEAD (oldest first), for prefilling a squash message.
+func get_messages_since(oid: String) -> String:
+	var r := GitCli.run(_repo_root, ["log", "--reverse", "--format=%B" + GitCli.RS, "%s^..HEAD" % oid])
+	var parts: Array = []
+	for m in r["text"].split(GitCli.RS):
+		if not m.strip_edges().is_empty():
+			parts.append(m.strip_edges())
+	return "\n\n".join(parts)
 
 
 ## Files changed by this commit, diffed against its first parent (--root

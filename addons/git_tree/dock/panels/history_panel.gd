@@ -22,7 +22,7 @@ const PAGE_SIZE := 300
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT, ID_RESET_TO_HERE,
 	ID_CREATE_TAG, ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT, ID_REVERT_COMMIT, ID_COMPARE_WORKTREE,
-	ID_COMPARE_SELECTED, ID_SHOW_CHANGES,
+	ID_COMPARE_SELECTED, ID_REWORD, ID_FIXUP, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES,
 }
 enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
 
@@ -472,7 +472,11 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 	var many := _context_oids.size() > 1
 	var current: String = _repo.get_current_branch()
 	var target := current if not current.is_empty() else "HEAD"
+	var head: String = _repo.get_head_oid()
 	var in_head_history: bool = _repo.is_ancestor_of_head(oid)
+	var can_rewrite := not many and in_head_history and not current.is_empty()
+	var has_merges_after: bool = can_rewrite and _repo.has_merges_since(oid)
+	var has_parent: bool = _repo.has_parent(oid)
 
 	var m := _context_menu
 	m.clear()
@@ -497,6 +501,19 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 		m.set_item_tooltip(m.get_item_index(ID_CHERRY_PICK), "Already part of %s" % target)
 	if not many:
 		m.add_item("Revert Commit (new commit undoing it)", ID_REVERT_COMMIT)
+
+	if can_rewrite:
+		m.add_separator("Rewrite %s's history" % current)
+		m.add_item("Reword Message…", ID_REWORD)
+		m.add_item("Fixup: Fold Staged Changes into This Commit", ID_FIXUP)
+		m.set_item_disabled(m.get_item_index(ID_FIXUP), not _repo.has_staged_changes())
+		m.add_item("Squash This and Newer Commits into One…", ID_SQUASH)
+		m.set_item_disabled(m.get_item_index(ID_SQUASH), has_merges_after or not has_parent or oid == head)
+		m.add_item("Drop Commit…", ID_DROP)
+		m.set_item_disabled(m.get_item_index(ID_DROP), has_merges_after or not has_parent)
+		if oid == head:
+			m.add_item("Undo Commit (keep its changes staged)", ID_UNDO_LAST)
+			m.set_item_disabled(m.get_item_index(ID_UNDO_LAST), not has_parent)
 	if not many:
 		m.add_separator()
 		m.add_item("Reset Current Branch to Here...", ID_RESET_TO_HERE)
@@ -539,7 +556,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_checkout_confirm_dialog.popup_centered()
 		ID_RESET_TO_HERE:
 			_reset_hard_check.button_pressed = false
-			_reset_message_label.text = "Move the current branch to %s?%s" % [_context_oid.substr(0, 7), _pushed_warning(_context_oid)]
+			_reset_message_label.text = "Move the current branch to %s?%s" % [_context_oid.substr(0, 7), _pushed_warning(_context_oid, false)]
 			_reset_dialog.popup_centered()
 		ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT:
 			_after_operation(_repo.cherry_pick(_context_oids, id == ID_CHERRY_PICK_NO_COMMIT), "Cherry-pick")
@@ -547,17 +564,41 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			if await Dialogs.confirm(self, "Revert Commit",
 					"Create a new commit that undoes %s \"%s\"?\n\nHistory isn't rewritten — safe for commits that were already pushed." % [_context_oid.substr(0, 7), _summary(_context_oid)], "Revert"):
 				_after_operation(_repo.revert_commit(_context_oid), "Revert")
+		ID_REWORD:
+			var old_message := String(_commits_by_oid.get(_context_oid, {}).get("message", "")).strip_edges()
+			var answer: Variant = await Dialogs.form(self, "Reword %s" % _context_oid.substr(0, 7), [
+				{ "key": "message", "label": "Commit message" + _pushed_warning(_context_oid, true), "type": "multiline", "default": old_message },
+			], "Reword")
+			if answer != null and not String(answer["message"]).strip_edges().is_empty() and String(answer["message"]).strip_edges() != old_message:
+				_after_operation(_repo.reword_commit(_context_oid, String(answer["message"]).strip_edges()), "Reword")
+		ID_FIXUP:
+			if await Dialogs.confirm(self, "Fixup",
+					"Fold the staged changes into %s \"%s\"?%s" % [_context_oid.substr(0, 7), _summary(_context_oid), _pushed_warning(_context_oid, true)], "Fixup"):
+				_after_operation(_repo.fixup_commit(_context_oid), "Fixup")
+		ID_SQUASH:
+			var answer: Variant = await Dialogs.form(self, "Squash into One Commit", [
+				{ "type": "label", "label": "Combine %s and every newer commit on %s into a single commit.%s" % [_context_oid.substr(0, 7), _repo.get_current_branch(), _pushed_warning(_context_oid, true)] },
+				{ "key": "message", "label": "Message for the combined commit", "type": "multiline", "default": _repo.get_messages_since(_context_oid) },
+			], "Squash")
+			if answer != null and not String(answer["message"]).strip_edges().is_empty():
+				_after_operation(_repo.squash_to_head(_context_oid, String(answer["message"]).strip_edges()), "Squash")
+		ID_DROP:
+			if await Dialogs.confirm(self, "Drop Commit",
+					"Remove %s \"%s\" from %s? Newer commits are replayed without it.%s" % [_context_oid.substr(0, 7), _summary(_context_oid), _repo.get_current_branch(), _pushed_warning(_context_oid, true)], "Drop"):
+				_after_operation(_repo.drop_commit(_context_oid), "Drop")
+		ID_UNDO_LAST:
+			_after(_repo.undo_last_commit(), "Undo commit failed", true)
 
 
 func _summary(oid: String) -> String:
 	return String(_commits_by_oid.get(oid, {}).get("summary", ""))
 
 
-## Extra warning line when oid is already on a remote branch — moving the branch behind it means a force-push.
-func _pushed_warning(oid: String) -> String:
+## Extra warning line when oid is already on a remote branch — rewriting it means a force-push.
+func _pushed_warning(oid: String, rewrites: bool) -> String:
 	for name in _repo.branches_containing(oid):
 		if name.contains("/") and _repo.list_remotes().any(func(r: Dictionary) -> bool: return name.begins_with(r["name"] + "/")):
-			return "\n\n⚠ This commit is already on %s — moving the branch behind it means you'll have to force-push." % name
+			return "\n\n⚠ This commit is already on %s — %s" % [name, "rewriting it means you'll have to force-push." if rewrites else "moving the branch behind it means you'll have to force-push."]
 	return ""
 
 
