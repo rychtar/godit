@@ -3,6 +3,7 @@ extends EditorPlugin
 
 const GitTreeDockScene := preload("res://addons/git_tree/dock/git_tree_dock.tscn")
 const GitTreeHistoryDockScene := preload("res://addons/git_tree/dock/git_tree_history_dock.tscn")
+const DiffGutterScript := preload("res://addons/git_tree/dock/gutter/diff_gutter.gd")
 const GitCli := preload("res://addons/git_tree/util/git_cli.gd")
 
 ## Changes + Branches: left dock, alongside FileSystem/Import.
@@ -11,6 +12,8 @@ var dock_instance: Control
 ## reads better full-width than squeezed into a side dock. Just the
 ## starting position; the user can drag it anywhere.
 var history_dock_instance: Control
+## Changed-line flags in the script editor's gutter, next to Bookmarks.
+var diff_gutter: Node
 
 ## Same floor the Shader Editor uses, so the bottom panels can't be dragged down to an unusable sliver (they can still be hidden entirely).
 const BOTTOM_PANEL_MIN_HEIGHT := 300
@@ -28,6 +31,11 @@ func _enter_tree() -> void:
 	history_dock_instance.custom_minimum_size.y = BOTTOM_PANEL_MIN_HEIGHT
 	add_control_to_bottom_panel(history_dock_instance, "Git Log")
 
+	diff_gutter = DiffGutterScript.new()
+	add_child(diff_gutter)
+	diff_gutter.enable(self)
+
+	diff_gutter.change_clicked.connect(_on_gutter_change_clicked)
 	dock_instance.file_history_requested.connect(_show_file_history)
 
 
@@ -37,6 +45,9 @@ func _exit_tree() -> void:
 
 	remove_control_from_bottom_panel(history_dock_instance)
 	history_dock_instance.free()
+
+	diff_gutter.disable()
+	diff_gutter.free()
 
 	GitCli.restore_environment()
 
@@ -56,3 +67,7 @@ func _reveal_history_dock() -> void:
 		node.call("make_visible")
 	else:
 		make_bottom_panel_item_visible(history_dock_instance)
+
+
+func _on_gutter_change_clicked(rel_path: String, line: int) -> void:
+	dock_instance.reveal_change(rel_path, line)

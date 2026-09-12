@@ -303,6 +303,22 @@ func _reselect(root: TreeItem, path: String, scroll_y: float) -> void:
 		bar.set_deferred("value", scroll_y)
 
 
+## Selects path's row (showing its unstaged diff when it has one) and scrolls the diff to line.
+func reveal(path: String, line: int) -> void:
+	refresh()
+	var item := _find_item_by_path(_tree.get_root(), path)
+	if item == null:
+		return
+	_diff_side_by_path[path] = "unstaged"
+	var parent := item.get_parent()
+	while parent != null:
+		parent.collapsed = false
+		parent = parent.get_parent()
+	item.select(TEXT_COLUMN)
+	_tree.scroll_to_item(item)
+	_diff_view.scroll_to_line.call_deferred(line)
+
+
 func _find_item_by_path(item: TreeItem, path: String) -> TreeItem:
 	var child := item.get_first_child()
 	while child:

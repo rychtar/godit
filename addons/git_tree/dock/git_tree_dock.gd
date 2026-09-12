@@ -38,6 +38,12 @@ func _ready() -> void:
 	)
 
 
+## Scrolls the Changes diff to path/line, e.g. from a click on the script editor's change gutter.
+func reveal_change(path: String, line: int) -> void:
+	_tab_container.current_tab = _changes_panel.get_index()
+	_changes_panel.reveal(path, line)
+
+
 func _show_message(text: String) -> void:
 	_message_label.text = text
 	_message_label.visible = true

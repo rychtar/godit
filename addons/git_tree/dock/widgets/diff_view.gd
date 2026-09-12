@@ -203,6 +203,13 @@ func set_tabs(labels: Array, current: int = 0) -> void:
 	_tabs.set_block_signals(false)
 
 
+## Scrolls so new-file line `line` is in view (e.g. revealing a gutter marker's hunk).
+func scroll_to_line(line: int) -> void:
+	var y: float = _rows_view.y_for_new_line(line)
+	if y >= 0.0:
+		_scroll.scroll_vertical = int(maxf(0.0, y - _scroll.size.y * 0.3))
+
+
 func _rerender(keep_scroll: bool = false) -> void:
 	var parsed := _parse(_diff_text)
 	var split := DiffHunks.split_hunks(_diff_text)
@@ -638,6 +645,16 @@ class DiffRows:
 
 	func _row_top(display_index: int) -> float:
 		return CONTENT_PAD_Y + display_index * _row_height
+
+
+	## Y of the display row showing new-file line `line`, or -1.
+	func y_for_new_line(line: int) -> float:
+		for d in _display.size():
+			for key in ["u", "r"]:
+				var idx: int = _display[d].get(key, -1)
+				if idx >= 0 and _rows[idx]["type"] != "hunk" and int(_rows[idx]["new_no"]) >= line:
+					return _row_top(d)
+		return -1.0
 
 
 	func _draw() -> void:

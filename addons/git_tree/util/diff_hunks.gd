@@ -1,5 +1,116 @@
-## Splits a `git diff` into hunks and builds partial patches from them, for hunk/line staging. No class_name: internal helper, addressed via preload.
+## Parses a `git diff` unified diff into per-line change markers for the new file, for the script editor gutter. No class_name: internal helper, addressed via preload.
 extends RefCounted
+
+const HUNK_HEADER_PATTERN := "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@"
+
+
+## line(1-based int) -> {"type": "added"|"modified"|"deleted_before"|"deleted_after", "text": hunk text for DiffView}.
+static func classify_lines(diff_text: String) -> Dictionary:
+	var flags: Dictionary = {}
+	if diff_text.is_empty():
+		return flags
+
+	var regex := RegEx.new()
+	regex.compile(HUNK_HEADER_PATTERN)
+
+	var all_lines := diff_text.split("\n")
+	var i := 0
+	while i < all_lines.size():
+		var header_match := regex.search(all_lines[i])
+		if header_match == null:
+			i += 1
+			continue
+
+		var header_line: String = all_lines[i]
+		var new_start := header_match.get_string(3).to_int()
+		i += 1
+
+		var body_start := i
+		while i < all_lines.size() and not all_lines[i].begins_with("@@") and not all_lines[i].begins_with("diff --git"):
+			i += 1
+		var body := all_lines.slice(body_start, i)
+		var hunk_text := header_line + "\n" + "\n".join(PackedStringArray(body))
+
+		_classify_hunk(new_start, body, hunk_text, flags)
+
+	return flags
+
+
+static func _classify_hunk(new_start: int, body: Array, hunk_text: String, flags: Dictionary) -> void:
+	var new_line := new_start
+	var i := 0
+	var n := body.size()
+
+	while i < n:
+		var line: String = body[i]
+		if line.is_empty() or line[0] == "\\": # "\ No newline at end of file" — not a real line
+			i += 1
+			continue
+
+		match line[0]:
+			"-":
+				while i < n and body[i].begins_with("-"):
+					i += 1
+				var add_start := i
+				while i < n and body[i].begins_with("+"):
+					i += 1
+				var add_count := i - add_start
+
+				if add_count > 0:
+					for k in add_count:
+						flags[new_line + k] = { "type": "modified", "text": hunk_text }
+					new_line += add_count
+				else:
+					# Nothing added in its place — attach the marker to
+					# whichever new-file line now sits right before where
+					# the deleted text used to be (or line 1, if it was
+					# deleted from the very start of the file).
+					var attach_line := new_line - 1
+					if attach_line < 1:
+						flags[1] = { "type": "deleted_before", "text": hunk_text }
+					else:
+						flags[attach_line] = { "type": "deleted_after", "text": hunk_text }
+			"+":
+				var add_start2 := i
+				while i < n and body[i].begins_with("+"):
+					i += 1
+				var add_count2 := i - add_start2
+				for k in add_count2:
+					flags[new_line + k] = { "type": "added", "text": hunk_text }
+				new_line += add_count2
+			_: # context line
+				new_line += 1
+				i += 1
+
+
+## Changed regions of a zero-context (-U0) diff: [{"old_start", "old_count", "new_start", "new_count", "old_lines": PackedStringArray}], lines 1-based. new_count 0 = lines deleted after new_start (0 = at the top); old_count 0 = lines added.
+static func parse_regions(diff_text: String) -> Array:
+	var regex := RegEx.create_from_string(HUNK_HEADER_PATTERN)
+	var regions: Array = []
+	var current: Dictionary = {}
+	for line in diff_text.split("\n"):
+		var m := regex.search(line)
+		if m != null:
+			current = {
+				"old_start": m.get_string(1).to_int(),
+				"old_count": 1 if m.get_string(2).is_empty() else m.get_string(2).to_int(),
+				"new_start": m.get_string(3).to_int(),
+				"new_count": 1 if m.get_string(4).is_empty() else m.get_string(4).to_int(),
+				"old_lines": PackedStringArray(),
+			}
+			regions.append(current)
+		elif not current.is_empty() and line.begins_with("-"):
+			var old_lines: PackedStringArray = current["old_lines"]
+			old_lines.append(line.substr(1))
+			current["old_lines"] = old_lines
+	return regions
+
+
+## "added" | "modified" | "deleted" for a parse_regions() entry.
+static func region_type(region: Dictionary) -> String:
+	if region["old_count"] == 0:
+		return "added"
+	return "deleted" if region["new_count"] == 0 else "modified"
 
 
 ## Splits a single-file unified diff into {"file_header": String (everything before the first @@), "hunks": [{"header": String, "lines": PackedStringArray}]}.

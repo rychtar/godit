@@ -140,6 +140,45 @@ func get_commit_file_diff(oid: String, path: String, options: Dictionary = {}) -
 	return GitCli.run(_repo_root, args)["text"]
 
 
+## Working-tree diff against HEAD (staged + unstaged combined) — for the script editor's gutter.
+func get_diff_against_head(path: String) -> String:
+	var status_result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])
+	if status_result["text"].strip_edges().begins_with("??"):
+		return GitCli.run(_repo_root, ["diff", "--no-index", "--", "/dev/null", path])["text"]
+
+	if GitCli.run(_repo_root, ["rev-parse", "--verify", "-q", "HEAD"])["exit_code"] != 0:
+		return "" # unborn branch, nothing to diff against
+
+	return GitCli.run(_repo_root, ["diff", "HEAD", "--", path])["text"]
+
+
+## path's text in HEAD for the script editor gutter: "" for an untracked file (all of it counts as added), null when there's nothing to compare against (ignored, unborn branch).
+func get_head_text(path: String) -> Variant:
+	var shown := GitCli.run(_repo_root, ["show", "HEAD:" + path], false)
+	if shown["exit_code"] == 0:
+		return shown["text"]
+	if GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])["text"].strip_edges().begins_with("??"):
+		return ""
+	return null
+
+
+## Zero-context diff between two texts (e.g. HEAD and the editor's unsaved buffer), for DiffHunks.parse_regions().
+func diff_texts(old_text: String, new_text: String) -> String:
+	var stamp := Time.get_ticks_usec()
+	var old_path := OS.get_cache_dir().path_join("git_tree_old_%d.tmp" % stamp)
+	var new_path := OS.get_cache_dir().path_join("git_tree_new_%d.tmp" % stamp)
+	for pair in [[old_path, old_text], [new_path, new_text]]:
+		var f := FileAccess.open(pair[0], FileAccess.WRITE)
+		if f == null:
+			return ""
+		f.store_string(pair[1])
+		f.close()
+	var r := GitCli.run(_repo_root, ["diff", "--no-index", "--no-color", "-U0", "--", old_path, new_path])
+	DirAccess.remove_absolute(old_path)
+	DirAccess.remove_absolute(new_path)
+	return r["text"]
+
+
 ## Applies a patch built by DiffHunks.build_patch(). cached=true targets the index (stage/unstage), false the working tree (revert); reverse undoes the patch instead of applying it. --recount means partial-hunk patches needn't have exact line counts in their headers.
 func apply_patch(patch: String, cached: bool, reverse: bool, check_only := false) -> Dictionary:
 	var patch_path := OS.get_cache_dir().path_join("git_tree_patch_%d.patch" % Time.get_ticks_usec())
