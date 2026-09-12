@@ -10,6 +10,8 @@ extends RefCounted
 const RS := "\u001e"
 const US := "\u001f"
 
+const LOG_LIMIT := 400
+
 ## Env vars set for the whole editor process while the plugin is enabled, so no git command can ever block on an interactive prompt (there's no terminal to answer it) — see prepare_environment().
 const ENV_OVERRIDES := {
 	"GIT_TERMINAL_PROMPT": "0",
@@ -17,6 +19,11 @@ const ENV_OVERRIDES := {
 	"GIT_SEQUENCE_EDITOR": "true",
 	"GIT_MERGE_AUTOEDIT": "no",
 }
+
+## Every mutating/async command run, newest last: {"time": int, "args": PackedStringArray, "exit_code": int, "text": String}. Shared by all repo instances (static), read by the Git Console tab.
+static var command_log: Array = []
+## Bumped on every append, so the console can cheaply tell whether to redraw.
+static var command_log_revision := 0
 
 static var _saved_env: Dictionary = {}
 
@@ -29,7 +36,7 @@ static var _saved_env: Dictionary = {}
 ## commands where a failure's error text matters (commit, checkout,
 ## branch, reset, push). Leave it false for read-only commands whose
 ## stdout gets parsed, since git sometimes writes chatter to stderr even
-## on success.
+## on success. Mutating (include_stderr) calls are also recorded in command_log.
 static func run(repo_root: String, args: Array, include_stderr: bool = false) -> Dictionary:
 	var full_args: PackedStringArray = PackedStringArray(["-C", repo_root])
 	for a in args:
@@ -38,14 +45,29 @@ static func run(repo_root: String, args: Array, include_stderr: bool = false) ->
 	var output: Array = []
 	var exit_code := OS.execute("git", full_args, output, include_stderr, false)
 	var text: String = output[0] if not output.is_empty() else ""
+	if include_stderr:
+		record(args, exit_code, text)
 	return { "exit_code": exit_code, "text": text }
 
 
 ## Starts `git <args>` on a worker thread and returns a Job; `await job.finished` yields the same {"exit_code", "text", "cancelled"} shape as run() (stderr always included). For network operations, which would otherwise freeze the editor.
 static func start(repo_root: String, args: Array) -> Job:
 	var job := Job.new()
+	job.finished.connect(func(result: Dictionary) -> void: record(args, result["exit_code"], result["text"]))
 	job.start(repo_root, args)
 	return job
+
+
+static func record(args: Array, exit_code: int, text: String) -> void:
+	command_log.append({
+		"time": int(Time.get_unix_time_from_system()),
+		"args": PackedStringArray(args),
+		"exit_code": exit_code,
+		"text": text,
+	})
+	if command_log.size() > LOG_LIMIT:
+		command_log = command_log.slice(command_log.size() - LOG_LIMIT)
+	command_log_revision += 1
 
 
 ## Splits git output into non-empty lines.
@@ -175,7 +197,7 @@ class Job:
 		return ""
 
 
-	## Drops the progress meter lines --progress adds, so error text reads as it did without it.
+	## Drops the progress meter lines --progress adds, so the text (errors, Git Console) reads as it did without it.
 	func _strip_progress(text: String) -> String:
 		var kept := PackedStringArray()
 		for line in text.split("\n"):

@@ -2,12 +2,14 @@
 extends Control
 
 const RepoOpener := preload("res://addons/git_tree/util/repo_opener.gd")
+const GitConsole := preload("res://addons/git_tree/dock/widgets/git_console.gd")
 
 @onready var _message_label: Label = %MessageLabel
 @onready var _history_panel: Control = %HistoryPanel
 
 ## A git_cli_repo.gd instance, or null if this project isn't a git repo.
 var _repo: RefCounted
+var _tabs: TabContainer
 
 
 func _ready() -> void:
@@ -22,10 +24,28 @@ func _ready() -> void:
 	_message_label.visible = false
 	_history_panel.visible = true
 	_history_panel.set_repo(_repo)
+	_add_console_tab()
 
 
-## Filters the log to one file (Changes panel → Show History).
+## Log and Console share the bottom panel as tabs — the console lists every git command the plugin ran and can run your own.
+func _add_console_tab() -> void:
+	var tabs := TabContainer.new()
+	tabs.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(tabs)
+	remove_child(_history_panel)
+	_history_panel.name = "Log"
+	tabs.add_child(_history_panel)
+	var console := GitConsole.new()
+	console.name = "Console"
+	tabs.add_child(console)
+	console.set_repo(_repo)
+	_tabs = tabs
+
+
+## Filters the log to one file and brings the Log tab to front (Changes panel → Show History).
 func show_file_history(path: String) -> void:
 	if _repo == null:
 		return
+	if _tabs != null:
+		_tabs.current_tab = _history_panel.get_index()
 	_history_panel.set_path_filter(path)
