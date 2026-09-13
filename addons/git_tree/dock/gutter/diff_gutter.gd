@@ -1,4 +1,4 @@
-## Changed-line flags in the script editor's gutter, next to Bookmarks, computed from the editor's (possibly unsaved) text against HEAD. Clicking a flag emits change_clicked, which plugin.gd routes to the Changes panel.
+## Changed-line flags in the script editor's gutter, next to Bookmarks, computed from the editor's (possibly unsaved) text against HEAD. Clicking a flag opens an inline preview of the old lines (change_preview.gd); its "Show in Changes" button emits change_clicked, which plugin.gd routes to the Changes panel.
 extends Node
 
 signal change_clicked(rel_path: String, line: int)
@@ -6,6 +6,7 @@ signal change_clicked(rel_path: String, line: int)
 const GitCliRepo := preload("res://addons/git_tree/util/git_cli_repo.gd")
 const DiffHunks := preload("res://addons/git_tree/util/diff_hunks.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
+const ChangePreview := preload("res://addons/git_tree/dock/gutter/change_preview.gd")
 
 const GUTTER_NAME := "git_tree_diff"
 const GUTTER_WIDTH := 14
@@ -16,6 +17,7 @@ const META_FLAGS := "git_tree_diff_flags"
 ## DiffHunks.parse_regions() of HEAD -> the editor's text.
 const META_REGIONS := "git_tree_diff_regions"
 const META_REL_PATH := "git_tree_rel_path"
+const META_RES_PATH := "git_tree_res_path"
 ## Path, text hash and HEAD the flags were computed from, so unchanged tabs skip git.
 const META_SIGNATURE := "git_tree_diff_signature"
 
@@ -23,6 +25,7 @@ var _script_editor: ScriptEditor
 var _refresh_timer: Timer
 ## [CodeEdit, Callable] pairs connected to gutter_clicked, so disable() can disconnect them (the CodeEdits outlive a plugin reload).
 var _connections: Array = []
+var _preview: Control
 
 
 func enable(_plugin: EditorPlugin) -> void:
@@ -38,6 +41,7 @@ func enable(_plugin: EditorPlugin) -> void:
 
 
 func disable() -> void:
+	close_preview()
 	if _refresh_timer:
 		_refresh_timer.queue_free()
 	for pair in _connections:
@@ -81,8 +85,8 @@ static func resolve_repo(res_path: String) -> Dictionary:
 	return { "repo": repo, "rel_path": abs_path.substr(repo_root.length() + 1) }
 
 
-## Recomputes code_edit's flags unless its text and HEAD are unchanged since last time.
-func refresh_code_edit(code_edit: CodeEdit, res_path: String) -> void:
+## Recomputes code_edit's flags unless its text and HEAD are unchanged since last time (force skips that check).
+func refresh_code_edit(code_edit: CodeEdit, res_path: String, force := false) -> void:
 	var resolved := resolve_repo(res_path)
 	if resolved.is_empty():
 		return
@@ -91,7 +95,8 @@ func refresh_code_edit(code_edit: CodeEdit, res_path: String) -> void:
 	var signature := "%s|%d|%s" % [resolved["rel_path"], text.hash(), repo.get_head_oid()]
 	_install_gutter(code_edit)
 	code_edit.set_meta(META_REL_PATH, resolved["rel_path"])
-	if code_edit.get_meta(META_SIGNATURE, "") == signature:
+	code_edit.set_meta(META_RES_PATH, res_path)
+	if not force and code_edit.get_meta(META_SIGNATURE, "") == signature:
 		return
 	code_edit.set_meta(META_SIGNATURE, signature)
 
@@ -168,8 +173,79 @@ func _on_gutter_clicked(line: int, gutter: int, code_edit: CodeEdit) -> void:
 		return
 	var region := region_at_line(code_edit, line)
 	if region != -1:
-		var regions: Array = code_edit.get_meta(META_REGIONS, [])
+		show_preview(code_edit, region)
+
+
+# --- inline preview ------------------------------------------------------------
+
+
+## Opens the old-lines preview under region (an index into META_REGIONS), replacing any open one.
+func show_preview(code_edit: CodeEdit, region: int) -> void:
+	close_preview()
+	var regions: Array = code_edit.get_meta(META_REGIONS, [])
+	if region < 0 or region >= regions.size():
+		return
+	_preview = ChangePreview.new()
+	_preview.navigate_requested.connect(func(delta: int) -> void:
+		var target := region + delta
+		if target >= 0 and target < regions.size():
+			code_edit.set_caret_line(maxi(regions[target]["new_start"] - 1, 0))
+			code_edit.center_viewport_to_caret()
+			show_preview(code_edit, target)
+	)
+	_preview.rollback_requested.connect(func() -> void: rollback(code_edit, region))
+	_preview.show_in_changes_requested.connect(func() -> void:
 		change_clicked.emit(code_edit.get_meta(META_REL_PATH, ""), maxi(regions[region]["new_start"], 1))
+		close_preview()
+	)
+	_preview.closed.connect(func() -> void: _preview = null)
+	_preview.open(code_edit, regions, region, code_edit.get_meta(META_REL_PATH, ""))
+
+
+func close_preview() -> void:
+	if is_instance_valid(_preview):
+		_preview.close()
+	_preview = null
+
+
+## Puts region's HEAD lines back in the editor buffer — one undoable edit, nothing written to disk.
+func rollback(code_edit: CodeEdit, region_index: int) -> void:
+	var regions: Array = code_edit.get_meta(META_REGIONS, [])
+	if region_index < 0 or region_index >= regions.size():
+		return
+	close_preview()
+	var r: Dictionary = regions[region_index]
+	var old_text := "\n".join(r["old_lines"])
+	var first: int = r["new_start"] - 1 # 0-based first changed line
+	var count: int = r["new_count"]
+	code_edit.begin_complex_operation()
+	if count == 0:
+		# Deletion after line new_start: re-insert below it (or at the very top).
+		if r["new_start"] == 0:
+			code_edit.insert_text(old_text + "\n", 0, 0)
+		else:
+			code_edit.insert_text("\n" + old_text, first, code_edit.get_line(first).length())
+	elif r["old_count"] == 0:
+		_remove_lines(code_edit, first, count)
+	else:
+		var last := first + count - 1
+		code_edit.remove_text(first, 0, last, code_edit.get_line(last).length())
+		code_edit.insert_text(old_text, first, 0)
+	code_edit.end_complex_operation()
+	code_edit.set_caret_line(clampi(first, 0, code_edit.get_line_count() - 1))
+	refresh_code_edit(code_edit, code_edit.get_meta(META_RES_PATH, ""), true)
+
+
+## Removes count whole lines starting at first, newlines included.
+static func _remove_lines(code_edit: CodeEdit, first: int, count: int) -> void:
+	var after := first + count
+	if after < code_edit.get_line_count():
+		code_edit.remove_text(first, 0, after, 0)
+	elif first > 0:
+		var last := code_edit.get_line_count() - 1
+		code_edit.remove_text(first - 1, code_edit.get_line(first - 1).length(), last, code_edit.get_line(last).length())
+	else:
+		code_edit.remove_text(0, 0, code_edit.get_line_count() - 1, code_edit.get_line(code_edit.get_line_count() - 1).length())
 
 
 ## line is 0-based (Godot's convention); flags is keyed 1-based (git's convention, from DiffHunks).
