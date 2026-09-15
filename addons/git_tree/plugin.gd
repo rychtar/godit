@@ -4,6 +4,7 @@ extends EditorPlugin
 const GitTreeDockScene := preload("res://addons/git_tree/dock/git_tree_dock.tscn")
 const GitTreeHistoryDockScene := preload("res://addons/git_tree/dock/git_tree_history_dock.tscn")
 const DiffGutterScript := preload("res://addons/git_tree/dock/gutter/diff_gutter.gd")
+const ScriptMenuScript := preload("res://addons/git_tree/dock/gutter/script_menu.gd")
 const GitCli := preload("res://addons/git_tree/util/git_cli.gd")
 
 ## Changes + Branches: left dock, alongside FileSystem/Import.
@@ -14,6 +15,8 @@ var dock_instance: Control
 var history_dock_instance: Control
 ## Changed-line flags in the script editor's gutter, next to Bookmarks.
 var diff_gutter: Node
+## "Git" submenu in the script editor's right-click menu.
+var script_menu: EditorContextMenuPlugin
 
 ## Same floor the Shader Editor uses, so the bottom panels can't be dragged down to an unusable sliver (they can still be hidden entirely).
 const BOTTOM_PANEL_MIN_HEIGHT := 300
@@ -36,6 +39,11 @@ func _enter_tree() -> void:
 	diff_gutter.enable(self)
 
 	diff_gutter.change_clicked.connect(_on_gutter_change_clicked)
+
+	script_menu = ScriptMenuScript.new()
+	script_menu.diff_gutter = diff_gutter
+	script_menu.show_file_history = _show_file_history
+	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_SCRIPT_EDITOR_CODE, script_menu)
 	dock_instance.file_history_requested.connect(_show_file_history)
 
 
@@ -48,6 +56,8 @@ func _exit_tree() -> void:
 
 	diff_gutter.disable()
 	diff_gutter.free()
+	remove_context_menu_plugin(script_menu)
+	script_menu = null
 
 	GitCli.restore_environment()
 
