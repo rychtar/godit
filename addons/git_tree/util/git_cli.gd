@@ -51,9 +51,10 @@ static func run(repo_root: String, args: Array, include_stderr: bool = false) ->
 
 
 ## Starts `git <args>` on a worker thread and returns a Job; `await job.finished` yields the same {"exit_code", "text", "cancelled"} shape as run() (stderr always included). For network operations, which would otherwise freeze the editor.
-static func start(repo_root: String, args: Array) -> Job:
+static func start(repo_root: String, args: Array, log_to_console := true) -> Job:
 	var job := Job.new()
-	job.finished.connect(func(result: Dictionary) -> void: record(args, result["exit_code"], result["text"]))
+	if log_to_console:
+		job.finished.connect(func(result: Dictionary) -> void: record(args, result["exit_code"], result["text"]))
 	job.start(repo_root, args)
 	return job
 

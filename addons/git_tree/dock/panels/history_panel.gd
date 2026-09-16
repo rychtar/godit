@@ -210,6 +210,20 @@ func set_repo(repo: RefCounted) -> void:
 
 
 ## Limits the log to commits touching path ("" = no filter) — the Changes panel's "Show History".
+## Selects oid in the graph (e.g. from a click in the blame column), looking it up by hash if it isn't among the loaded commits.
+func show_commit(oid: String) -> void:
+	if _repo == null:
+		return
+	var shown: Array = _search_results if _search_results != null else _all_commits
+	if not shown.any(func(c: Dictionary) -> bool: return c["oid"] == oid):
+		_search_mode.select(0)
+		_update_search_placeholder()
+		_search_edit.text = oid.substr(0, 12)
+		_on_search_edit_text_changed(_search_edit.text)
+		await _run_full_search()
+	_graph.select_oid(oid)
+
+
 func set_path_filter(path: String) -> void:
 	_path_filter = path
 	_path_chip.visible = not path.is_empty()

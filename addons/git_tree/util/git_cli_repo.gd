@@ -857,6 +857,56 @@ func search_commits(query: String, mode: String, limit: int, options: Dictionary
 var _search_job: RefCounted = null
 
 
+## Per-line blame of path as it reads in contents (the editor's possibly unsaved text): [{"oid", "author", "time", "summary"}], 0-based by line; "oid" is "" for uncommitted lines. null if git failed. Coroutine (background thread).
+func blame(path: String, contents: String) -> Variant:
+	var tmp_path := OS.get_cache_dir().path_join("git_tree_blame_%d.tmp" % Time.get_ticks_usec())
+	var tmp := FileAccess.open(tmp_path, FileAccess.WRITE)
+	if tmp == null:
+		return null
+	tmp.store_string(contents)
+	tmp.close()
+	var job := GitCli.start(_repo_root, ["blame", "--porcelain", "--contents", tmp_path, "--", path], false)
+	var r: Dictionary = await job.finished
+	DirAccess.remove_absolute(tmp_path)
+	if r["exit_code"] != 0:
+		return null
+	return _parse_blame(r["text"])
+
+
+## --porcelain: a "<oid> <orig> <final> [count]" header per line, commit details only the first time an oid appears, then a tab-prefixed content line.
+func _parse_blame(text: String) -> Array:
+	var commits := {}
+	var lines: Array = []
+	var oid := ""
+	for line in text.split("\n"):
+		if line.begins_with("\t"):
+			var c: Dictionary = commits.get(oid, {})
+			var committed := not oid.is_empty() and oid.lstrip("0") != ""
+			lines.append({
+				"oid": oid if committed else "",
+				"author": c.get("author", "") if committed else "",
+				"time": c.get("time", 0) if committed else 0,
+				"summary": c.get("summary", "") if committed else "",
+			})
+			continue
+		var space := line.find(" ")
+		if space == -1:
+			continue
+		var key := line.substr(0, space)
+		var value := line.substr(space + 1)
+		if key.length() >= 40 and key.is_valid_hex_number():
+			oid = key
+			if not commits.has(oid):
+				commits[oid] = {}
+		elif key == "author":
+			commits[oid]["author"] = value
+		elif key == "author-time":
+			commits[oid]["time"] = value.to_int()
+		elif key == "summary":
+			commits[oid]["summary"] = value
+	return lines
+
+
 func cancel_search() -> void:
 	if _search_job != null:
 		_search_job.cancel()

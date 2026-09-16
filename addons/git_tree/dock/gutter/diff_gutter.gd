@@ -73,7 +73,7 @@ func _refresh_current() -> void:
 	refresh_code_edit(code_edit, res_path)
 
 
-## {"repo": GitCliRepo, "rel_path": String} for res_path, or {} if it's not inside a git repo.
+## {"repo": GitCliRepo, "rel_path": String} for res_path, or {} if it's not inside a git repo. Shared with blame_gutter.gd.
 static func resolve_repo(res_path: String) -> Dictionary:
 	var abs_path := ProjectSettings.globalize_path(res_path)
 	var repo := GitCliRepo.new()
@@ -160,7 +160,7 @@ func _install_gutter(code_edit: CodeEdit) -> void:
 		_connections.append([code_edit, on_click])
 
 
-## Looked up by name every time: other gutters can be added or removed around this one, which shifts indices.
+## Looked up by name every time: the blame gutter is inserted next to this one, which shifts indices.
 static func gutter_index(code_edit: CodeEdit, gutter_name: String) -> int:
 	for i in code_edit.get_gutter_count():
 		if code_edit.get_gutter_name(i) == gutter_name:

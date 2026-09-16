@@ -42,6 +42,15 @@ func _add_console_tab() -> void:
 	_tabs = tabs
 
 
+## Brings the Log tab to front with oid selected.
+func show_commit(oid: String) -> void:
+	if _repo == null:
+		return
+	if _tabs != null:
+		_tabs.current_tab = _history_panel.get_index()
+	_history_panel.show_commit(oid)
+
+
 ## Filters the log to one file and brings the Log tab to front (Changes panel → Show History).
 func show_file_history(path: String) -> void:
 	if _repo == null:
