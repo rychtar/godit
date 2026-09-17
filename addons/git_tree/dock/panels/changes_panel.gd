@@ -43,6 +43,9 @@ const ID_IGNORE_FOLDER := 21
 ## "Show History" on a file — git_tree_dock.gd forwards it to the Git Log panel.
 signal file_history_requested(path: String)
 
+## Only ticks while the panel is actually on screen — see _notification().
+const AUTO_REFRESH_INTERVAL := 3.0
+
 ## ChangesTree has two columns: the checkbox needs its own narrow column,
 ## since Godot toggles a CELL_MODE_CHECK cell on any click anywhere inside
 ## it, and a single wide column meant clicking the filename also toggled
@@ -96,6 +99,7 @@ var _name_dialog_rename_target := ""
 ## Which action _revert_confirm_dialog is currently being used for: "revert" or "remove".
 var _confirm_dialog_action := "revert"
 
+var _auto_refresh_timer: Timer
 var _operation_bar: HBoxContainer
 
 ## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar (see _update_operation_banner()).
@@ -113,6 +117,11 @@ var _branch_seen := false
 var _diff_side_by_path := {}
 ## Which side the diff view is showing right now ("unstaged"/"staged"), so Revert knows where the hunk lives.
 var _diff_side := "unstaged"
+
+## Signature of the last-seen `git status` (see _status_signature()) — lets
+## the auto-refresh timer skip rebuilding the tree when nothing changed,
+## which would otherwise reset scroll position and selection every tick.
+var _last_status_signature := ""
 
 
 func _ready() -> void:
@@ -154,6 +163,30 @@ func _ready() -> void:
 	_commit_message.gui_input.connect(_on_commit_message_gui_input)
 	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push"
 
+	_auto_refresh_timer = Timer.new()
+	_auto_refresh_timer.wait_time = AUTO_REFRESH_INTERVAL
+	_auto_refresh_timer.timeout.connect(_maybe_refresh)
+	add_child(_auto_refresh_timer)
+
+
+## Starts/stops the polling timer as the panel is shown/hidden (tab switch,
+## dock switch, or the whole dock closing) instead of ticking forever in the
+## background — see AUTO_REFRESH_INTERVAL.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		_update_auto_refresh_timer()
+
+
+func _update_auto_refresh_timer() -> void:
+	if _auto_refresh_timer == null:
+		return
+	if _repo != null and is_visible_in_tree():
+		if _auto_refresh_timer.is_stopped():
+			_auto_refresh_timer.start()
+			_maybe_refresh() # catch up on anything that changed while hidden
+	else:
+		_auto_refresh_timer.stop()
+
 
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
@@ -161,12 +194,38 @@ func set_repo(repo: RefCounted) -> void:
 	_changelist_state = ChangelistStore.load_state(_repo.get_repo_root())
 	_sync_staging_to_active_changelist()
 	refresh()
+	_update_auto_refresh_timer()
 
 
-func refresh() -> void:
+## Re-fetches status and only calls refresh() — which rebuilds the tree from
+## scratch — if something actually changed since the last check.
+func _maybe_refresh() -> void:
 	if _repo == null:
 		return
+	if _repo.is_busy():
+		return # a pull/push is rewriting things right now — catch up once it's done
 	var entries: Array = _repo.get_status()
+	if _status_signature(entries) == _last_status_signature:
+		return
+	refresh(entries)
+
+
+func _status_signature(entries: Array) -> String:
+	# HEAD and upstream tips too, so the branch label's ahead/behind updates after a push/fetch even when no file changed.
+	var tips: String = _repo.run_read(["rev-parse", "HEAD", "@{upstream}"])["text"]
+	var parts: Array = [_repo.get_operation_state()["kind"], _repo.get_current_branch(), tips]
+	for entry in entries:
+		parts.append("%s:%d" % [entry["path"], entry["status"]])
+	return "|".join(parts)
+
+
+## status_entries lets callers that already fetched `git status` (e.g.
+## _maybe_refresh()) pass it along instead of fetching it twice.
+func refresh(status_entries: Variant = null) -> void:
+	if _repo == null:
+		return
+	var entries: Array = status_entries if status_entries != null else _repo.get_status()
+	_last_status_signature = _status_signature(entries)
 	_follow_branch_switch()
 
 	var selected_path := ""
@@ -289,7 +348,7 @@ func refresh() -> void:
 	_update_commit_buttons_enabled(any_staged)
 
 
-## Re-selects the file that was selected before the tree was rebuilt (so refreshes and hunk actions don't lose your place), or clears the diff if it's gone.
+## Re-selects the file that was selected before the tree was rebuilt (so auto-refresh and hunk actions don't lose your place), or clears the diff if it's gone.
 func _reselect(root: TreeItem, path: String, scroll_y: float) -> void:
 	var found: TreeItem = null
 	if not path.is_empty():

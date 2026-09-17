@@ -422,6 +422,8 @@ signal job_progress(text: String)
 
 ## The background job currently running for this repo (fetch/pull/push...), or null. See cancel_current().
 var current_job: RefCounted = null
+## True while current_job is an automatic fetch nobody is waiting on — it doesn't count as busy, and gives way to any user operation.
+var _current_job_is_auto := false
 
 
 ## Kills whatever network operation is in flight; its awaiting caller gets {"ok": false, "cancelled": true}.
@@ -431,17 +433,23 @@ func cancel_current() -> void:
 
 
 func is_busy() -> bool:
-	return current_job != null
+	return current_job != null and not _current_job_is_auto
 
 
 ## Runs git on a worker thread (see GitCli.start()). Coroutine — callers must await it. {"ok", "error", "output", "cancelled"}.
-func _run_async(args: Array) -> Dictionary:
+func _run_async(args: Array, auto := false) -> Dictionary:
+	if current_job != null and _current_job_is_auto:
+		var running: RefCounted = current_job
+		running.cancel()
+		await running.finished
 	var job := GitCli.start(_repo_root, args)
 	job.progress.connect(job_progress.emit)
 	current_job = job
+	_current_job_is_auto = auto
 	var r: Dictionary = await job.finished
 	if current_job == job:
 		current_job = null
+		_current_job_is_auto = false
 	var text: String = String(r["text"]).strip_edges()
 	return {
 		"ok": r["exit_code"] == 0,
@@ -460,6 +468,13 @@ func fetch(remote_name: String = "", prune: bool = false) -> Dictionary:
 		args.append("--prune")
 	args.append("--tags")
 	return await _run_async(args)
+
+
+## Periodic fetch of all remotes: skipped (returns {}) while anything else runs, and cancelled by any user operation. Coroutine.
+func auto_fetch() -> Dictionary:
+	if current_job != null or list_remotes().is_empty():
+		return {}
+	return await _run_async(["fetch", "--all", "--tags", "--quiet"], true)
 
 
 ## Fetches and integrates the upstream; strategy "" (git config), "merge", "rebase" or "ff-only". Conflicts leave the repo mid-merge. Coroutine.
@@ -563,6 +578,11 @@ func rename_remote(old_name: String, new_name: String) -> Dictionary:
 
 func set_remote_url(name: String, url: String) -> Dictionary:
 	return _simple(["remote", "set-url", name, url])
+
+
+## Read-only git call for callers that only need raw output (e.g. change-detection signatures).
+func run_read(args: Array) -> Dictionary:
+	return GitCli.run(_repo_root, args)
 
 
 ## Array[{"ref": "stash@{0}", "message", "date"}], newest first.

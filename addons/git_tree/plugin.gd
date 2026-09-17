@@ -8,6 +8,7 @@ const BlameGutterScript := preload("res://addons/git_tree/dock/gutter/blame_gutt
 const ScriptMenuScript := preload("res://addons/git_tree/dock/gutter/script_menu.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 const GitCli := preload("res://addons/git_tree/util/git_cli.gd")
+const GitTreeDockScript := preload("res://addons/git_tree/dock/git_tree_dock.gd")
 
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
@@ -24,6 +25,8 @@ var script_menu: EditorContextMenuPlugin
 ## Project > Tools > Git Tree submenu.
 var tools_menu: PopupMenu
 
+const ID_AUTO_FETCH := 3
+
 ## Same floor the Shader Editor uses, so the bottom panels can't be dragged down to an unusable sliver (they can still be hidden entirely).
 const BOTTOM_PANEL_MIN_HEIGHT := 300
 
@@ -35,6 +38,8 @@ func _enter_tree() -> void:
 	GitCli.prepare_environment()
 
 	tools_menu = PopupMenu.new()
+	tools_menu.add_check_item("Fetch remotes in the background every %d min" % int(GitTreeDockScript.AUTO_FETCH_INTERVAL_SECS / 60), ID_AUTO_FETCH)
+	tools_menu.set_item_checked(tools_menu.get_item_index(ID_AUTO_FETCH), Settings.get_value(GitTreeDockScript.AUTO_FETCH_SETTING_KEY, false))
 	tools_menu.add_check_item("Show blame in the script editor", ID_BLAME)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_BLAME), Settings.get_value(BLAME_SETTING_KEY, false))
 	tools_menu.id_pressed.connect(_on_tools_menu_id_pressed)
@@ -129,3 +134,6 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 	match id:
 		ID_BLAME:
 			_set_blame_enabled(checked)
+		ID_AUTO_FETCH:
+			Settings.set_value(GitTreeDockScript.AUTO_FETCH_SETTING_KEY, checked)
+			dock_instance.apply_auto_fetch_setting()

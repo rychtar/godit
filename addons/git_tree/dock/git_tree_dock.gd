@@ -3,6 +3,10 @@ extends Control
 
 const RepoOpener := preload("res://addons/git_tree/util/repo_opener.gd")
 const ChangesetDialog := preload("res://addons/git_tree/dock/widgets/changeset_dialog.gd")
+const Settings := preload("res://addons/git_tree/util/settings.gd")
+
+const AUTO_FETCH_SETTING_KEY := "auto_fetch"
+const AUTO_FETCH_INTERVAL_SECS := 600.0
 
 ## Forwarded from the Changes panel; plugin.gd routes it to the Git Log panel. 
 signal file_history_requested(path: String)
@@ -17,6 +21,7 @@ var plugin: EditorPlugin
 
 ## A git_cli_repo.gd instance, or null if this project isn't a git repo.
 var _repo: RefCounted
+var _auto_fetch_timer: Timer
 
 
 func _ready() -> void:
@@ -36,6 +41,31 @@ func _ready() -> void:
 		add_child(dialog)
 		dialog.open(_repo, title, base, target)
 	)
+
+	_auto_fetch_timer = Timer.new()
+	_auto_fetch_timer.wait_time = AUTO_FETCH_INTERVAL_SECS
+	_auto_fetch_timer.timeout.connect(_on_auto_fetch_timeout)
+	add_child(_auto_fetch_timer)
+	apply_auto_fetch_setting()
+
+
+## Called by plugin.gd when the Tools menu toggle changes.
+func apply_auto_fetch_setting() -> void:
+	if _auto_fetch_timer == null:
+		return
+	if Settings.get_value(AUTO_FETCH_SETTING_KEY, false):
+		if _auto_fetch_timer.is_stopped():
+			_auto_fetch_timer.start()
+	else:
+		_auto_fetch_timer.stop()
+
+
+## Silent on failure (offline, no credentials): the manual Fetch button is where errors get explained.
+func _on_auto_fetch_timeout() -> void:
+	var r: Dictionary = await _repo.auto_fetch()
+	if r.get("ok", false) and is_instance_valid(_changes_panel):
+		_changes_panel.refresh()
+		_branches_panel.refresh()
 
 
 ## Scrolls the Changes diff to path/line, e.g. from a click on the script editor's change gutter.

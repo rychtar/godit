@@ -8,6 +8,9 @@ const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
 const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
 const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 
+## Only ticks while the panel is actually on screen — see _notification().
+const AUTO_REFRESH_INTERVAL := 3.0
+
 enum {
 	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_MERGE, ID_REBASE, ID_PUSH_BRANCH, ID_SET_UPSTREAM,
 	ID_UNSET_UPSTREAM, ID_RENAME, ID_DELETE, ID_DELETE_REMOTE_BRANCH, ID_COPY_NAME,
@@ -30,6 +33,8 @@ var _sync_bar: VBoxContainer
 ## Below this width the tree drops to a single column (side-dock mode).
 const WIDE_MIN_WIDTH := 520.0
 var _wide := true
+var _auto_refresh_timer: Timer
+var _last_signature := ""
 
 ## {"kind": "local"|"remote_branch"|"tag"|"remote"|"stash"|"section", ...} for whatever the context menu was opened on.
 var _context: Dictionary = {}
@@ -59,16 +64,48 @@ func _ready() -> void:
 			_show_context_menu({ "kind": "section", "title": "Local" }, _tree.get_screen_position() + pos)
 	)
 
+	_auto_refresh_timer = Timer.new()
+	_auto_refresh_timer.wait_time = AUTO_REFRESH_INTERVAL
+	_auto_refresh_timer.timeout.connect(_maybe_refresh)
+	add_child(_auto_refresh_timer)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and _auto_refresh_timer != null:
+		if _repo != null and is_visible_in_tree():
+			if _auto_refresh_timer.is_stopped():
+				_auto_refresh_timer.start()
+				_maybe_refresh()
+		else:
+			_auto_refresh_timer.stop()
+
 
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
 	_sync_bar.set_repo(repo)
 	refresh()
+	_notification(NOTIFICATION_VISIBILITY_CHANGED)
+
+
+## Cheap check (refs + stash list) so the tree is only rebuilt — losing scroll and selection — when something changed.
+func _maybe_refresh() -> void:
+	if _repo == null or _repo.is_busy():
+		return
+	if _signature() != _last_signature:
+		refresh()
+
+
+func _signature() -> String:
+	var refs: Dictionary = _repo.run_read(["for-each-ref", "--format=%(refname) %(objectname) %(HEAD) %(upstream:track)"])
+	var remotes: Dictionary = _repo.run_read(["remote", "-v"])
+	var stashes: Dictionary = _repo.run_read(["stash", "list", "--format=%H"])
+	return refs["text"] + remotes["text"] + stashes["text"]
 
 
 func refresh() -> void:
 	if _repo == null:
 		return
+	_last_signature = _signature()
 	_sync_bar.refresh()
 
 	var scroll := _tree.get_scroll()
