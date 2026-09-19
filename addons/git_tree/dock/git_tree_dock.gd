@@ -37,15 +37,17 @@ func _ready() -> void:
 	_branches_panel.set_repo(_repo)
 	_changes_panel.file_history_requested.connect(func(path: String) -> void: file_history_requested.emit(path))
 	_branches_panel.compare_requested.connect(func(title: String, base: String, target: String) -> void:
+		# Parented to the panel, not this dock: in bottom-panel mode the dock itself isn't in the scene tree.
 		var dialog := ChangesetDialog.new()
-		add_child(dialog)
+		_branches_panel.add_child(dialog)
 		dialog.open(_repo, title, base, target)
 	)
 
 	_auto_fetch_timer = Timer.new()
 	_auto_fetch_timer.wait_time = AUTO_FETCH_INTERVAL_SECS
 	_auto_fetch_timer.timeout.connect(_on_auto_fetch_timeout)
-	add_child(_auto_fetch_timer)
+	# On a panel, not this dock: in bottom-panel mode the dock is out of the tree and its timers wouldn't tick.
+	_changes_panel.add_child(_auto_fetch_timer)
 	apply_auto_fetch_setting()
 
 
@@ -70,7 +72,8 @@ func _on_auto_fetch_timeout() -> void:
 
 ## Scrolls the Changes diff to path/line, e.g. from a click on the script editor's change gutter.
 func reveal_change(path: String, line: int) -> void:
-	_tab_container.current_tab = _changes_panel.get_index()
+	if _changes_panel.get_parent() == _tab_container:
+		_tab_container.current_tab = _changes_panel.get_index()
 	_changes_panel.reveal(path, line)
 
 
@@ -78,3 +81,18 @@ func _show_message(text: String) -> void:
 	_message_label.text = text
 	_message_label.visible = true
 	_tab_container.visible = false
+
+
+## Pulls Changes and Branches out of the tab bar together, so plugin.gd can dock both at the bottom instead.
+func detach_panels() -> Dictionary:
+	_tab_container.remove_child(_changes_panel)
+	_tab_container.remove_child(_branches_panel)
+	return {"changes": _changes_panel, "branches": _branches_panel}
+
+
+## Reverses detach_panels() when the toggle is switched back off.
+func reattach_panels(panels: Dictionary) -> void:
+	_changes_panel = panels["changes"]
+	_branches_panel = panels["branches"]
+	_tab_container.add_child(_changes_panel)
+	_tab_container.add_child(_branches_panel)
