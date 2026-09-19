@@ -3,6 +3,7 @@
 extends ConfirmationDialog
 
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 
 ## Emitted after the file was saved; marked is true when it was also `git add`-ed.
 signal saved(path: String, marked: bool)
@@ -25,7 +26,7 @@ func _init() -> void:
 	ok_button_text = "Save and Mark Resolved"
 	unresizable = false
 	exclusive = false
-	min_size = Vector2i(720, 460)
+	min_size = UiScale.size_i(720, 460)
 	add_button("Save Only", true, "save")
 	confirmed.connect(func() -> void: _save(true))
 	custom_action.connect(func(action: StringName) -> void:
@@ -55,7 +56,7 @@ func open(repo: RefCounted, path: String) -> bool:
 	title = "Resolve Conflicts — %s" % path
 	_build(conflict_count)
 	var screen := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen()).size
-	popup_centered(Vector2i(mini(1200, int(screen.x * 0.85)), mini(820, int(screen.y * 0.85))))
+	popup_centered(Vector2i(mini(int(UiScale.px(1200)), int(screen.x * 0.85)), mini(int(UiScale.px(820)), int(screen.y * 0.85))))
 	_update_status()
 	return true
 
@@ -217,7 +218,7 @@ func _code_edit(text: String, editable: bool) -> CodeEdit:
 	edit.editable = editable
 	edit.gutters_draw_line_numbers = true
 	edit.scroll_fit_content_height = true
-	edit.custom_minimum_size = Vector2(0, 48)
+	edit.custom_minimum_size = UiScale.size(0, 48)
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if Engine.is_editor_hint() and EditorInterface.get_editor_theme() != null and EditorInterface.get_editor_theme().has_font("source", "EditorFonts"):
 		edit.add_theme_font_override("font", EditorInterface.get_editor_theme().get_font("source", "EditorFonts"))

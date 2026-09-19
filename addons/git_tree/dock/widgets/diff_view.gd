@@ -5,6 +5,7 @@ const HUNK_HEADER_PATTERN := "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@(.
 const DiffHunks := preload("res://addons/git_tree/util/diff_hunks.gd")
 const SyntaxColors := preload("res://addons/git_tree/util/syntax_colors.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 
 const OPT_SIDE_BY_SIDE := 0
 const OPT_IGNORE_WHITESPACE := 1
@@ -489,14 +490,15 @@ class DiffRows:
 	signal action_pressed(action: String, hunk: int, selected: PackedInt32Array)
 	signal row_double_clicked(new_line: int)
 
-	const GUTTER_PAD := 10.0
-	const MARKER_WIDTH := 22.0
-	const TEXT_RIGHT_PAD := 24.0
-	const LINE_PAD_Y := 6.0
-	const CONTENT_PAD_Y := 4.0
-	const BUTTON_PAD_X := 8.0
-	const BUTTON_GAP := 6.0
-	const SIDE_GAP := 6.0
+	## Pixel metrics, scaled by the editor's display scale (vars, not consts, for that reason).
+	var GUTTER_PAD := UiScale.px(10.0)
+	var MARKER_WIDTH := UiScale.px(22.0)
+	var TEXT_RIGHT_PAD := UiScale.px(24.0)
+	var LINE_PAD_Y := UiScale.px(6.0)
+	var CONTENT_PAD_Y := UiScale.px(4.0)
+	var BUTTON_PAD_X := UiScale.px(8.0)
+	var BUTTON_GAP := UiScale.px(6.0)
+	var SIDE_GAP := UiScale.px(6.0)
 
 	const COLOR_ADDED_BG := Color(0.208, 0.408, 0.235, 0.35)
 	const COLOR_REMOVED_BG := Color(0.443, 0.176, 0.192, 0.35)

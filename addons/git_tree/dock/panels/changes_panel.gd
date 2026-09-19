@@ -2,6 +2,7 @@
 extends Control
 
 const GitStatusFlags := preload("res://addons/git_tree/util/git_status_flags.gd")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
@@ -125,6 +126,9 @@ var _last_status_signature := ""
 
 
 func _ready() -> void:
+	if UiScale.is_in_edited_scene(self):
+		return # opened in the scene editor, not running in a dock
+	UiScale.scale_scene(self)
 	_tree.columns = 2
 	_tree.set_column_expand(CHECKBOX_COLUMN, false)
 	_tree.set_column_custom_minimum_width(CHECKBOX_COLUMN, CHECKBOX_COLUMN_WIDTH)

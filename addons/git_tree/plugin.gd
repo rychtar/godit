@@ -2,6 +2,7 @@
 extends EditorPlugin
 
 const GitTreeDockScene := preload("res://addons/git_tree/dock/git_tree_dock.tscn")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 const GitTreeHistoryDockScene := preload("res://addons/git_tree/dock/git_tree_history_dock.tscn")
 const DiffGutterScript := preload("res://addons/git_tree/dock/gutter/diff_gutter.gd")
 const BlameGutterScript := preload("res://addons/git_tree/dock/gutter/blame_gutter.gd")
@@ -74,7 +75,7 @@ func _enter_tree() -> void:
 	_apply_dock_placement()
 
 	history_dock_instance = GitTreeHistoryDockScene.instantiate()
-	history_dock_instance.custom_minimum_size.y = BOTTOM_PANEL_MIN_HEIGHT
+	history_dock_instance.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT)
 	add_control_to_bottom_panel(history_dock_instance, "Git Log")
 
 	diff_gutter = DiffGutterScript.new()
@@ -202,7 +203,7 @@ func _apply_dock_placement() -> void:
 		remove_control_from_docks(dock_instance)
 		var panels: Dictionary = dock_instance.detach_panels()
 		bottom_dock_container = TabContainer.new()
-		bottom_dock_container.custom_minimum_size.y = BOTTOM_PANEL_MIN_HEIGHT
+		bottom_dock_container.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT)
 		bottom_dock_container.add_child(panels["changes"])
 		bottom_dock_container.add_child(panels["branches"])
 		add_control_to_bottom_panel(bottom_dock_container, "Git Changes")

@@ -2,6 +2,7 @@
 extends Control
 
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
@@ -88,6 +89,9 @@ var _file_menu: PopupMenu
 
 
 func _ready() -> void:
+	if UiScale.is_in_edited_scene(self):
+		return # opened in the scene editor, not running in a dock
+	UiScale.scale_scene(self)
 	_split.resized.connect(_update_split_offset)
 	_update_split_offset()
 	_files_tree.item_activated.connect(_on_files_tree_item_activated)
@@ -123,7 +127,7 @@ func _build_toolbar() -> void:
 	_branch_option = OptionButton.new()
 	_branch_option.tooltip_text = "Which branches to show"
 	_branch_option.fit_to_longest_item = false
-	_branch_option.custom_minimum_size.x = 150
+	_branch_option.custom_minimum_size.x = UiScale.px(150)
 	_branch_option.clip_text = true
 	_branch_option.item_selected.connect(func(_i: int) -> void: refresh())
 	toolbar.add_child(_branch_option)
@@ -145,7 +149,7 @@ func _build_toolbar() -> void:
 	_path_label = Label.new()
 	_path_label.modulate = Color(0.95, 0.85, 0.55)
 	_path_label.clip_text = true
-	_path_label.custom_minimum_size.x = 60
+	_path_label.custom_minimum_size.x = UiScale.px(60)
 	_path_label.size_flags_horizontal = SIZE_SHRINK_BEGIN
 	_path_chip.add_child(_path_label)
 	var clear := Button.new()
@@ -180,7 +184,7 @@ func _build_toolbar() -> void:
 func _build_file_diff() -> void:
 	_file_diff_box = VBoxContainer.new()
 	_file_diff_box.visible = false
-	_file_diff_box.custom_minimum_size.y = 120
+	_file_diff_box.custom_minimum_size.y = UiScale.px(120)
 	_file_diff_box.size_flags_vertical = SIZE_EXPAND_FILL # shares the height with the graph instead of a thin strip
 	var header := HBoxContainer.new()
 	_file_diff_label = Label.new()

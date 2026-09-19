@@ -5,20 +5,22 @@ signal commit_selected(oid: String)
 signal commit_context_requested(oid: String, screen_position: Vector2)
 
 const Settings := preload("res://addons/git_tree/util/settings.gd")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 
-const ROW_HEIGHT := 28.0
-const LANE_WIDTH := 16.0
-const DOT_RADIUS := 4.5
-const LEFT_MARGIN := 12.0
-const TEXT_GAP := 14.0
-const COLUMN_GAP := 16.0
-const DEFAULT_HASH_COL_WIDTH := 64.0
-const DEFAULT_AUTHOR_COL_WIDTH := 110.0
-const DEFAULT_DATE_COL_WIDTH := 150.0
-const MIN_COL_WIDTH := 50.0
-const DIVIDER_HIT_MARGIN := 4.0
-const BADGE_PADDING := 5.0
-const BADGE_GAP := 8.0
+## Pixel metrics, scaled by the editor's display scale (vars, not consts, for that reason).
+var ROW_HEIGHT := UiScale.px(28.0)
+var LANE_WIDTH := UiScale.px(16.0)
+var DOT_RADIUS := UiScale.px(4.5)
+var LEFT_MARGIN := UiScale.px(12.0)
+var TEXT_GAP := UiScale.px(14.0)
+var COLUMN_GAP := UiScale.px(16.0)
+var DEFAULT_HASH_COL_WIDTH := UiScale.px(64.0)
+var DEFAULT_AUTHOR_COL_WIDTH := UiScale.px(110.0)
+var DEFAULT_DATE_COL_WIDTH := UiScale.px(150.0)
+var MIN_COL_WIDTH := UiScale.px(50.0)
+var DIVIDER_HIT_MARGIN := UiScale.px(4.0)
+var BADGE_PADDING := UiScale.px(5.0)
+var BADGE_GAP := UiScale.px(8.0)
 
 const MERGE_MESSAGE_COLOR := Color(0.62, 0.62, 0.66)
 const BADGE_BG_COLOR := Color(0.42, 0.58, 0.92, 0.28)

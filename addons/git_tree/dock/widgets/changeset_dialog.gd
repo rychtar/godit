@@ -3,6 +3,7 @@
 extends AcceptDialog
 
 const DiffViewScript := preload("res://addons/git_tree/dock/widgets/diff_view.gd")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
@@ -19,7 +20,7 @@ func _init() -> void:
 	ok_button_text = "Close"
 	exclusive = false
 	unresizable = false
-	min_size = Vector2i(640, 400)
+	min_size = UiScale.size_i(640, 400)
 
 	var layout := VBoxContainer.new()
 	add_child(layout)
@@ -36,13 +37,13 @@ func _init() -> void:
 
 	_tree = Tree.new()
 	_tree.hide_root = true
-	_tree.custom_minimum_size = Vector2(220, 0)
+	_tree.custom_minimum_size = UiScale.size(220, 0)
 	_tree.item_selected.connect(_on_item_selected)
 	_tree.item_activated.connect(_on_item_activated)
 	split.add_child(_tree)
 
 	_diff_view = DiffViewScript.new()
-	_diff_view.custom_minimum_size = Vector2(320, 0)
+	_diff_view.custom_minimum_size = UiScale.size(320, 0)
 	_diff_view.options_changed.connect(_on_item_selected)
 	split.add_child(_diff_view)
 
@@ -87,7 +88,7 @@ func open(repo: RefCounted, dialog_title: String, base: String, target: String) 
 		empty.set_selectable(0, false)
 
 	var screen_size := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen()).size
-	popup_centered(Vector2i(mini(1100, int(screen_size.x * 0.8)), mini(720, int(screen_size.y * 0.8))))
+	popup_centered(Vector2i(mini(int(UiScale.px(1100)), int(screen_size.x * 0.8)), mini(int(UiScale.px(720)), int(screen_size.y * 0.8))))
 	if first != null:
 		first.select(0)
 

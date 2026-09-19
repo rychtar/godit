@@ -1,5 +1,6 @@
 ## Awaitable one-off dialogs built in code, so every new git action doesn't need its own node in a .tscn. Each call creates the dialog under `parent`, pops it up, and frees it once answered. No class_name: internal helper, addressed via preload.
 extends RefCounted
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 
 const TEXT_WIDTH := 420
 
@@ -46,7 +47,7 @@ static func form(parent: Node, title: String, fields: Array, ok_text: String = "
 	dialog.ok_button_text = ok_text
 
 	var layout := VBoxContainer.new()
-	layout.custom_minimum_size = Vector2(TEXT_WIDTH, 0)
+	layout.custom_minimum_size = UiScale.size(TEXT_WIDTH, 0)
 	dialog.add_child(layout)
 
 	var inputs := {}
@@ -80,7 +81,7 @@ static func form(parent: Node, title: String, fields: Array, ok_text: String = "
 				if not label_text.is_empty():
 					layout.add_child(_caption(label_text))
 				var edit := TextEdit.new()
-				edit.custom_minimum_size = Vector2(0, 110)
+				edit.custom_minimum_size = UiScale.size(0, 110)
 				edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 				edit.text = field.get("default", "")
 				edit.placeholder_text = field.get("placeholder", "")
@@ -138,7 +139,7 @@ static func _run(parent: Node, dialog: AcceptDialog) -> Variant:
 		waiter.finish(String(action))
 	)
 	parent.add_child(dialog)
-	dialog.popup_centered(Vector2i(TEXT_WIDTH + 40, 0))
+	dialog.popup_centered(UiScale.size_i(TEXT_WIDTH + 40, 0))
 	var answer: Variant = await waiter.done
 	dialog.queue_free()
 	return answer
@@ -148,7 +149,7 @@ static func _message_label(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.custom_minimum_size = Vector2(TEXT_WIDTH, 0)
+	label.custom_minimum_size = UiScale.size(TEXT_WIDTH, 0)
 	return label
 
 

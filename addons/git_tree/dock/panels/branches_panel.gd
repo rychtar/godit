@@ -2,6 +2,7 @@
 extends Control
 
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
+const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
@@ -44,13 +45,16 @@ var _collapsed_sections := { "Tags": true, "Stashes": false }
 
 
 func _ready() -> void:
+	if UiScale.is_in_edited_scene(self):
+		return # opened in the scene editor, not running in a dock
+	UiScale.scale_scene(self)
 	_sync_bar = SyncBar.new()
 	$Layout/Toolbar.add_child(_sync_bar)
 	$Layout/Toolbar.move_child(_sync_bar, 0)
 	_sync_bar.changed.connect(refresh)
 	_operation_bar = _sync_bar.operation_bar
 	_tree.resized.connect(func() -> void:
-		if (_tree.size.x >= WIDE_MIN_WIDTH) != _wide and _repo != null:
+		if (_tree.size.x >= UiScale.px(WIDE_MIN_WIDTH)) != _wide and _repo != null:
 			refresh()
 	)
 
@@ -201,7 +205,7 @@ func refresh() -> void:
 
 ## Branch | Tracking | Last commit when there's room (bottom panel), a single column in a narrow side dock.
 func _setup_columns() -> void:
-	_wide = _tree.size.x >= WIDE_MIN_WIDTH
+	_wide = _tree.size.x >= UiScale.px(WIDE_MIN_WIDTH)
 	_tree.columns = 3 if _wide else 1
 	_tree.column_titles_visible = _wide
 	if not _wide:
