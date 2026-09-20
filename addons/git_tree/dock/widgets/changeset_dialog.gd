@@ -103,7 +103,9 @@ func _on_item_selected() -> void:
 	var path: String = meta["path"]
 	var base: String = meta.get("base", _base)
 	var target: String = meta.get("target", _target)
-	_diff_view.show_diff(_repo.get_diff_between(base, target, path, _diff_view.get_options()), { "path": path })
+	_diff_view.show_diff(_repo.get_diff_between(base, target, path, _diff_view.get_options()), {
+		"repo": _repo, "path": path, "old_rev": base, "new_rev": target,
+	})
 
 
 func _on_item_activated() -> void:

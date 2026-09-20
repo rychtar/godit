@@ -59,6 +59,27 @@ static func start(repo_root: String, args: Array, log_to_console := true) -> Job
 	return job
 
 
+## Like run(), but returns stdout as raw bytes (binary-safe — OS.execute's output is a String), e.g. for image blobs.
+static func run_bytes(repo_root: String, args: Array) -> PackedByteArray:
+	var full_args := PackedStringArray(["-C", repo_root])
+	full_args.append_array(PackedStringArray(args))
+	var info := OS.execute_with_pipe("git", full_args, true)
+	if info.is_empty():
+		return PackedByteArray()
+	var stdio: FileAccess = info["stdio"]
+	var bytes := PackedByteArray()
+	while stdio.is_open():
+		var chunk := stdio.get_buffer(65536)
+		if chunk.is_empty():
+			break
+		bytes.append_array(chunk)
+	stdio.close()
+	(info["stderr"] as FileAccess).close()
+	while OS.is_process_running(info["pid"]):
+		OS.delay_msec(1)
+	return bytes
+
+
 static func record(args: Array, exit_code: int, text: String) -> void:
 	command_log.append({
 		"time": int(Time.get_unix_time_from_system()),

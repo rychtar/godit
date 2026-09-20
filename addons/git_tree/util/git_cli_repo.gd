@@ -140,6 +140,18 @@ func get_commit_file_diff(oid: String, path: String, options: Dictionary = {}) -
 	return GitCli.run(_repo_root, args)["text"]
 
 
+## Raw bytes of path at rev ("" = the file on disk, ":" = the index); empty if it doesn't exist there. For image previews.
+func get_file_bytes(rev: String, path: String) -> PackedByteArray:
+	if rev.is_empty():
+		var abs_path := _repo_root.path_join(path)
+		return FileAccess.get_file_as_bytes(abs_path) if FileAccess.file_exists(abs_path) else PackedByteArray()
+	# rev ":" means the index (":path" in git's syntax).
+	var spec := ":" + path if rev == ":" else "%s:%s" % [rev, path]
+	if GitCli.run(_repo_root, ["cat-file", "-e", spec])["exit_code"] != 0:
+		return PackedByteArray()
+	return GitCli.run_bytes(_repo_root, ["cat-file", "blob", spec])
+
+
 ## Working-tree diff against HEAD (staged + unstaged combined) — for the script editor's gutter.
 func get_diff_against_head(path: String) -> String:
 	var status_result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])

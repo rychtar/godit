@@ -722,7 +722,7 @@ func _show_selected_diff() -> void:
 		return
 	if GitStatusFlags.is_untracked(status):
 		_diff_view.set_tabs([])
-		_diff_view.show_diff(_repo.get_diff(path, false, options), { "path": path, "note": "new file" })
+		_diff_view.show_diff(_repo.get_diff(path, false, options), { "path": path, "repo": _repo, "old_rev": ":", "new_rev": "", "note": "new file" })
 		return
 
 	var has_staged := GitStatusFlags.is_staged(status)
@@ -741,11 +741,11 @@ func _show_selected_diff() -> void:
 	_diff_side = side
 	if side == "staged":
 		_diff_view.show_diff(_repo.get_diff(path, true, options), {
-			"path": path, "actions": ["unstage", "revert"], "note": "staged",
+			"path": path, "repo": _repo, "old_rev": "HEAD", "new_rev": ":", "actions": ["unstage", "revert"], "note": "staged",
 		})
 	else:
 		_diff_view.show_diff(_repo.get_diff(path, false, options), {
-			"path": path, "actions": ["stage", "revert"],
+			"path": path, "repo": _repo, "old_rev": ":", "new_rev": "", "actions": ["stage", "revert"],
 			"note": "unstaged" if has_staged else "",
 		})
 

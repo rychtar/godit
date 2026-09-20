@@ -7,9 +7,14 @@ const SyntaxColors := preload("res://addons/git_tree/util/syntax_colors.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
 const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
 
+const IMAGE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
+## Godot rewrites these on save without any real change; with "Hide Godot noise" on, a -/+ pair differing only here is dimmed.
+const NOISE_PATTERNS := [" uid=\"uid://[a-z0-9]+\"", " load_steps=\\d+", " unique_id=\\d+"]
+
 const OPT_SIDE_BY_SIDE := 0
 const OPT_IGNORE_WHITESPACE := 1
 const OPT_SYNTAX := 2
+const OPT_HIDE_NOISE := 3
 const OPT_CONTEXT_3 := 10
 const OPT_CONTEXT_10 := 11
 const OPT_CONTEXT_25 := 12
@@ -34,6 +39,7 @@ var _options_button: MenuButton
 var _empty_label: Label
 var _scroll: ScrollContainer
 var _rows_view: Control
+var _image_view: HBoxContainer
 
 var _diff_text := ""
 var _context: Dictionary = {}
@@ -98,6 +104,11 @@ func _init() -> void:
 	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(_empty_label)
 
+	_image_view = HBoxContainer.new()
+	_image_view.size_flags_vertical = SIZE_EXPAND_FILL
+	_image_view.visible = false
+	add_child(_image_view)
+
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_horizontal = SIZE_EXPAND_FILL
 	_scroll.size_flags_vertical = SIZE_EXPAND_FILL
@@ -138,6 +149,7 @@ func _build_options_menu() -> void:
 	popup.add_check_item("Side by side", OPT_SIDE_BY_SIDE)
 	popup.add_check_item("Ignore whitespace", OPT_IGNORE_WHITESPACE)
 	popup.add_check_item("Syntax highlighting", OPT_SYNTAX)
+	popup.add_check_item("Dim Godot noise (uid / load_steps)", OPT_HIDE_NOISE)
 	popup.add_separator("Context")
 	popup.add_radio_check_item("3 lines", OPT_CONTEXT_3)
 	popup.add_radio_check_item("10 lines", OPT_CONTEXT_10)
@@ -151,6 +163,7 @@ func _sync_options_menu() -> void:
 	popup.set_item_checked(popup.get_item_index(OPT_SIDE_BY_SIDE), _setting("side_by_side", false))
 	popup.set_item_checked(popup.get_item_index(OPT_IGNORE_WHITESPACE), _setting("ignore_whitespace", false))
 	popup.set_item_checked(popup.get_item_index(OPT_SYNTAX), _setting("syntax", true))
+	popup.set_item_checked(popup.get_item_index(OPT_HIDE_NOISE), _setting("hide_noise", true))
 	var context: int = _setting("context", 3)
 	for id in CONTEXT_BY_ID:
 		popup.set_item_checked(popup.get_item_index(id), CONTEXT_BY_ID[id] == context)
@@ -163,6 +176,9 @@ func _on_option_pressed(id: int) -> void:
 			_rerender()
 		OPT_SYNTAX:
 			Settings.set_value("diff_syntax", not _setting("syntax", true))
+			_rerender()
+		OPT_HIDE_NOISE:
+			Settings.set_value("diff_hide_noise", not _setting("hide_noise", true))
 			_rerender()
 		OPT_IGNORE_WHITESPACE:
 			Settings.set_value("diff_ignore_whitespace", not _setting("ignore_whitespace", false))
@@ -177,7 +193,7 @@ func _on_option_pressed(id: int) -> void:
 # --- content -----------------------------------------------------------------
 
 
-## context (all optional): {"actions": hunk buttons ("stage"/"unstage"/"revert"), "path", "note"}.
+## context (all optional): {"actions": hunk buttons ("stage"/"unstage"/"revert"), "path", "repo", "old_rev"/"new_rev" for image previews ("" = working tree, ":" = index), "note"}.
 func show_diff(diff_text: String, context: Dictionary = {}) -> void:
 	var previous_path: String = _context.get("path", "")
 	var keep_scroll: bool = previous_path == context.get("path", "") and not previous_path.is_empty() and _diff_text != ""
@@ -212,7 +228,7 @@ func scroll_to_line(line: int) -> void:
 
 
 func _rerender(keep_scroll: bool = false) -> void:
-	var parsed := _parse(_diff_text)
+	var parsed := _parse(_diff_text, _setting("hide_noise", true))
 	var split := DiffHunks.split_hunks(_diff_text)
 	_hunks = split["hunks"]
 	_file_header = split["file_header"]
@@ -227,6 +243,7 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_stats_added.text = ("+%d" % parsed["added"]) if parsed["added"] > 0 else ""
 	_stats_removed.text = ("−%d" % parsed["removed"]) if parsed["removed"] > 0 else ""
 
+	var show_image := _show_image_preview(path)
 	var actions: Array = _context.get("actions", [])
 	var line_level: bool = not parsed["is_new"] and not parsed["is_deleted"]
 	if _setting("ignore_whitespace", false):
@@ -236,8 +253,8 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_rows_view.set_content(rows, actions, line_level, language, _setting("side_by_side", false))
 	var has_rows := not rows.is_empty()
 	_scroll.visible = has_rows
-	_empty_label.visible = not has_rows
-	if not has_rows:
+	_empty_label.visible = not has_rows and not show_image
+	if not has_rows and not show_image:
 		_empty_label.text = "Binary file changed." if parsed["binary"] else "No diff to show."
 
 	if not keep_scroll:
@@ -253,8 +270,60 @@ func _on_rows_action_pressed(action: String, hunk_index: int, selected: PackedIn
 	hunk_action_requested.emit(action, DiffHunks.build_patch(_file_header, _hunks[hunk_index], selected, reverse))
 
 
+## Before/after thumbnails for image files; returns whether it's showing.
+func _show_image_preview(path: String) -> bool:
+	for child in _image_view.get_children():
+		child.queue_free()
+	var repo: RefCounted = _context.get("repo", null)
+	var is_image := IMAGE_EXTENSIONS.has(path.get_extension().to_lower())
+	_image_view.visible = is_image and repo != null and _context.has("new_rev")
+	if not _image_view.visible:
+		return false
+	var old_rev: String = _context.get("old_rev", "HEAD")
+	var new_rev: String = _context.get("new_rev", "")
+	var old_path: String = _context.get("old_path", path)
+	_image_view.add_child(_image_panel("Before", repo.get_file_bytes(old_rev, old_path), path.get_extension()))
+	_image_view.add_child(_image_panel("After", repo.get_file_bytes(new_rev, path), path.get_extension()))
+	return true
+
+
+static func _image_panel(caption: String, bytes: PackedByteArray, extension: String) -> Control:
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = SIZE_EXPAND_FILL
+	var label := Label.new()
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(label)
+
+	var image := Image.new()
+	var err := ERR_FILE_UNRECOGNIZED
+	if not bytes.is_empty():
+		match extension.to_lower():
+			"png": err = image.load_png_from_buffer(bytes)
+			"jpg", "jpeg": err = image.load_jpg_from_buffer(bytes)
+			"webp": err = image.load_webp_from_buffer(bytes)
+			"svg": err = image.load_svg_from_buffer(bytes)
+			"bmp": err = image.load_bmp_from_buffer(bytes)
+			"tga": err = image.load_tga_from_buffer(bytes)
+	if bytes.is_empty():
+		label.text = "%s — (none)" % caption
+		return box
+	if err != OK:
+		label.text = "%s — can't preview (%s)" % [caption, String.humanize_size(bytes.size())]
+		return box
+
+	label.text = "%s — %d×%d, %s" % [caption, image.get_width(), image.get_height(), String.humanize_size(bytes.size())]
+	var rect := TextureRect.new()
+	rect.texture = ImageTexture.create_from_image(image)
+	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	rect.size_flags_vertical = SIZE_EXPAND_FILL
+	rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST if maxi(image.get_width(), image.get_height()) < 128 else CanvasItem.TEXTURE_FILTER_LINEAR
+	box.add_child(rect)
+	return box
+
+
 ## {"path", "added", "removed", "binary", "is_new", "is_deleted", "rows"}; rows are line rows {"type", "old_no"/"new_no" (-1 = none), "text", "hl" (changed ranges), "hunk", "li" (index in hunk body)} or hunk rows {"type": "hunk", "hunk", "gap", "heading", "header"}.
-static func _parse(diff_text: String) -> Dictionary:
+static func _parse(diff_text: String, hide_noise: bool) -> Dictionary:
 	var result := {"path": "", "added": 0, "removed": 0, "binary": false, "is_new": false, "is_deleted": false, "rows": []}
 	var rows: Array = result["rows"]
 	if diff_text.is_empty():
@@ -265,6 +334,10 @@ static func _parse(diff_text: String) -> Dictionary:
 
 	var hunk_regex := RegEx.new()
 	hunk_regex.compile(HUNK_HEADER_PATTERN)
+	var noise_regex: RegEx = null
+	if hide_noise:
+		noise_regex = RegEx.new()
+		noise_regex.compile("|".join(NOISE_PATTERNS))
 
 	var prev_new_end := 0
 	var hunk_index := -1
@@ -329,16 +402,20 @@ static func _parse(diff_text: String) -> Dictionary:
 				for k in pair_count:
 					var old_text: String = lines[removed_idx[k]].substr(1)
 					var new_text: String = lines[added_idx[k]].substr(1)
-					var hl := _word_diff(old_text, new_text)
-					var removed_row := _line_row("removed", old_line, -1, old_text, hl[0], hunk_index, removed_idx[k] - body_start)
-					var added_row := _line_row("added", -1, new_line, new_text, hl[1], hunk_index, added_idx[k] - body_start)
-					# A modified line is one -/+ pair: partial stage/revert must always take both halves.
-					removed_row["pair_li"] = added_row["li"]
-					added_row["pair_li"] = removed_row["li"]
-					rows.append(removed_row)
-					rows.append(added_row)
-					result["removed"] += 1
-					result["added"] += 1
+					if noise_regex != null and noise_regex.sub(old_text, "", true) == noise_regex.sub(new_text, "", true):
+						rows.append(_line_row("noise", old_line, -1, old_text, [], hunk_index, removed_idx[k] - body_start))
+						rows.append(_line_row("noise", -1, new_line, new_text, [], hunk_index, added_idx[k] - body_start))
+					else:
+						var hl := _word_diff(old_text, new_text)
+						var removed_row := _line_row("removed", old_line, -1, old_text, hl[0], hunk_index, removed_idx[k] - body_start)
+						var added_row := _line_row("added", -1, new_line, new_text, hl[1], hunk_index, added_idx[k] - body_start)
+						# A modified line is one -/+ pair: partial stage/revert must always take both halves.
+						removed_row["pair_li"] = added_row["li"]
+						added_row["pair_li"] = removed_row["li"]
+						rows.append(removed_row)
+						rows.append(added_row)
+						result["removed"] += 1
+						result["added"] += 1
 					old_line += 1
 					new_line += 1
 
@@ -507,6 +584,7 @@ class DiffRows:
 	const COLOR_ADDED_TEXT := Color(0.643, 0.851, 0.667)
 	const COLOR_REMOVED_TEXT := Color(0.925, 0.588, 0.604)
 	const COLOR_CONTEXT_TEXT := Color(0.78, 0.78, 0.8)
+	const COLOR_NOISE_TEXT := Color(0.6, 0.6, 0.64, 0.55)
 	const COLOR_LINE_NO := Color(0.45, 0.45, 0.5)
 	const COLOR_HUNK_BG := Color(0.35, 0.5, 0.85, 0.12)
 	const COLOR_HUNK_TEXT := Color(0.6, 0.68, 0.85)
@@ -594,7 +672,7 @@ class DiffRows:
 				continue
 			var left: Array = []
 			var right: Array = []
-			while i < _rows.size() and _rows[i]["type"] in ["removed", "added"]:
+			while i < _rows.size() and _rows[i]["type"] in ["removed", "added", "noise"]:
 				if _rows[i]["old_no"] > 0:
 					left.append(i)
 				else:
@@ -720,6 +798,9 @@ class DiffRows:
 				bg_color = COLOR_REMOVED_BG
 				text_color = COLOR_REMOVED_TEXT
 				marker = "-"
+			"noise":
+				text_color = COLOR_NOISE_TEXT
+				marker = "~"
 
 		if bg_color.a > 0.0:
 			draw_rect(Rect2(x, y, width, _row_height), bg_color)
@@ -751,7 +832,7 @@ class DiffRows:
 			var mid_w: float = font.get_string_size(text.substr(r.x, r.y), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 			draw_rect(Rect2(text_x + pre_w, y + 1.0, mid_w, _row_height - 2.0), COLOR_ADDED_HL if type == "added" else COLOR_REMOVED_HL)
 
-		if _language.is_empty():
+		if _language.is_empty() or type == "noise":
 			draw_string(font, Vector2(text_x, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
 			return
 

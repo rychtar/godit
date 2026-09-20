@@ -465,7 +465,7 @@ func _build_files_tree(oid: String) -> void:
 		var item := _files_tree.create_item(parent)
 		item.set_text(0, "%s  %s" % [GitIcons.delta_letter(status), path.get_file()])
 		item.set_custom_color(0, GitIcons.delta_color(status))
-		item.set_metadata(0, { "path": path, "status": status })
+		item.set_metadata(0, { "path": path, "old_path": f.get("old_path", path), "status": status })
 		item.set_tooltip_text(0, "%s\nClick for its diff, double-click to open, right-click for more" % path)
 		if not _path_filter.is_empty() and path == _path_filter:
 			item.select(0)
@@ -486,7 +486,11 @@ func _on_files_tree_item_selected() -> void:
 	var path: String = meta["path"]
 	_file_diff_label.text = "%s  @ %s" % [path, _detail_oid.substr(0, 8)]
 	_file_diff_box.visible = true
-	_file_diff_view.show_diff(_repo.get_commit_file_diff(_detail_oid, path, _file_diff_view.get_options()), { "path": path })
+	var old_rev := _detail_oid + "^" if _repo.has_parent(_detail_oid) else ""
+	_file_diff_view.show_diff(_repo.get_commit_file_diff(_detail_oid, path, _file_diff_view.get_options()), {
+		"path": path, "repo": _repo, "old_rev": old_rev if not old_rev.is_empty() else "NONE", "new_rev": _detail_oid,
+		"old_path": meta.get("old_path", path),
+	})
 
 
 func _on_files_tree_item_activated() -> void:
