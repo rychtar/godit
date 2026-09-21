@@ -100,6 +100,8 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	# Before freeing the UI: a fetch/push still running would otherwise outlive the plugin and resume coroutines on freed panels.
+	GitCli.shutdown()
 	remove_tool_menu_item("Git Tree")
 
 	if bottom_dock_container != null:

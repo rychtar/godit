@@ -26,6 +26,8 @@ static var command_log: Array = []
 static var command_log_revision := 0
 
 static var _saved_env: Dictionary = {}
+## Jobs whose thread hasn't been joined yet; shutdown() kills and joins them.
+static var _active_jobs: Array = []
 
 
 ## Runs `git <args>` in repo_root, returning {"exit_code": int, "text":
@@ -53,10 +55,21 @@ static func run(repo_root: String, args: Array, include_stderr: bool = false) ->
 ## Starts `git <args>` on a worker thread and returns a Job; `await job.finished` yields the same {"exit_code", "text", "cancelled"} shape as run() (stderr always included). For network operations, which would otherwise freeze the editor.
 static func start(repo_root: String, args: Array, log_to_console := true) -> Job:
 	var job := Job.new()
-	if log_to_console:
-		job.finished.connect(func(result: Dictionary) -> void: record(args, result["exit_code"], result["text"]))
+	job.finished.connect(func(result: Dictionary) -> void:
+		_active_jobs.erase(job)
+		if log_to_console:
+			record(args, result["exit_code"], result["text"])
+	)
+	_active_jobs.append(job)
 	job.start(repo_root, args)
 	return job
+
+
+## Called by plugin.gd on disable/editor quit: kills every running git process and joins its thread, without emitting finished (the UI awaiting it is being freed).
+static func shutdown() -> void:
+	for job in _active_jobs:
+		job.abandon()
+	_active_jobs.clear()
 
 
 ## Like run(), but returns stdout as raw bytes (binary-safe — OS.execute's output is a String), e.g. for image blobs.
@@ -139,6 +152,7 @@ class Job:
 	var _thread: Thread
 	var _pid := -1
 	var _cancelled := false
+	var _abandoned := false
 	## Guards _pid/_cancelled: cancel() can arrive before the worker has the pid.
 	var _mutex := Mutex.new()
 
@@ -155,8 +169,35 @@ class Job:
 		if is_running and not _cancelled:
 			_cancelled = true
 			if _pid > 0:
-				OS.kill(_pid)
+				_kill_tree(_pid)
 		_mutex.unlock()
+
+
+	## Git's helpers (ssh, git-remote-https) inherit its pipes, so killing git alone would leave _drain() blocked until they exit on their own.
+	static func _kill_tree(pid: int) -> void:
+		if OS.get_name() == "Windows":
+			OS.execute("taskkill", ["/T", "/F", "/PID", str(pid)])
+			return
+		var descendants := PackedStringArray()
+		var queue := [pid]
+		while not queue.is_empty():
+			var out := []
+			OS.execute("pgrep", ["-P", str(queue.pop_back())], out)
+			for child in String(out[0]).split("\n", false):
+				descendants.append(child.strip_edges())
+				queue.append(child.to_int())
+		OS.kill(pid)
+		if not descendants.is_empty():
+			OS.execute("kill", PackedStringArray(["-KILL"]) + descendants)
+
+
+	## Cancels and blocks until the worker thread is done; finished is never emitted afterwards.
+	func abandon() -> void:
+		_abandoned = true
+		cancel()
+		if _thread != null and _thread.is_started():
+			_thread.wait_to_finish()
+		is_running = false
 
 
 	func _run(repo_root: String) -> void:
@@ -170,7 +211,7 @@ class Job:
 		_mutex.lock()
 		_pid = info["pid"]
 		if _cancelled:
-			OS.kill(_pid)
+			_kill_tree(_pid)
 		_mutex.unlock()
 		var stdio: FileAccess = info["stdio"]
 		var stderr: FileAccess = info["stderr"]
@@ -231,11 +272,13 @@ class Job:
 
 
 	func _emit_progress(text: String) -> void:
-		if is_running:
+		if not _abandoned and is_running:
 			progress.emit(text)
 
 
 	func _finish(result: Dictionary) -> void:
+		if _abandoned:
+			return
 		_thread.wait_to_finish()
 		is_running = false
 		finished.emit(result)
