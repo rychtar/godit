@@ -3,13 +3,13 @@ extends Control
 
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
+const PollTimer := preload("res://addons/git_tree/util/poll_timer.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const Dialogs := preload("res://addons/git_tree/dock/widgets/dialogs.gd")
 const SyncBar := preload("res://addons/git_tree/dock/widgets/sync_bar.gd")
 const RemoteActions := preload("res://addons/git_tree/dock/widgets/remote_actions.gd")
 const GitErrors := preload("res://addons/git_tree/util/git_errors.gd")
 
-## Only ticks while the panel is actually on screen — see _notification().
 const AUTO_REFRESH_INTERVAL := 3.0
 
 enum {
@@ -34,7 +34,8 @@ var _sync_bar: VBoxContainer
 ## Below this width the tree drops to a single column (side-dock mode).
 const WIDE_MIN_WIDTH := 520.0
 var _wide := true
-var _auto_refresh_timer: Timer
+## Pauses while the panel is hidden or the editor is in the background.
+var _auto_refresh_timer: PollTimer
 var _last_signature := ""
 
 ## {"kind": "local"|"remote_branch"|"tag"|"remote"|"stash"|"section", ...} for whatever the context menu was opened on.
@@ -68,27 +69,17 @@ func _ready() -> void:
 			_show_context_menu({ "kind": "section", "title": "Local" }, _tree.get_screen_position() + pos)
 	)
 
-	_auto_refresh_timer = Timer.new()
-	_auto_refresh_timer.wait_time = AUTO_REFRESH_INTERVAL
-	_auto_refresh_timer.timeout.connect(_maybe_refresh)
+	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
+	_auto_refresh_timer.poll.connect(_maybe_refresh)
 	add_child(_auto_refresh_timer)
-
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_VISIBILITY_CHANGED and _auto_refresh_timer != null:
-		if _repo != null and is_visible_in_tree():
-			if _auto_refresh_timer.is_stopped():
-				_auto_refresh_timer.start()
-				_maybe_refresh()
-		else:
-			_auto_refresh_timer.stop()
 
 
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
 	_sync_bar.set_repo(repo)
 	refresh()
-	_notification(NOTIFICATION_VISIBILITY_CHANGED)
+	if _auto_refresh_timer != null:
+		_auto_refresh_timer.active = true
 
 
 ## Cheap check (refs + stash list) so the tree is only rebuilt — losing scroll and selection — when something changed.
@@ -101,9 +92,13 @@ func _maybe_refresh() -> void:
 
 func _signature() -> String:
 	var refs: Dictionary = _repo.run_read(["for-each-ref", "--format=%(refname) %(objectname) %(HEAD) %(upstream:track)"])
-	var remotes: Dictionary = _repo.run_read(["remote", "-v"])
-	var stashes: Dictionary = _repo.run_read(["stash", "list", "--format=%H"])
-	return refs["text"] + remotes["text"] + stashes["text"]
+	# Remotes live in config and stashes in the stash reflog; reading the files saves two git processes per tick.
+	var common_dir: String = _repo.get_common_dir()
+	return refs["text"] + _read_file(common_dir.path_join("config")) + _read_file(common_dir.path_join("logs/refs/stash"))
+
+
+static func _read_file(path: String) -> String:
+	return FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 
 
 func refresh() -> void:

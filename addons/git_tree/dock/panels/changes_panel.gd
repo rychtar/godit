@@ -3,6 +3,7 @@ extends Control
 
 const GitStatusFlags := preload("res://addons/git_tree/util/git_status_flags.gd")
 const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
+const PollTimer := preload("res://addons/git_tree/util/poll_timer.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
@@ -44,7 +45,6 @@ const ID_IGNORE_FOLDER := 21
 ## "Show History" on a file — git_tree_dock.gd forwards it to the Git Log panel.
 signal file_history_requested(path: String)
 
-## Only ticks while the panel is actually on screen — see _notification().
 const AUTO_REFRESH_INTERVAL := 3.0
 
 ## ChangesTree has two columns: the checkbox needs its own narrow column,
@@ -100,7 +100,8 @@ var _name_dialog_rename_target := ""
 ## Which action _revert_confirm_dialog is currently being used for: "revert" or "remove".
 var _confirm_dialog_action := "revert"
 
-var _auto_refresh_timer: Timer
+## Pauses while the panel is hidden or the editor is in the background.
+var _auto_refresh_timer: PollTimer
 var _operation_bar: HBoxContainer
 
 ## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar (see _update_operation_banner()).
@@ -123,6 +124,8 @@ var _diff_side := "unstaged"
 ## the auto-refresh timer skip rebuilding the tree when nothing changed,
 ## which would otherwise reset scroll position and selection every tick.
 var _last_status_signature := ""
+## Changed files' mtimes at the last check: a re-saved file keeps its status, so only this reveals that its diff is stale.
+var _last_content_signature := ""
 
 
 func _ready() -> void:
@@ -167,29 +170,9 @@ func _ready() -> void:
 	_commit_message.gui_input.connect(_on_commit_message_gui_input)
 	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push"
 
-	_auto_refresh_timer = Timer.new()
-	_auto_refresh_timer.wait_time = AUTO_REFRESH_INTERVAL
-	_auto_refresh_timer.timeout.connect(_maybe_refresh)
+	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
+	_auto_refresh_timer.poll.connect(_maybe_refresh)
 	add_child(_auto_refresh_timer)
-
-
-## Starts/stops the polling timer as the panel is shown/hidden (tab switch,
-## dock switch, or the whole dock closing) instead of ticking forever in the
-## background — see AUTO_REFRESH_INTERVAL.
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_VISIBILITY_CHANGED:
-		_update_auto_refresh_timer()
-
-
-func _update_auto_refresh_timer() -> void:
-	if _auto_refresh_timer == null:
-		return
-	if _repo != null and is_visible_in_tree():
-		if _auto_refresh_timer.is_stopped():
-			_auto_refresh_timer.start()
-			_maybe_refresh() # catch up on anything that changed while hidden
-	else:
-		_auto_refresh_timer.stop()
 
 
 func set_repo(repo: RefCounted) -> void:
@@ -198,7 +181,8 @@ func set_repo(repo: RefCounted) -> void:
 	_changelist_state = ChangelistStore.load_state(_repo.get_repo_root())
 	_sync_staging_to_active_changelist()
 	refresh()
-	_update_auto_refresh_timer()
+	if _auto_refresh_timer != null:
+		_auto_refresh_timer.active = true
 
 
 ## Re-fetches status and only calls refresh() — which rebuilds the tree from
@@ -209,15 +193,27 @@ func _maybe_refresh() -> void:
 	if _repo.is_busy():
 		return # a pull/push is rewriting things right now — catch up once it's done
 	var entries: Array = _repo.get_status()
-	if _status_signature(entries) == _last_status_signature:
+	if _status_signature(entries) != _last_status_signature:
+		refresh(entries)
 		return
-	refresh(entries)
+	var content := _content_signature(entries)
+	if content != _last_content_signature:
+		_last_content_signature = content
+		_show_selected_diff()
+
+
+func _content_signature(entries: Array) -> String:
+	var root: String = _repo.get_repo_root()
+	var parts: Array = []
+	for entry in entries:
+		var abs_path := root.path_join(entry["path"])
+		parts.append(FileAccess.get_modified_time(abs_path) if FileAccess.file_exists(abs_path) else 0)
+	return ",".join(parts)
 
 
 func _status_signature(entries: Array) -> String:
-	# HEAD and upstream tips too, so the branch label's ahead/behind updates after a push/fetch even when no file changed.
-	var tips: String = _repo.run_read(["rev-parse", "HEAD", "@{upstream}"])["text"]
-	var parts: Array = [_repo.get_operation_state()["kind"], _repo.get_current_branch(), tips]
+	# Branch, ahead/behind (status header) and HEAD too, so the sync bar updates after a commit/push/fetch even when no file changed.
+	var parts: Array = [_repo.get_operation_state()["kind"], _repo.status_header, _repo.read_head_oid()]
 	for entry in entries:
 		parts.append("%s:%d" % [entry["path"], entry["status"]])
 	return "|".join(parts)
@@ -230,6 +226,7 @@ func refresh(status_entries: Variant = null) -> void:
 		return
 	var entries: Array = status_entries if status_entries != null else _repo.get_status()
 	_last_status_signature = _status_signature(entries)
+	_last_content_signature = _content_signature(entries)
 	_follow_branch_switch()
 
 	var selected_path := ""

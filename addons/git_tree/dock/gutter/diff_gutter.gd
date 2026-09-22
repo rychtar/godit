@@ -7,6 +7,7 @@ const GitCliRepo := preload("res://addons/git_tree/util/git_cli_repo.gd")
 const DiffHunks := preload("res://addons/git_tree/util/diff_hunks.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 const ChangePreview := preload("res://addons/git_tree/dock/gutter/change_preview.gd")
+const PollTimer := preload("res://addons/git_tree/util/poll_timer.gd")
 
 const GUTTER_NAME := "git_tree_diff"
 const GUTTER_WIDTH := 14
@@ -22,7 +23,7 @@ const META_RES_PATH := "git_tree_res_path"
 const META_SIGNATURE := "git_tree_diff_signature"
 
 var _script_editor: ScriptEditor
-var _refresh_timer: Timer
+var _refresh_timer: PollTimer
 ## [CodeEdit, Callable] pairs connected to gutter_clicked, so disable() can disconnect them (the CodeEdits outlive a plugin reload).
 var _connections: Array = []
 var _preview: Control
@@ -31,13 +32,10 @@ var _preview: Control
 func enable(_plugin: EditorPlugin) -> void:
 	_script_editor = EditorInterface.get_script_editor()
 
-	_refresh_timer = Timer.new()
-	_refresh_timer.wait_time = REFRESH_INTERVAL
-	_refresh_timer.autostart = true
-	_refresh_timer.timeout.connect(_refresh_current)
+	_refresh_timer = PollTimer.new(REFRESH_INTERVAL)
+	_refresh_timer.poll.connect(_refresh_current)
 	add_child(_refresh_timer)
-
-	_refresh_current()
+	_refresh_timer.active = true
 
 
 func disable() -> void:
@@ -73,12 +71,20 @@ func _refresh_current() -> void:
 	refresh_code_edit(code_edit, res_path)
 
 
+## Opened repos by directory, so the 2 s poll doesn't spawn `git rev-parse` for every tick.
+static var _repos := {}
+
+
 ## {"repo": GitCliRepo, "rel_path": String} for res_path, or {} if it's not inside a git repo. Shared with blame_gutter.gd.
 static func resolve_repo(res_path: String) -> Dictionary:
 	var abs_path := ProjectSettings.globalize_path(res_path)
-	var repo := GitCliRepo.new()
-	if not repo.open(abs_path.get_base_dir()):
-		return {}
+	var dir := abs_path.get_base_dir()
+	var repo: RefCounted = _repos.get(dir)
+	if repo == null:
+		repo = GitCliRepo.new()
+		if not repo.open(dir):
+			return {}
+		_repos[dir] = repo
 	var repo_root: String = repo.get_repo_root()
 	if not abs_path.begins_with(repo_root):
 		return {}
@@ -92,7 +98,7 @@ func refresh_code_edit(code_edit: CodeEdit, res_path: String, force := false) ->
 		return
 	var repo: RefCounted = resolved["repo"]
 	var text := _normalized(code_edit.text)
-	var signature := "%s|%d|%s" % [resolved["rel_path"], text.hash(), repo.get_head_oid()]
+	var signature := "%s|%d|%s" % [resolved["rel_path"], text.hash(), repo.read_head_oid()]
 	_install_gutter(code_edit)
 	code_edit.set_meta(META_REL_PATH, resolved["rel_path"])
 	code_edit.set_meta(META_RES_PATH, res_path)

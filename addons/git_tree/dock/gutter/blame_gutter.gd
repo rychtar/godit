@@ -7,6 +7,7 @@ signal toggle_requested(enabled: bool)
 
 const DiffGutter := preload("res://addons/git_tree/dock/gutter/diff_gutter.gd")
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
+const PollTimer := preload("res://addons/git_tree/util/poll_timer.gd")
 
 const GUTTER_NAME := "git_tree_blame"
 ## Upper bound for the column, before editor scale; the actual width fits the longest label.
@@ -18,7 +19,7 @@ const META_BLAME := "git_tree_blame"
 const META_SIGNATURE := "git_tree_blame_signature"
 
 var _script_editor: ScriptEditor
-var _refresh_timer: Timer
+var _refresh_timer: PollTimer
 var _enabled := false
 var _in_flight := false
 ## [CodeEdit, Callable] pairs connected to gutter_clicked, so disable() can disconnect them.
@@ -29,9 +30,8 @@ var _code_edits: Array = []
 
 ## _init, not _ready: plugin.gd calls set_enabled() from its _enter_tree, before children get _ready.
 func _init() -> void:
-	_refresh_timer = Timer.new()
-	_refresh_timer.wait_time = REFRESH_INTERVAL
-	_refresh_timer.timeout.connect(_refresh_current)
+	_refresh_timer = PollTimer.new(REFRESH_INTERVAL)
+	_refresh_timer.poll.connect(_refresh_current)
 	add_child(_refresh_timer)
 
 
@@ -50,11 +50,10 @@ func commit_at(res_path: String, code_edit: CodeEdit, line: int) -> String:
 
 func set_enabled(enabled: bool) -> void:
 	_enabled = enabled
+	_refresh_timer.active = enabled
 	if enabled:
-		_refresh_timer.start()
 		_refresh_current()
 		return
-	_refresh_timer.stop()
 	# Collapsed rather than removed: removing a gutter would shift the diff gutter's (and Godot's own) indices under open tabs.
 	for code_edit in _code_edits:
 		if is_instance_valid(code_edit):
@@ -89,7 +88,7 @@ func _refresh_current() -> void:
 	if resolved.is_empty():
 		return
 	var text := code_edit.text
-	var signature := "%s|%d|%s" % [resolved["rel_path"], text.hash(), resolved["repo"].get_head_oid()]
+	var signature := "%s|%d|%s" % [resolved["rel_path"], text.hash(), resolved["repo"].read_head_oid()]
 	_install_gutter(code_edit)
 	if code_edit.get_meta(META_SIGNATURE, "") == signature:
 		return

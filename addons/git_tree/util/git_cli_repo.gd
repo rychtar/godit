@@ -16,6 +16,8 @@ const US := GitCli.US
 const CONFLICT_CODES := ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]
 
 var _repo_root: String = ""
+## "## branch...upstream [ahead n, behind m]" line from the last get_status().
+var status_header := ""
 
 
 func open(path: String) -> bool:
@@ -38,9 +40,13 @@ func get_repo_root() -> String:
 
 
 func get_status() -> Array:
-	var result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--untracked-files=all"])
+	var result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--branch", "--untracked-files=all"])
 	var entries: Array = []
+	status_header = ""
 	for line in GitCli.lines(result["text"]):
+		if line.begins_with("## "):
+			status_header = line
+			continue
 		if line.length() < 4:
 			continue
 		var xy := line.substr(0, 2)
@@ -678,6 +684,17 @@ func get_git_dir() -> String:
 	return _git_dir
 
 
+var _common_dir := ""
+
+
+## Directory shared by all worktrees (refs, config, logs). Cached like get_git_dir().
+func get_common_dir() -> String:
+	if _common_dir.is_empty():
+		var dir: String = GitCli.run(_repo_root, ["rev-parse", "--git-common-dir"])["text"].strip_edges()
+		_common_dir = dir if dir.is_absolute_path() or dir.is_empty() else _repo_root.path_join(dir).simplify_path()
+	return _common_dir
+
+
 ## In-progress operation from git's marker files: {"kind": "merge"|"rebase"|"cherry-pick"|"revert"|"", "conflicts": int, "detail": e.g. "main, step 2/5"}.
 func get_operation_state() -> Dictionary:
 	var state := { "kind": "", "conflicts": 0, "detail": "" }
@@ -997,6 +1014,19 @@ func _parse_commit_graph(log_text: String) -> Array:
 func get_head_oid() -> String:
 	var r := GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", "HEAD"])
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
+## get_head_oid() read straight from .git's files where possible, for polling without spawning git.
+func read_head_oid() -> String:
+	var head := _read_small(get_git_dir().path_join("HEAD"))
+	if head.begins_with("ref: "):
+		head = _read_small(get_common_dir().path_join(head.substr(5)))
+	return head if head.length() >= 40 and not head.contains(" ") else get_head_oid()
+
+
+## Every ref and its target in one process, so pollers can cheaply tell whether history moved.
+func get_refs_signature() -> String:
+	return GitCli.run(_repo_root, ["for-each-ref", "--format=%(refname) %(objectname)"])["text"] + read_head_oid()
 
 
 func is_ancestor_of_head(oid: String) -> bool:

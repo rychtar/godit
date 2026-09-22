@@ -3,6 +3,7 @@ extends Control
 
 const GitIcons := preload("res://addons/git_tree/util/git_icons.gd")
 const UiScale := preload("res://addons/git_tree/util/ui_scale.gd")
+const PollTimer := preload("res://addons/git_tree/util/poll_timer.gd")
 const TreeFolders := preload("res://addons/git_tree/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/git_tree/util/editor_open.gd")
 const Settings := preload("res://addons/git_tree/util/settings.gd")
@@ -17,7 +18,6 @@ const SEARCH_LIMIT := 500
 
 const DETAIL_PANE_RATIO := 1.0 / 3.0
 
-## Only ticks while the panel is actually on screen — see _notification().
 const AUTO_REFRESH_INTERVAL := 3.0
 
 ## Commits loaded at first, and added each time the list is scrolled to its end.
@@ -68,12 +68,11 @@ var _context_oids := PackedStringArray()
 var _detail_oid := ""
 var _file_context_path := ""
 
-var _auto_refresh_timer: Timer
+## Pauses while the panel is hidden or the editor is in the background.
+var _auto_refresh_timer: PollTimer
 
-## Signature of the last-seen commit graph (see _commits_signature()) — lets
-## the auto-refresh timer skip rebuilding the tree when nothing changed,
-## which would otherwise reset the selection and collapse the filter.
-var _last_commits_signature := ""
+## Refs + HEAD at the last refresh, so the auto-refresh timer only reloads the graph when history moved.
+var _last_refs_signature := ""
 
 var _branch_option: OptionButton
 var _remotes_check: CheckBox
@@ -115,9 +114,8 @@ func _ready() -> void:
 			refresh.call_deferred()
 	)
 
-	_auto_refresh_timer = Timer.new()
-	_auto_refresh_timer.wait_time = AUTO_REFRESH_INTERVAL
-	_auto_refresh_timer.timeout.connect(_maybe_refresh)
+	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
+	_auto_refresh_timer.poll.connect(_maybe_refresh)
 	add_child(_auto_refresh_timer)
 
 
@@ -212,25 +210,6 @@ func _build_file_diff() -> void:
 	_graph_split.add_child(_file_diff_box)
 
 
-## Starts/stops the polling timer as the panel is shown/hidden (bottom panel
-## switched away or collapsed) instead of ticking forever in the background —
-## see AUTO_REFRESH_INTERVAL.
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_VISIBILITY_CHANGED:
-		_update_auto_refresh_timer()
-
-
-func _update_auto_refresh_timer() -> void:
-	if _auto_refresh_timer == null:
-		return
-	if _repo != null and is_visible_in_tree():
-		if _auto_refresh_timer.is_stopped():
-			_auto_refresh_timer.start()
-			_maybe_refresh() # catch up on anything that changed while hidden
-	else:
-		_auto_refresh_timer.stop()
-
-
 ## split_offset is a pixel offset from the container's midpoint, not a
 ## fraction, so it's recomputed on every resize to keep the detail pane at
 ## a constant ~1/3 width.
@@ -245,7 +224,8 @@ func set_repo(repo: RefCounted) -> void:
 	_repo = repo
 	_update_branch_option()
 	refresh()
-	_update_auto_refresh_timer()
+	if _auto_refresh_timer != null:
+		_auto_refresh_timer.active = true
 
 
 ## Limits the log to commits touching path ("" = no filter) — the Changes panel's "Show History".
@@ -291,33 +271,22 @@ func _update_branch_option() -> void:
 		_branch_option.select(0)
 
 
-## Re-fetches the commit graph and only calls refresh() — which rebuilds the
-## tree from scratch — if something actually changed since the last check.
+## Reloads the graph only when a ref or HEAD moved — one cheap for-each-ref instead of a full log per tick.
 func _maybe_refresh() -> void:
 	if _repo == null or _repo.is_busy():
 		return
-	var commits: Array = _repo.get_commit_graph(_limit, _log_options())
-	if _commits_signature(commits) == _last_commits_signature:
+	if _repo.get_refs_signature() == _last_refs_signature:
 		return
 	_update_branch_option()
-	refresh(commits)
+	refresh()
 
 
-func _commits_signature(commits: Array) -> String:
-	var parts: Array = [_repo.get_head_oid()]
-	for c in commits:
-		parts.append(String(c["oid"]) + ",".join(c["refs"]) + ",".join(c["tags"]))
-	return "|".join(parts)
-
-
-## commits lets callers that already fetched the commit graph (e.g.
-## _maybe_refresh()) pass it along instead of fetching it twice.
-func refresh(commits: Variant = null) -> void:
+func refresh() -> void:
 	if _repo == null:
 		return
 
-	_all_commits = commits if commits != null else _repo.get_commit_graph(_limit, _log_options())
-	_last_commits_signature = _commits_signature(_all_commits)
+	_last_refs_signature = _repo.get_refs_signature()
+	_all_commits = _repo.get_commit_graph(_limit, _log_options())
 	_commits_by_oid.clear()
 	for c in _all_commits + (_search_results if _search_results != null else []):
 		_commits_by_oid[c["oid"]] = c
