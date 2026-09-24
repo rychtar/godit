@@ -16,7 +16,7 @@ static func _section(repo_root: String) -> String:
 static var _cache: Dictionary = {}
 
 
-## {"names": Array[String], "assignments": Dictionary[path, name], "active": String, "shelved": Dictionary[stash oid, Dictionary[path, name]]}. A path missing from assignments is just in Default.
+## {"names": Array[String], "assignments": Dictionary[path, name], "active": String, "shelved": Dictionary[stash oid, Dictionary[path, name]], "messages": Dictionary[name, draft commit message]}. A path missing from assignments is just in Default.
 static func load_state(repo_root: String) -> Dictionary:
 	if _cache.has(repo_root):
 		return _cache[repo_root]
@@ -37,6 +37,7 @@ static func load_state(repo_root: String) -> Dictionary:
 		"assignments": cfg.get_value(section, "assignments", {}),
 		"active": active,
 		"shelved": cfg.get_value(section, "shelved", {}),
+		"messages": cfg.get_value(section, "messages", {}),
 	}
 	_cache[repo_root] = state
 	return state
@@ -50,6 +51,7 @@ static func save_state(repo_root: String, state: Dictionary) -> void:
 	cfg.set_value(section, "assignments", state["assignments"])
 	cfg.set_value(section, "active", state["active"])
 	cfg.set_value(section, "shelved", state.get("shelved", {}))
+	cfg.set_value(section, "messages", state.get("messages", {}))
 	cfg.save(CONFIG_PATH)
 
 

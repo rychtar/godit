@@ -18,6 +18,10 @@ const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 ## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
 const CONFIRM_SHORTCUT_COMMIT_SETTING_KEY := "confirm_shortcut_commit"
 const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
+const AUTO_STAGE_SETTING_KEY := "auto_stage_changes"
+const AUTO_ADD_SETTING_KEY := "auto_add_new_files"
+const AUTO_ADD_MASKS_SETTING_KEY := "auto_add_ignore_masks"
+const DEFAULT_AUTO_ADD_MASKS := ["*.import", "*.tmp", "*.bak", "*.orig", "*~", ".DS_Store"]
 const LIST_PANE_RATIO := 0.4
 
 const MENU_MOVE_TO_SUBMENU := "MoveToMenu"
@@ -43,6 +47,12 @@ const ID_COPY_PATH := 18
 const ID_RESOLVE := 19
 const ID_ADD_FOLDER_TO_VCS := 20
 const ID_IGNORE_FOLDER := 21
+const ID_DONT_AUTO_ADD_EXT := 22
+const ID_MOVE_ALL_TO := 23
+
+const OPT_AUTO_STAGE := 0
+const OPT_AUTO_ADD := 1
+const OPT_EDIT_MASKS := 2
 
 ## "Show History" on a file — godit_dock.gd forwards it to the Git Log panel.
 signal file_history_requested(path: String)
@@ -128,6 +138,9 @@ var _diff_side := "unstaged"
 var _last_status_signature := ""
 ## Changed files' mtimes at the last check: a re-saved file keeps its status, so only this reveals that its diff is stale.
 var _last_content_signature := ""
+## path -> status at the last refresh, so auto-stage/auto-add only touch changes that just appeared (never undoing a manual uncheck).
+var _known_status := {}
+var _known_ready := false
 
 
 func _ready() -> void:
@@ -141,6 +154,10 @@ func _ready() -> void:
 	# Without this, a right-click doesn't register as hitting an item, so
 	# item_mouse_selected never fires and the context menu can't open.
 	_tree.allow_rmb_select = true
+	_tree.select_mode = Tree.SELECT_MULTI
+	_tree.multi_selected.connect(func(_item: TreeItem, _column: int, _selected: bool) -> void: _queue_show_selected_diff())
+	_tree.gui_input.connect(_on_tree_gui_input)
+	_tree.set_drag_forwarding(_get_tree_drag_data, _can_drop_tree_data, _drop_tree_data)
 
 	_diff_toggle.button_pressed = Settings.get_value(DIFF_VISIBLE_SETTING_KEY, true)
 
@@ -157,6 +174,10 @@ func _ready() -> void:
 	stash_button.tooltip_text = "Stash uncommitted changes (put them aside and clean the working tree)"
 	stash_button.pressed.connect(_on_stash_button_pressed)
 	%DeleteChangelistButton.add_sibling(stash_button)
+	stash_button.add_sibling(_build_options_button())
+	for button: Button in [%NewChangelistButton, %DeleteChangelistButton]:
+		button.icon = get_theme_icon(&"Add" if button == %NewChangelistButton else &"Remove", &"EditorIcons")
+		button.text = ""
 
 	# Changelists + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
 	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
@@ -177,10 +198,23 @@ func _ready() -> void:
 	add_child(_auto_refresh_timer)
 
 
+func _exit_tree() -> void:
+	if _repo == null or _changelist_state.is_empty() or _amend_check.button_pressed:
+		return
+	var draft := _commit_message.text
+	if draft != _changelist_state["messages"].get(_changelist_state["active"], ""):
+		if draft.strip_edges().is_empty():
+			_changelist_state["messages"].erase(_changelist_state["active"])
+		else:
+			_changelist_state["messages"][_changelist_state["active"]] = draft
+		_save_changelist_state()
+
+
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
 	_sync_bar.set_repo(repo)
 	_changelist_state = ChangelistStore.load_state(_repo.get_repo_root())
+	_commit_message.text = _changelist_state["messages"].get(_changelist_state["active"], "")
 	_sync_staging_to_active_changelist()
 	refresh()
 	if _auto_refresh_timer != null:
@@ -227,6 +261,7 @@ func refresh(status_entries: Variant = null) -> void:
 	if _repo == null:
 		return
 	var entries: Array = status_entries if status_entries != null else _repo.get_status()
+	entries = _auto_track(entries)
 	_last_status_signature = _status_signature(entries)
 	_last_content_signature = _content_signature(entries)
 	_follow_branch_switch()
@@ -253,7 +288,10 @@ func refresh(status_entries: Variant = null) -> void:
 
 	var changelist_groups: Dictionary = {} # name -> TreeItem
 	var changelist_folders: Dictionary = {} # name -> {dir_path: TreeItem}
-	for name in _changelist_state["names"]:
+	var ordered: Array = _changelist_state["names"].duplicate()
+	ordered.erase(_changelist_state["active"])
+	ordered.push_front(_changelist_state["active"]) # the one Commit acts on goes on top
+	for name in ordered:
 		var group := _tree.create_item(root)
 		group.set_selectable(CHECKBOX_COLUMN, false)
 		group.set_selectable(TEXT_COLUMN, false)
@@ -320,8 +358,7 @@ func refresh(status_entries: Variant = null) -> void:
 		counts[name] = count
 		group.set_text(TEXT_COLUMN, "%s %s%s  %d %s" % ["●" if is_active else "○", name, "  ⎇" if name == current_branch else "", count, "file" if count == 1 else "files"])
 		group.set_custom_color(TEXT_COLUMN, Color(0.68, 0.85, 1.0) if is_active else Color(0.75, 0.75, 0.78))
-		group.set_checked(CHECKBOX_COLUMN, count > 0 and agg["staged"] == count)
-		group.set_indeterminate(CHECKBOX_COLUMN, count > 0 and agg["staged"] > 0 and agg["staged"] < count)
+		_set_tristate(group, count, agg["staged"], agg["touched"])
 		group.collapsed = count == 0
 		# Hide empty inactive changelists (still reachable via "Move to
 		# Changelist"); keep the active one visible even when empty.
@@ -343,12 +380,233 @@ func refresh(status_entries: Variant = null) -> void:
 	if op["kind"] == "merge" and _commit_message.text.strip_edges().is_empty() and not op["detail"].is_empty():
 		_commit_message.text = _repo.get_merge_message()
 
-	if untracked_count == 0 and tracked_count == 0:
-		_status_label.text = "No changes."
-	else:
-		_status_label.text = ""
+	if Time.get_ticks_msec() >= _note_until: # else a _notify() note is still up
+		_status_label.text = "No changes." if untracked_count == 0 and tracked_count == 0 else ""
 
 	_update_commit_buttons_enabled(any_staged)
+
+
+## Stages changes that appeared since the last refresh in the active changelist and adds new files not matching the auto-add masks; returns fresh status if it touched anything.
+func _auto_track(entries: Array) -> Array:
+	var previous := _known_status
+	var first := not _known_ready
+	_remember_statuses(entries)
+	if first or not _repo.get_operation_state()["kind"].is_empty():
+		return entries
+	var auto_stage: bool = Settings.get_value(AUTO_STAGE_SETTING_KEY, true)
+	var auto_add: bool = Settings.get_value(AUTO_ADD_SETTING_KEY, true)
+	var active: String = _changelist_state["active"]
+	var assignments: Dictionary = _changelist_state["assignments"]
+	var to_stage: Array = []
+	var to_add: Array = []
+	var assigned_any := false
+	for entry in entries:
+		var path: String = entry["path"]
+		var status: int = entry["status"]
+		if status & GitStatusFlags.CONFLICTED:
+			continue
+		var seen := previous.has(path)
+		if GitStatusFlags.is_untracked(status):
+			if not seen and auto_add and not assignments.has(path) and not is_auto_add_masked(path):
+				to_add.append(path)
+			continue
+		if not seen and not assignments.has(path) and active != ChangelistStore.DEFAULT_NAME:
+			assignments[path] = active # new changes land in the active changelist
+			assigned_any = true
+		if not auto_stage or _changelist_for_path(path) != active or not GitStatusFlags.is_unstaged(status):
+			continue
+		# New change, or a fully checked file edited again (a partly staged one keeps its hunk choices).
+		var before: int = previous.get(path, 0)
+		if not seen or (GitStatusFlags.is_staged(status) and GitStatusFlags.is_staged(before) and not GitStatusFlags.is_unstaged(before)):
+			to_stage.append(path)
+	if assigned_any:
+		_save_changelist_state()
+	if to_stage.is_empty() and to_add.is_empty():
+		return entries
+	_repo.stage_files(to_stage)
+	if not to_add.is_empty():
+		_add_to_vcs(to_add)
+	var fresh: Array = _repo.get_status()
+	_remember_statuses(fresh)
+	return fresh
+
+
+func _remember_statuses(entries: Array) -> void:
+	_known_ready = true
+	_known_status = {}
+	for entry in entries:
+		_known_status[entry["path"]] = entry["status"]
+
+
+## Masks are globs; one without "/" matches the file name, one ending in "/" a folder anywhere, anything else the repo-relative path.
+static func is_auto_add_masked(path: String) -> bool:
+	for raw in Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, DEFAULT_AUTO_ADD_MASKS):
+		var mask := String(raw).strip_edges()
+		if mask.is_empty() or mask.begins_with("#"):
+			continue
+		if mask.ends_with("/"):
+			if ("/" + path).contains("/" + mask.trim_prefix("/")):
+				return true
+		elif mask.contains("/"):
+			if path.match(mask.trim_prefix("/")):
+				return true
+		elif path.get_file().match(mask):
+			return true
+	return false
+
+
+func _build_options_button() -> MenuButton:
+	var button := MenuButton.new()
+	button.flat = true
+	button.icon = get_theme_icon(&"GuiTabMenuHl", &"EditorIcons")
+	button.tooltip_text = "Changelist options"
+	var popup := button.get_popup()
+	popup.add_check_item("Auto-stage changes in the active changelist", OPT_AUTO_STAGE)
+	popup.set_item_tooltip(0, "A file that starts changing is checked for the next commit right away")
+	popup.add_check_item("Auto-add new files to Git", OPT_AUTO_ADD)
+	popup.set_item_tooltip(1, "New files join the active changelist unless they match an ignore mask")
+	popup.add_item("Auto-add Ignore Masks…", OPT_EDIT_MASKS)
+	popup.about_to_popup.connect(func() -> void:
+		popup.set_item_checked(popup.get_item_index(OPT_AUTO_STAGE), Settings.get_value(AUTO_STAGE_SETTING_KEY, true))
+		popup.set_item_checked(popup.get_item_index(OPT_AUTO_ADD), Settings.get_value(AUTO_ADD_SETTING_KEY, true))
+	)
+	popup.id_pressed.connect(func(id: int) -> void:
+		match id:
+			OPT_AUTO_STAGE:
+				Settings.set_value(AUTO_STAGE_SETTING_KEY, not Settings.get_value(AUTO_STAGE_SETTING_KEY, true))
+			OPT_AUTO_ADD:
+				Settings.set_value(AUTO_ADD_SETTING_KEY, not Settings.get_value(AUTO_ADD_SETTING_KEY, true))
+			OPT_EDIT_MASKS:
+				_edit_auto_add_masks()
+	)
+	return button
+
+
+func _edit_auto_add_masks() -> void:
+	var masks: Array = Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, DEFAULT_AUTO_ADD_MASKS)
+	var answer: Variant = await Dialogs.form(self, "Auto-add Ignore Masks", [
+		{ "type": "label", "label": "New files matching these stay in New Files instead of being added to Git automatically. One glob per line: *.import matches file names, build/ a folder, addons/*.tmp a path." },
+		{ "key": "masks", "type": "multiline", "default": "\n".join(masks) },
+	], "Save")
+	if answer == null:
+		return
+	var cleaned: Array = []
+	for line in String(answer["masks"]).split("\n"):
+		if not line.strip_edges().is_empty():
+			cleaned.append(line.strip_edges())
+	Settings.set_value(AUTO_ADD_MASKS_SETTING_KEY, cleaned)
+
+
+func _add_auto_add_mask(mask: String) -> void:
+	var masks: Array = Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, DEFAULT_AUTO_ADD_MASKS).duplicate()
+	if not masks.has(mask):
+		masks.append(mask)
+		Settings.set_value(AUTO_ADD_MASKS_SETTING_KEY, masks)
+	_notify("New %s files won't be added to Git automatically." % mask)
+
+
+## Repo paths of the selected rows: files as-is, folders and changelists expanded; kind "file" (tracked) or "untracked_file".
+func _selected_paths(kind := "file") -> Array:
+	var out: Array = []
+	var item := _tree.get_next_selected(null)
+	while item != null:
+		var meta: Variant = item.get_metadata(0)
+		if meta is Dictionary and meta.get("kind", "") == kind and not out.has(meta["path"]):
+			out.append(meta["path"])
+		item = _tree.get_next_selected(item)
+	return out
+
+
+var _diff_refresh_queued := false
+var _note_until := 0
+
+
+## Short feedback for local actions, in the commit row so the layout doesn't jump like with the operation bar.
+func _notify(text: String) -> void:
+	_status_label.text = text
+	_status_label.tooltip_text = text
+	_note_until = Time.get_ticks_msec() + 6000
+
+
+## Shift-selecting a range emits multi_selected once per row; show the diff once.
+func _queue_show_selected_diff() -> void:
+	if _diff_refresh_queued:
+		return
+	_diff_refresh_queued = true
+	(func() -> void:
+		_diff_refresh_queued = false
+		_show_selected_diff()
+	).call_deferred()
+
+
+## Double-clicking a changelist header makes it active (headers aren't selectable, so item_activated never fires for them).
+func _on_tree_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
+		var item := _tree.get_item_at_position(event.position)
+		if item != null and item.get_metadata(0) is Dictionary and item.get_metadata(0).get("kind", "") == "changelist_group":
+			_set_active_changelist(item.get_metadata(0)["name"])
+			_tree.accept_event()
+
+
+func _get_tree_drag_data(at_position: Vector2) -> Variant:
+	var item := _tree.get_item_at_position(at_position)
+	if item == null or not item.get_metadata(0) is Dictionary:
+		return null
+	var meta: Dictionary = item.get_metadata(0)
+	var paths: Array = []
+	var new_paths: Array = []
+	match meta.get("kind", ""):
+		"file", "untracked_file":
+			paths = _selected_paths()
+			new_paths = _selected_paths("untracked_file")
+			if not paths.has(meta["path"]) and not new_paths.has(meta["path"]):
+				paths = [meta["path"]] if meta["kind"] == "file" else []
+				new_paths = [meta["path"]] if meta["kind"] == "untracked_file" else []
+		"folder":
+			_collect_file_paths(item, paths)
+			_collect_file_paths(item, new_paths, "untracked_file")
+		_:
+			return null
+	var count := paths.size() + new_paths.size()
+	if count == 0:
+		return null
+	var preview := Label.new()
+	preview.text = "%s → changelist" % (meta.get("path", "").get_file() if count == 1 else "%d files" % count)
+	_tree.set_drag_preview(preview)
+	_tree.drop_mode_flags = Tree.DROP_MODE_ON_ITEM
+	return { "type": "godit_changes", "paths": paths, "new_paths": new_paths }
+
+
+func _can_drop_tree_data(at_position: Vector2, data: Variant) -> bool:
+	return data is Dictionary and data.get("type", "") == "godit_changes" and not _changelist_at(at_position).is_empty()
+
+
+func _drop_tree_data(at_position: Vector2, data: Variant) -> void:
+	_tree.drop_mode_flags = Tree.DROP_MODE_DISABLED
+	var name := _changelist_at(at_position)
+	if name.is_empty():
+		return
+	if not data["paths"].is_empty():
+		_move_files_to_changelist(data["paths"], name)
+	if not data["new_paths"].is_empty():
+		_add_to_vcs(data["new_paths"], name)
+		refresh.call_deferred()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_END and _tree != null:
+		_tree.drop_mode_flags = Tree.DROP_MODE_DISABLED
+
+
+## Changelist that owns the row under at_position (its header or anything inside it), or "".
+func _changelist_at(at_position: Vector2) -> String:
+	var item := _tree.get_item_at_position(at_position)
+	while item != null:
+		var meta: Variant = item.get_metadata(0)
+		if meta is Dictionary and meta.get("kind", "") == "changelist_group":
+			return meta["name"]
+		item = item.get_parent()
+	return ""
 
 
 ## Re-selects the file that was selected before the tree was rebuilt (so auto-refresh and hunk actions don't lose your place), or clears the diff if it's gone.
@@ -551,40 +809,45 @@ func _ignore_path(path: String) -> void:
 	refresh()
 
 
-## Stages a previously-untracked file and assigns it to the active
-## changelist. Right-click-only, deliberate action — also what keeps the
-## file under its changelist instead of bouncing back to New Files
-## if it's later unstaged (see refresh()'s is_new check).
-func _add_to_vcs(paths: Array) -> void:
+## Stages new files and assigns them to a changelist (the active one by default), which keeps them there instead of bouncing back to New Files if later unstaged.
+func _add_to_vcs(paths: Array, list_name := "") -> void:
+	if list_name.is_empty():
+		list_name = _changelist_state["active"]
 	var result: Dictionary = _repo.stage_files(paths)
 	if not result["ok"]:
 		Dialogs.error(self, "Add to Git failed", result["error"])
 		return
 	for path in paths:
-		_changelist_state["assignments"][path] = _changelist_state["active"]
+		_changelist_state["assignments"][path] = list_name
 	_save_changelist_state()
-	_operation_bar.done("Added %s to \"%s\"." % [paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size(), _changelist_state["active"]])
+	_notify("Added %s to \"%s\"." % [paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size(), list_name])
 
 
 ## Stages files in the active changelist, unstages tracked files outside
 ## it. Called whenever the active changelist changes, so Commit defaults
 ## to exactly that group unless the user hand-adjusts checkboxes after.
-func _sync_staging_to_active_changelist() -> void:
+func _sync_staging_to_active_changelist(readd_new := false) -> void:
 	if _repo == null:
 		return
 	var active: String = _changelist_state["active"]
+	var to_stage: Array = []
 	for entry in _repo.get_status():
 		var path: String = entry["path"]
 		var status: int = entry["status"]
 		# Staging a conflicted file would silently mark it resolved.
-		if GitStatusFlags.is_untracked(status) or status & GitStatusFlags.CONFLICTED:
+		if status & GitStatusFlags.CONFLICTED:
 			continue
 		var belongs := _changelist_for_path(path) == active
-		var staged := GitStatusFlags.is_staged(status)
-		if belongs and not staged:
-			_repo.stage_file(path)
-		elif not belongs and staged:
+		# A new file unstaged when its changelist went inactive is untracked again; on a switch back, re-add it if it was assigned here.
+		if GitStatusFlags.is_untracked(status):
+			if readd_new and belongs and _changelist_state["assignments"].has(path):
+				to_stage.append(path)
+			continue
+		if belongs and (GitStatusFlags.is_unstaged(status) or not GitStatusFlags.is_staged(status)):
+			to_stage.append(path)
+		elif not belongs and GitStatusFlags.is_staged(status):
 			_repo.unstage_file(path)
+	_repo.stage_files(to_stage)
 
 
 func _update_changelist_option(counts: Dictionary = {}) -> void:
@@ -605,27 +868,35 @@ func _aggregate_files(item: TreeItem) -> Dictionary:
 	var meta: Dictionary = item.get_metadata(0)
 	var kind: String = meta.get("kind", "") if not meta.is_empty() else ""
 	if kind == "file":
-		return { "count": 1, "staged": 1 if item.is_checked(CHECKBOX_COLUMN) else 0 }
+		return { "count": 1, "staged": 1 if item.is_checked(CHECKBOX_COLUMN) else 0, "touched": 1 if meta["staged"] else 0 }
 	if kind == "untracked_file":
-		return { "count": 1, "staged": 0 }
+		return { "count": 1, "staged": 0, "touched": 0 }
 
 	var total := 0
 	var staged := 0
+	var touched := 0
 	var child := item.get_first_child()
 	while child:
 		var r := _aggregate_files(child)
 		total += r["count"]
 		staged += r["staged"]
+		touched += r["touched"]
 		child = child.get_next()
 
 	if kind == "folder":
 		var base_name: String = meta.get("name", "")
 		item.set_text(TEXT_COLUMN, "%s  %d %s" % [base_name, total, "file" if total == 1 else "files"])
 		if item.get_cell_mode(CHECKBOX_COLUMN) == TreeItem.CELL_MODE_CHECK:
-			item.set_checked(CHECKBOX_COLUMN, total > 0 and staged == total)
-			item.set_indeterminate(CHECKBOX_COLUMN, total > 0 and staged > 0 and staged < total)
+			_set_tristate(item, total, staged, touched)
 
-	return { "count": total, "staged": staged }
+	return { "count": total, "staged": staged, "touched": touched }
+
+
+## Checked when every file is fully staged, indeterminate when anything is staged at all.
+func _set_tristate(item: TreeItem, total: int, staged: int, touched: int) -> void:
+	var full := total > 0 and staged == total
+	item.set_checked(CHECKBOX_COLUMN, full)
+	item.set_indeterminate(CHECKBOX_COLUMN, not full and touched > 0)
 
 
 ## Collects the repo paths of every "file"-kind descendant, for cascading a
@@ -647,8 +918,10 @@ func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String
 	# New files get a checkbox too: checking one adds it to Git in the active changelist (same gesture as staging).
 	item.set_cell_mode(CHECKBOX_COLUMN, TreeItem.CELL_MODE_CHECK)
 	item.set_editable(CHECKBOX_COLUMN, true)
-	item.set_checked(CHECKBOX_COLUMN, staged)
-	item.set_tooltip_text(CHECKBOX_COLUMN, "Stage/unstage" if in_changelist else "Add to Git")
+	var partial := staged and GitStatusFlags.is_unstaged(status)
+	item.set_checked(CHECKBOX_COLUMN, staged and not partial)
+	item.set_indeterminate(CHECKBOX_COLUMN, partial)
+	item.set_tooltip_text(CHECKBOX_COLUMN, ("Partly staged — click to stage the rest" if partial else "Stage/unstage") if in_changelist else "Add to Git")
 	item.set_text(TEXT_COLUMN, "%s  %s" % [GitIcons.status_letter(status), path.get_file()])
 	item.set_custom_color(TEXT_COLUMN, GitIcons.status_color(status))
 	var meta := { "kind": "file" if in_changelist else "untracked_file", "path": path, "status": status, "staged": staged }
@@ -825,21 +1098,28 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 
 	match meta.get("kind", ""):
 		"file":
-			_context_menu.add_item("Open", ID_OPEN)
-			_context_menu.add_item("Stage" if not meta["staged"] else "Unstage", ID_TOGGLE_STAGE)
-			_context_menu.add_submenu_item("Move to Changelist", MENU_MOVE_TO_SUBMENU)
-			var names: Array = _changelist_state["names"]
-			for i in names.size():
-				_move_to_menu.add_item(names[i], i)
-				_move_to_menu.set_item_disabled(i, names[i] == _changelist_for_path(meta["path"]))
-			_move_to_menu.add_separator()
-			_move_to_menu.add_item("New Changelist...", ID_MOVE_TO_NEW)
-			_context_menu.add_separator()
-			_context_menu.add_item("Show History", ID_SHOW_HISTORY)
-			_context_menu.add_item("Copy Path", ID_COPY_PATH)
-			_context_menu.add_separator()
-			_context_menu.add_item("Revert...", ID_REVERT)
-			_context_menu.add_item("Remove...", ID_REMOVE)
+			var selected := _selected_paths()
+			if selected.size() > 1 and selected.has(meta["path"]):
+				var n := selected.size()
+				var all_staged := selected.all(func(path: String) -> bool: return _find_item_by_path(_tree.get_root(), path).get_metadata(0)["staged"])
+				_context_target = { "kind": "files", "paths": selected, "staged": all_staged }
+				_context_menu.add_item("%s %d Files" % ["Unstage" if all_staged else "Stage", n], ID_TOGGLE_STAGE)
+				_context_menu.add_submenu_item("Move %d Files to Changelist" % n, MENU_MOVE_TO_SUBMENU)
+				_fill_move_to_menu(selected)
+				_context_menu.add_separator()
+				_context_menu.add_item("Stash %d Files..." % n, ID_STASH_GROUP)
+				_context_menu.add_item("Revert %d Files..." % n, ID_REVERT_ALL)
+			else:
+				_context_menu.add_item("Open", ID_OPEN)
+				_context_menu.add_item("Stage" if not meta["staged"] else "Unstage", ID_TOGGLE_STAGE)
+				_context_menu.add_submenu_item("Move to Changelist", MENU_MOVE_TO_SUBMENU)
+				_fill_move_to_menu([meta["path"]])
+				_context_menu.add_separator()
+				_context_menu.add_item("Show History", ID_SHOW_HISTORY)
+				_context_menu.add_item("Copy Path", ID_COPY_PATH)
+				_context_menu.add_separator()
+				_context_menu.add_item("Revert...", ID_REVERT)
+				_context_menu.add_item("Remove...", ID_REMOVE)
 		"folder":
 			var folder_paths: Array = []
 			_collect_file_paths(item, folder_paths)
@@ -864,11 +1144,16 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 					_context_menu.add_separator()
 				_context_menu.add_item("Revert %d File%s..." % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], ID_REVERT_ALL)
 				_context_menu.add_item("Stash %d File%s..." % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], ID_STASH_GROUP)
+				_context_menu.add_submenu_item("Move %d File%s to Changelist" % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], MENU_MOVE_TO_SUBMENU)
+				_fill_move_to_menu(folder_paths)
 		"untracked_file":
 			_context_menu.add_item("Add to Git", ID_ADD_TO_VCS)
 			_context_menu.add_item("Open", ID_OPEN)
 			_context_menu.add_separator()
 			_context_menu.add_item("Ignore", ID_IGNORE)
+			var ext: String = meta["path"].get_extension()
+			if not ext.is_empty() and not is_auto_add_masked(meta["path"]):
+				_context_menu.add_item("Never Auto-add *.%s Files" % ext, ID_DONT_AUTO_ADD_EXT)
 			_context_menu.add_item("Revert...", ID_REVERT)
 		"conflict_file":
 			var op_kind: String = _repo.get_operation_state()["kind"]
@@ -891,6 +1176,10 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 			_context_target = meta.duplicate()
 			_context_target["paths"] = group_paths
 			_context_menu.add_item("Set Active", ID_SET_ACTIVE)
+			_context_menu.set_item_disabled(0, meta["name"] == _changelist_state["active"])
+			if not group_paths.is_empty():
+				_context_menu.add_submenu_item("Move All to Changelist", MENU_MOVE_TO_SUBMENU)
+				_fill_move_to_menu(group_paths)
 			if meta["name"] != ChangelistStore.DEFAULT_NAME:
 				_context_menu.add_item("Rename...", ID_RENAME)
 				_context_menu.add_item("Delete", ID_DELETE)
@@ -906,6 +1195,24 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 	_context_menu.position = screen_position
 	_context_menu.reset_size()
 	_context_menu.popup()
+
+
+## Move-to targets for paths: every changelist except the one they all already sit in.
+func _fill_move_to_menu(paths: Array) -> void:
+	var current := {}
+	for path in paths:
+		current[_changelist_for_path(path)] = true
+	var names: Array = _changelist_state["names"]
+	for i in names.size():
+		_move_to_menu.add_item(names[i], i)
+		_move_to_menu.set_item_disabled(i, current.size() == 1 and current.has(names[i]))
+	_move_to_menu.add_separator()
+	_move_to_menu.add_item("New Changelist...", ID_MOVE_TO_NEW)
+
+
+## Paths the context menu acts on: a multi-selection, folder or changelist, else the single file.
+func _context_paths() -> Array:
+	return _context_target["paths"] if _context_target.has("paths") else [_context_target["path"]]
 
 
 func _on_context_menu_id_pressed(id: int) -> void:
@@ -944,12 +1251,14 @@ func _on_context_menu_id_pressed(id: int) -> void:
 		ID_NEW_CHANGELIST:
 			_open_new_changelist_dialog()
 		ID_TOGGLE_STAGE:
-			var path: String = _context_target["path"]
-			if _context_target["staged"]:
-				_repo.unstage_file(path)
-			else:
-				_repo.stage_file(path)
+			for path in _context_paths():
+				if _context_target["staged"]:
+					_repo.unstage_file(path)
+				else:
+					_repo.stage_file(path)
 			refresh.call_deferred()
+		ID_DONT_AUTO_ADD_EXT:
+			_add_auto_add_mask("*." + String(_context_target["path"]).get_extension())
 		ID_REVERT:
 			var path: String = _context_target["path"]
 			_confirm_dialog_action = "revert"
@@ -1090,7 +1399,7 @@ func _on_move_to_menu_id_pressed(id: int) -> void:
 
 	var names: Array = _changelist_state["names"]
 	if id >= 0 and id < names.size():
-		_move_file_to_changelist(_context_target["path"], names[id])
+		_move_files_to_changelist(_context_paths(), names[id])
 
 
 func _on_new_changelist_button_pressed() -> void:
@@ -1131,8 +1440,8 @@ func _on_name_dialog_confirmed() -> void:
 			_create_changelist(name)
 			_maybe_create_branch(name)
 		"new_and_move":
-			_create_changelist(name)
-			_move_file_to_changelist(_context_target["path"], name)
+			if _create_changelist(name):
+				_move_files_to_changelist(_context_paths(), name)
 			_maybe_create_branch(name)
 		"rename":
 			_rename_changelist(_name_dialog_rename_target, name)
@@ -1154,13 +1463,14 @@ func _maybe_create_branch(name: String) -> void:
 ## A freshly created changelist becomes the active one — you create one
 ## because you're about to start working in it, so this also updates the
 ## dropdown and re-syncs staging to match (see _set_active_changelist()).
-func _create_changelist(name: String) -> void:
+func _create_changelist(name: String) -> bool:
 	var names: Array = _changelist_state["names"]
 	if names.has(name):
 		_show_error("Changelist exists", "There's already a changelist named \"%s\"." % name)
-		return
+		return false
 	names.append(name)
 	_set_active_changelist(name)
+	return true
 
 
 func _rename_changelist(old_name: String, new_name: String) -> void:
@@ -1182,6 +1492,10 @@ func _rename_changelist(old_name: String, new_name: String) -> void:
 
 	if _changelist_state["active"] == old_name:
 		_changelist_state["active"] = new_name
+	var messages: Dictionary = _changelist_state["messages"]
+	if messages.has(old_name):
+		messages[new_name] = messages[old_name]
+		messages.erase(old_name)
 
 	_save_changelist_state()
 	refresh.call_deferred()
@@ -1190,8 +1504,13 @@ func _rename_changelist(old_name: String, new_name: String) -> void:
 func _delete_changelist(name: String) -> void:
 	if name == ChangelistStore.DEFAULT_NAME:
 		return
-
 	var assignments: Dictionary = _changelist_state["assignments"]
+	var count := assignments.values().count(name)
+	if count > 0 and not await Dialogs.confirm(self, "Delete Changelist",
+			"Delete \"%s\"? Its %d changed file%s move to Default; the changes themselves stay." % [name, count, "" if count == 1 else "s"], "Delete"):
+		return
+
+	_changelist_state["messages"].erase(name)
 	for path in assignments.keys():
 		if assignments[path] == name:
 			assignments.erase(path) # falls back to Default, see _changelist_for_path()
@@ -1205,19 +1524,36 @@ func _delete_changelist(name: String) -> void:
 	refresh.call_deferred()
 
 
+## Each changelist keeps its own draft commit message, swapped in and out with the active one.
 func _set_active_changelist(name: String) -> void:
+	var messages: Dictionary = _changelist_state["messages"]
+	var draft := _commit_message.text if not _amend_check.button_pressed else ""
+	if draft.strip_edges().is_empty():
+		messages.erase(_changelist_state["active"])
+	else:
+		messages[_changelist_state["active"]] = draft
+	if name != _changelist_state["active"]:
+		_amend_check.set_pressed_no_signal(false)
+		_commit_message.text = messages.get(name, "")
+		_update_commit_buttons_enabled()
 	_changelist_state["active"] = name
-	_sync_staging_to_active_changelist()
+	_sync_staging_to_active_changelist(true)
 	_save_changelist_state()
 	refresh.call_deferred()
 
 
-## Doesn't call _sync_staging_to_active_changelist(): moving a file between
-## changelists shouldn't silently flip its staged checkbox. Only switching
-## the active changelist resets staging to match it.
-func _move_file_to_changelist(path: String, name: String) -> void:
-	_changelist_state["assignments"][path] = name
+## Moving into the active changelist stages the files, moving out of it unstages them, so checkboxes keep meaning "goes into the next commit".
+func _move_files_to_changelist(paths: Array, name: String) -> void:
+	var active: String = _changelist_state["active"]
+	for path in paths:
+		var was_active := _changelist_for_path(path) == active
+		_changelist_state["assignments"][path] = name
+		if name == active and not was_active:
+			_repo.stage_file(path)
+		elif name != active and was_active:
+			_repo.unstage_file(path)
 	_save_changelist_state()
+	_notify("Moved %s to \"%s\"." % [paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size(), name])
 	refresh.call_deferred()
 
 
@@ -1277,8 +1613,10 @@ func _do_commit(push_after: bool) -> void:
 
 	_commit_message.text = ""
 	_amend_check.button_pressed = false
+	if _changelist_state["messages"].erase(_changelist_state["active"]):
+		_save_changelist_state()
 	refresh()
-	_status_label.text = "Committed %s" % String(result["oid"]).substr(0, 8)
+	_notify("Committed %s" % String(result["oid"]).substr(0, 8))
 
 	if push_after:
 		_do_push()

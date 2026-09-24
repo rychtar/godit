@@ -9,7 +9,7 @@ A git client inside the Godot editor. See what changed, stage and commit, switch
 - **Changes panel**: changed files as a folder tree. Tick a checkbox to stage a file, a folder or a whole group.
 - **Partial staging**: stage, unstage or revert a single hunk or selected lines.
 - **Diff view**: unified or side-by-side, with word-level highlights, script editor syntax colors and before/after image previews.
-- **Changelists and shelving**: group changes and commit or stash them separately.
+- **Changelists and shelving**: group changes and commit or stash them separately. New changes and new files land in the active changelist already ticked; drag files between changelists, and each changelist keeps its own draft commit message.
 - **Commit, Amend, Commit and Push.**
 - **Branches**: checkout, create, rename, delete, merge and rebase, with ahead/behind counts. Remotes, tags and stashes are in the same panel.
 - **Fetch, pull and push** run in the background with progress and Cancel. Common failures come with an explanation and a suggested fix.
@@ -50,6 +50,7 @@ If `git push` works in a terminal without asking for anything, it works in Godit
 ## Usage
 
 - **Commit**: tick the files in Changes, type a message and press `Ctrl+Enter` (`Cmd+Enter` on macOS). `Ctrl+Shift+Enter` commits and pushes.
+- **Changelists**: double-click a changelist to make it active, drag files or folders onto another one, or select several files and right-click. The ⋮ menu next to Stash turns off auto-staging and auto-adding and edits the masks for files that should never be auto-added (for example `*.import`).
 - **Stage part of a file**: open the file's diff, then stage a hunk or select lines and stage those.
 - **Right-click** a file, branch or commit for everything else: revert, ignore, show history, cherry-pick, reset and more.
 - **In the script editor**, click a gutter marker to preview the change and roll it back.
@@ -66,6 +67,9 @@ Project > Tools > Godit:
 | Dock Changes/Branches at bottom | off | Moves the Git dock into the bottom panel |
 | Fetch remotes in the background every 10 min | off | Keeps ahead/behind counts current |
 | Show blame in the script editor | off | Author and age column next to each line |
+| Confirm Ctrl/Cmd+Enter commits | on | Ask before committing from the keyboard. "Don't ask again" in the dialog turns it off |
+
+Auto-staging, auto-adding new files and the auto-add ignore masks are in the ⋮ menu on the Changes panel (all on by default).
 
 The auto-reload and auto-save options change the matching Godot editor settings. Settings are per user and stored outside the project, in `user://godit_settings.cfg`.
 
