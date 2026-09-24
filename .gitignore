@@ -1,0 +1,11 @@
+.godot/
+*.translation
+
+# The user's global ~/.gitignore_global has a blanket "addons" rule (for some
+# other, non-Godot context) that would otherwise exclude this plugin's whole
+# source tree, since Godot's addon convention is res://addons/<name>/.
+!/addons/
+!/addons/**
+
+# Re-excluded after the addons negation above, so it still applies inside addons/.
+**/.DS_Store

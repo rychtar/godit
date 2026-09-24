@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Godit Thumbnail</title>
+<style>
+	:root {
+		--bg: #111418;
+		--panel: #1a1e25;
+		--panel-2: #20252d;
+		--line: #2c323c;
+		--text: #e8ebf0;
+		--muted: #9aa3b0;
+		--dim: #6b7482;
+		--accent: #ff7043;
+		--blue: #5aa9e6;
+		--green: #7bd88f;
+		--purple: #c792ea;
+		--sans: "Inter", -apple-system, "Helvetica Neue", sans-serif;
+		--mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
+	}
+	* { box-sizing: border-box; margin: 0; padding: 0; }
+	html, body { width: 1920px; height: 1080px; overflow: hidden; }
+	body {
+		background:
+			radial-gradient(900px 600px at 0% 100%, #1a2733 0%, transparent 70%),
+			radial-gradient(900px 700px at 100% 0%, #1d1a1f 0%, transparent 70%),
+			var(--bg);
+		color: var(--text);
+		font-family: var(--sans);
+		position: relative;
+	}
+
+	.left { position: absolute; left: 120px; top: 190px; width: 700px; }
+	.eyebrow { display: flex; align-items: center; gap: 14px; font-size: 27px; font-weight: 700; letter-spacing: 2px; color: var(--muted); }
+	.eyebrow::before { content: ""; width: 13px; height: 13px; border-radius: 50%; background: var(--accent); }
+	.title { margin-top: 30px; font-size: 128px; line-height: 0.92; font-weight: 800; letter-spacing: -4px; }
+	.title .accent { color: var(--accent); display: block; }
+	.tagline { margin-top: 44px; font-size: 38px; line-height: 1.35; color: #c9ced6; }
+	.rows { margin-top: 64px; display: flex; flex-direction: column; gap: 22px; }
+	.row { display: flex; align-items: center; gap: 12px; font-size: 32px; color: var(--muted); }
+	.key {
+		display: inline-flex; align-items: center; height: 56px; padding: 0 20px;
+		font-size: 28px; font-weight: 700; color: var(--text);
+		background: #1f242c; border: 2px solid #313844; border-bottom-width: 4px; border-radius: 10px;
+	}
+	.plus { color: var(--dim); font-size: 24px; margin: 0 2px; }
+	.row .desc { margin-left: 16px; }
+
+	.window {
+		position: absolute; left: 860px; top: 150px; width: 1000px; height: 580px;
+		background: var(--panel); border: 2px solid var(--line); border-radius: 18px; overflow: hidden;
+		box-shadow: 0 40px 80px rgba(0, 0, 0, 0.45);
+	}
+	.titlebar { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 26px; border-bottom: 2px solid var(--line); background: #1c2027; }
+	.dot { width: 16px; height: 16px; border-radius: 50%; background: #3a404b; }
+	.titlebar .name { margin-left: 22px; font-family: var(--mono); font-size: 24px; color: var(--muted); }
+	.titlebar .tabs { margin-left: auto; display: flex; gap: 8px; font-size: 20px; font-weight: 600; }
+	.tab { padding: 8px 16px; border-radius: 8px; color: var(--dim); }
+	.tab.on { color: var(--text); background: #2a303a; }
+
+	.log { position: relative; padding: 14px 0; }
+	.log svg { position: absolute; left: 0; top: 14px; }
+	.commit { height: 58px; display: flex; align-items: center; padding-left: 128px; padding-right: 30px; font-size: 25px; }
+	.commit.sel { background: #262b34; }
+	.commit .msg { color: var(--text); white-space: nowrap; }
+	.commit .who { margin-left: auto; font-family: var(--mono); font-size: 21px; color: var(--dim); }
+	.badge { font-family: var(--mono); font-size: 19px; padding: 4px 10px; border-radius: 6px; margin-right: 14px; font-weight: 600; }
+	.b-head { color: #1b1206; background: var(--accent); }
+	.b-br { color: var(--blue); background: rgba(90, 169, 230, 0.14); border: 1.5px solid rgba(90, 169, 230, 0.45); }
+	.b-tag { color: var(--green); background: rgba(123, 216, 143, 0.12); border: 1.5px solid rgba(123, 216, 143, 0.4); }
+
+	.popup {
+		position: absolute; left: 930px; top: 612px; width: 760px; height: 350px;
+		background: var(--panel-2); border: 2px solid #363d49; border-radius: 18px;
+		box-shadow: 0 40px 90px rgba(0, 0, 0, 0.6); padding: 24px;
+	}
+	.popup .head { display: flex; align-items: center; justify-content: space-between; font-size: 22px; font-weight: 700; color: var(--muted); letter-spacing: 1px; }
+	.popup .head .count { font-family: var(--mono); font-weight: 600; color: var(--dim); letter-spacing: 0; }
+	.tree { margin-top: 14px; font-family: var(--mono); font-size: 24px; }
+	.file { height: 46px; display: flex; align-items: center; gap: 14px; border-radius: 8px; padding: 0 12px; }
+	.file.sel { background: rgba(255, 112, 67, 0.14); }
+	.file.child { padding-left: 52px; }
+	.check { width: 24px; height: 24px; border-radius: 6px; border: 2px solid #4a5260; flex: none; position: relative; }
+	.check.on { background: var(--accent); border-color: var(--accent); }
+	.check.on::after { content: ""; position: absolute; left: 6px; top: 1px; width: 7px; height: 13px; border: solid #1b1206; border-width: 0 3px 3px 0; transform: rotate(45deg); }
+	.st { width: 20px; font-weight: 700; }
+	.st.m { color: var(--blue); } .st.a { color: var(--green); }
+	.folder { color: var(--muted); }
+	.stat { margin-left: auto; font-size: 20px; }
+	.stat .add { color: var(--green); } .stat .del { color: #f07178; margin-left: 8px; }
+	.commitbar { position: absolute; left: 24px; right: 24px; bottom: 24px; display: flex; gap: 12px; }
+	.input { flex: 1; height: 56px; border: 2px solid var(--accent); border-radius: 10px; display: flex; align-items: center; padding: 0 18px; font-size: 24px; background: #181c22; }
+	.input .caret { width: 2px; height: 28px; background: var(--accent); margin-left: 2px; }
+	.btn { height: 56px; padding: 0 24px; border-radius: 10px; display: flex; align-items: center; font-size: 23px; font-weight: 700; }
+	.btn.primary { background: var(--accent); color: #1b1206; }
+</style>
+</head>
+<body>
+	<div class="left">
+		<div class="eyebrow">GODOT 4 PLUGIN</div>
+		<div class="title">Godit<span class="accent">Git client</span></div>
+		<p class="tagline">Stage, commit, branch and browse<br>history without leaving the editor.</p>
+		<div class="rows">
+			<div class="row"><span class="key">Ctrl</span><span class="plus">+</span><span class="key">Enter</span><span class="desc">commit</span></div>
+			<div class="row"><span class="key">Ctrl</span><span class="plus">+</span><span class="key">Shift</span><span class="plus">+</span><span class="key">Enter</span><span class="desc">commit and push</span></div>
+			<div class="row"><span class="key">Hunks</span><span class="desc">stage single lines, not whole files</span></div>
+		</div>
+	</div>
+
+	<div class="window">
+		<div class="titlebar">
+			<span class="dot"></span><span class="dot"></span><span class="dot"></span>
+			<span class="name">Git Log</span>
+			<div class="tabs"><span class="tab on">Graph</span><span class="tab">Console</span></div>
+		</div>
+		<div class="log">
+			<svg width="120" height="348" viewBox="0 0 120 348">
+				<path d="M44 29 V319" stroke="#ff7043" stroke-width="5" fill="none"/>
+				<path d="M44 29 C44 60 84 56 84 87 V203 C84 234 44 230 44 261" stroke="#5aa9e6" stroke-width="5" fill="none"/>
+				<circle cx="44" cy="29" r="11" fill="#1a1e25" stroke="#ff7043" stroke-width="5"/>
+				<circle cx="84" cy="87" r="9" fill="#5aa9e6"/>
+				<circle cx="44" cy="145" r="9" fill="#ff7043"/>
+				<circle cx="84" cy="203" r="9" fill="#5aa9e6"/>
+				<circle cx="44" cy="261" r="9" fill="#ff7043"/>
+				<circle cx="44" cy="319" r="9" fill="#ff7043"/>
+			</svg>
+			<div class="commit sel"><span class="badge b-head">main</span><span class="msg">Merge branch 'feature/dash'</span><span class="who">now</span></div>
+			<div class="commit"><span class="badge b-br">feature/dash</span><span class="msg">Add dash cooldown</span><span class="who">12m</span></div>
+			<div class="commit"><span class="msg">Tweak jump buffer</span><span class="who">1h</span></div>
+			<div class="commit"><span class="msg">Dash particles</span><span class="who">2h</span></div>
+			<div class="commit"><span class="msg">Fix slope snapping</span><span class="who">3h</span></div>
+			<div class="commit"><span class="badge b-tag">v0.3</span><span class="msg">Player state machine</span><span class="who">1d</span></div>
+		</div>
+	</div>
+
+	<div class="popup">
+		<div class="head"><span>CHANGES</span><span class="count">3 files</span></div>
+		<div class="tree">
+			<div class="file"><span class="check on"></span><span class="folder">player/</span></div>
+			<div class="file child sel"><span class="check on"></span><span class="st m">M</span><span>player.gd</span><span class="stat"><span class="add">+18</span><span class="del">-4</span></span></div>
+			<div class="file child"><span class="check on"></span><span class="st a">A</span><span>dash.gd</span><span class="stat"><span class="add">+42</span></span></div>
+			<div class="file"><span class="check"></span><span class="st m">M</span><span>main.tscn</span><span class="stat"><span class="add">+2</span><span class="del">-1</span></span></div>
+		</div>
+		<div class="commitbar">
+			<div class="input">Add dash cooldown<span class="caret"></span></div>
+			<div class="btn primary">Commit</div>
+		</div>
+	</div>
+</body>
+</html>
