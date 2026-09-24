@@ -10,6 +10,7 @@ const ScriptMenuScript := preload("res://addons/godit/dock/gutter/script_menu.gd
 const Settings := preload("res://addons/godit/util/settings.gd")
 const GitCli := preload("res://addons/godit/util/git_cli.gd")
 const GoditDockScript := preload("res://addons/godit/dock/godit_dock.gd")
+const ChangesPanelScript := preload("res://addons/godit/dock/panels/changes_panel.gd")
 
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
@@ -48,6 +49,8 @@ const BOTTOM_PANEL_MIN_HEIGHT := 300
 const BLAME_SETTING_KEY := "show_blame"
 const ID_BLAME := 4
 
+const ID_CONFIRM_SHORTCUT_COMMIT := 5
+
 
 func _enter_tree() -> void:
 	GitCli.prepare_environment()
@@ -63,6 +66,11 @@ func _enter_tree() -> void:
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_AUTO_FETCH), Settings.get_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, false))
 	tools_menu.add_check_item("Show blame in the script editor", ID_BLAME)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_BLAME), Settings.get_value(BLAME_SETTING_KEY, false))
+	tools_menu.add_check_item("Confirm Ctrl/Cmd+Enter commits", ID_CONFIRM_SHORTCUT_COMMIT)
+	# The confirmation dialog's "Don't ask again" changes this setting too, so re-read it on every open.
+	tools_menu.about_to_popup.connect(func() -> void:
+		tools_menu.set_item_checked(tools_menu.get_item_index(ID_CONFIRM_SHORTCUT_COMMIT), Settings.get_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, true))
+	)
 	tools_menu.id_pressed.connect(_on_tools_menu_id_pressed)
 	add_tool_submenu_item("Godit", tools_menu)
 	_apply_auto_reload_setting()
@@ -178,6 +186,8 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 			_apply_dock_placement()
 		ID_BLAME:
 			_set_blame_enabled(checked)
+		ID_CONFIRM_SHORTCUT_COMMIT:
+			Settings.set_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, checked)
 		ID_AUTO_FETCH:
 			Settings.set_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, checked)
 			dock_instance.apply_auto_fetch_setting()

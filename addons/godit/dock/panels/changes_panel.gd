@@ -15,6 +15,8 @@ const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_resolver.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
+## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
+const CONFIRM_SHORTCUT_COMMIT_SETTING_KEY := "confirm_shortcut_commit"
 const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
 const LIST_PANE_RATIO := 0.4
 
@@ -1058,8 +1060,27 @@ func _on_commit_message_gui_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER] \
 			and (event.ctrl_pressed or event.meta_pressed):
 		_commit_message.accept_event()
-		if not _commit_button.disabled:
+		if not _commit_button.disabled and await _confirm_shortcut_commit(event.shift_pressed):
 			_do_commit(event.shift_pressed)
+
+
+## Keyboard commits are easy to fire by accident, so they ask first unless the user ticked "Don't ask again".
+func _confirm_shortcut_commit(push_after: bool) -> bool:
+	if not Settings.get_value(CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, true):
+		return true
+	var what := "Amend the last commit" if _amend_check.button_pressed else "Commit the staged changes"
+	var summary := _commit_message.text.strip_edges().get_slice("\n", 0)
+	var answer: Variant = await Dialogs.form(self, "Commit and Push" if push_after else "Commit", [
+		{ "type": "label", "label": "%s%s?\n\n%s" % [what, " and push" if push_after else "", summary] },
+		{ "key": "dont_ask", "label": "Don't ask again for keyboard shortcuts", "type": "check", "default": false,
+			"tooltip": "Turn it back on in Project > Tools > Godit" },
+	], "Commit and Push" if push_after else "Commit")
+	if answer == null:
+		_commit_message.grab_focus()
+		return false
+	if answer["dont_ask"]:
+		Settings.set_value(CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, false)
+	return true
 
 
 func _on_move_to_menu_id_pressed(id: int) -> void:

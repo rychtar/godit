@@ -108,6 +108,9 @@ static func form(parent: Node, title: String, fields: Array, ok_text: String = "
 			if first_input is LineEdit:
 				(first_input as LineEdit).select_all.call_deferred()
 		)
+	else:
+		# Nothing to type into: focus OK so Enter confirms.
+		dialog.about_to_popup.connect(func() -> void: dialog.get_ok_button().grab_focus.call_deferred())
 
 	# Values are read before _run() frees the dialog.
 	var values := {}
