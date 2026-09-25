@@ -26,6 +26,8 @@ var history_dock_instance: Control
 var bottom_dock_container: TabContainer
 ## Non-null only in the combined layout, holding every panel; see _apply_dock_layout().
 var combined_dock: Control
+## The EditorDock (4.6+) combined_dock is registered in, or null when it went to the bottom panel directly (older versions).
+var _combined_editor_dock: Node
 ## The layout the panels are arranged in right now (one of LAYOUT_*).
 var _layout := LAYOUT_SEPARATE
 ## Changed-line flags in the script editor's gutter, next to Bookmarks.
@@ -181,7 +183,7 @@ func _exit_tree() -> void:
 			remove_control_from_bottom_panel(bottom_dock_container)
 			bottom_dock_container.free()
 		LAYOUT_COMBINED:
-			remove_control_from_docks(combined_dock)
+			_remove_combined_dock()
 			combined_dock.free()
 		_:
 			remove_control_from_docks(dock_instance)
@@ -228,7 +230,7 @@ func _reveal(control: Control) -> void:
 	if dock != null:
 		dock.call("open")
 		dock.call("make_visible")
-	elif control == history_dock_instance or control == bottom_dock_container:
+	elif control == history_dock_instance or control == bottom_dock_container or control == combined_dock:
 		make_bottom_panel_item_visible(control)
 	elif control.get_parent() is TabContainer:
 		(control.get_parent() as TabContainer).current_tab = control.get_index()
@@ -338,7 +340,7 @@ func _apply_dock_layout() -> void:
 			bottom_dock_container.free()
 			bottom_dock_container = null
 		LAYOUT_COMBINED:
-			remove_control_from_docks(combined_dock)
+			_remove_combined_dock()
 			var panels: Dictionary = combined_dock.detach_panels()
 			if not panels.is_empty():
 				dock_instance.reattach_panels(panels)
@@ -365,10 +367,32 @@ func _apply_dock_layout() -> void:
 				panels = dock_instance.detach_panels()
 				panels.merge(history_dock_instance.detach_panels())
 			combined_dock = CombinedDockScript.new(panels)
-			combined_dock.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT) # dragged to the bottom panel, it mustn't shrink to a clipped sliver either
-			add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, combined_dock)
-			# 4.6+: let it go to the bottom panel too, not just side docks and floating.
-			var dock := _editor_dock_of(combined_dock)
-			if dock != null:
-				dock.set("available_layouts", ClassDB.class_get_integer_constant("EditorDock", "DOCK_LAYOUT_ALL"))
+			combined_dock.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT) # it starts in the bottom panel, where it mustn't shrink to a clipped sliver
+			_add_combined_dock()
 	_layout = want
+
+
+## Bottom panel by default. On 4.6+ as an EditorDock the user can move to a side dock or make floating, and the editor remembers where; older versions can only put it in the bottom panel.
+func _add_combined_dock() -> void:
+	if not ClassDB.class_exists("EditorDock"):
+		add_control_to_bottom_panel(combined_dock, "Godit")
+		return
+	# Through ClassDB and call(): EditorDock, add_dock() and DOCK_SLOT_BOTTOM don't exist before 4.6, and naming them would break parsing there.
+	_combined_editor_dock = ClassDB.instantiate("EditorDock")
+	_combined_editor_dock.set("title", "Godit")
+	_combined_editor_dock.set("layout_key", "GoditCombined") # not "Godit", which early builds saved as a side dock
+	_combined_editor_dock.set("global", true) # listed in Editor > Editor Docks, so it can be reopened after closing
+	_combined_editor_dock.set("default_slot", ClassDB.class_get_integer_constant("EditorDock", "DOCK_SLOT_BOTTOM"))
+	_combined_editor_dock.set("available_layouts", ClassDB.class_get_integer_constant("EditorDock", "DOCK_LAYOUT_ALL"))
+	_combined_editor_dock.add_child(combined_dock)
+	call("add_dock", _combined_editor_dock)
+
+
+func _remove_combined_dock() -> void:
+	if _combined_editor_dock == null:
+		remove_control_from_bottom_panel(combined_dock)
+		return
+	call("remove_dock", _combined_editor_dock)
+	_combined_editor_dock.remove_child(combined_dock)
+	_combined_editor_dock.free()
+	_combined_editor_dock = null

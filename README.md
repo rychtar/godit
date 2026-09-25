@@ -32,7 +32,7 @@ For push and pull, git has to log in without asking: use a credential helper for
 - **Changelists**: double-click one to make it active and drag files between them.
 - **Branches**: switch, merge and pull in the Branches tab.
 - **History**: open **Git Log** in the bottom panel.
-- **All in one**: switch the layout to the combined dock (see Settings), which puts changes, history and branches together, SourceTree-style. Make it floating to keep it on a second monitor.
+- **All in one**: switch the layout to the combined dock (see Settings), which puts changes, history and branches together, SourceTree-style. It starts in the bottom panel; on Godot 4.6+ you can drag it to a side dock or make it floating, e.g. on a second monitor, and it stays there.
 - **Everything else**: right-click a file, branch or commit.
 
 ## Settings
