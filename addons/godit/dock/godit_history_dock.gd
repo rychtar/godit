@@ -3,6 +3,7 @@ extends Control
 
 const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
 const GitConsole := preload("res://addons/godit/dock/widgets/git_console.gd")
+const RepoInitView := preload("res://addons/godit/dock/widgets/repo_init_view.gd")
 
 @onready var _message_label: Label = %MessageLabel
 @onready var _history_panel: Control = %HistoryPanel
@@ -18,9 +19,8 @@ signal changes_requested(action: String)
 func _ready() -> void:
 	var opened := RepoOpener.open_current_project_repo()
 	if opened["repo"] == null:
-		_message_label.text = opened["error"]
-		_message_label.visible = true
 		_history_panel.visible = false
+		add_child(RepoInitView.new("This project isn't a git repository yet, so there's no history to show."))
 		return
 
 	_repo = opened["repo"]

@@ -4,6 +4,7 @@ extends Control
 const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
 const ChangesetDialog := preload("res://addons/godit/dock/widgets/changeset_dialog.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
+const RepoInitView := preload("res://addons/godit/dock/widgets/repo_init_view.gd")
 
 const AUTO_FETCH_SETTING_KEY := "auto_fetch"
 const AUTO_FETCH_INTERVAL_SECS := 600.0
@@ -27,7 +28,8 @@ var _auto_fetch_timer: Timer
 func _ready() -> void:
 	var opened := RepoOpener.open_current_project_repo()
 	if opened["repo"] == null:
-		_show_message(opened["error"])
+		_tab_container.visible = false
+		add_child(RepoInitView.new("This project isn't a git repository yet."))
 		return
 
 	_repo = opened["repo"]
@@ -90,12 +92,6 @@ func reveal_change(path: String, line: int) -> void:
 	if _changes_panel.get_parent() == _tab_container:
 		_tab_container.current_tab = _changes_panel.get_index()
 	_changes_panel.reveal(path, line)
-
-
-func _show_message(text: String) -> void:
-	_message_label.text = text
-	_message_label.visible = true
-	_tab_container.visible = false
 
 
 ## Pulls Changes and Branches out of the tab bar together, so plugin.gd can dock both at the bottom instead.
