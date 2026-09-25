@@ -1215,6 +1215,20 @@ func undo_head_operation(op: Dictionary) -> Dictionary:
 	return { "ok": false, "error": "Nothing to undo.", "output": "" }
 
 
+## Full messages of the latest commits on HEAD, newest first, duplicates dropped — yours only when git knows your email.
+func recent_commit_messages(limit: int) -> PackedStringArray:
+	var args := ["log", "-n", str(limit * 2), "--format=%B" + GitCli.RS]
+	var email: String = GitCli.run(_repo_root, ["config", "user.email"])["text"].strip_edges()
+	if not email.is_empty():
+		args.append("--author=" + email)
+	var messages := PackedStringArray()
+	for message in GitCli.run(_repo_root, args)["text"].split(GitCli.RS):
+		message = message.strip_edges()
+		if not message.is_empty() and not messages.has(message):
+			messages.append(message)
+	return messages.slice(0, limit)
+
+
 func undo_last_commit() -> Dictionary:
 	if not has_parent("HEAD"):
 		return { "ok": false, "error": "This is the first commit — there's nothing before it to go back to.", "output": "" }

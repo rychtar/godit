@@ -193,7 +193,8 @@ func _ready() -> void:
 			Dialogs.error(self, "Can't open file", error)
 	)
 	_commit_message.gui_input.connect(_on_commit_message_gui_input)
-	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push"
+	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push\nUp/Down in an empty box: your previous messages"
+	_build_recent_messages_button()
 
 	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
 	_auto_refresh_timer.poll.connect(_maybe_refresh)
@@ -1387,7 +1388,61 @@ func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
 	refresh()
 
 
+const MESSAGE_HISTORY_SIZE := 20
+
+## Previous messages for Up/Down in the message box, loaded when browsing starts; -1 = not browsing.
+var _message_history := PackedStringArray()
+var _message_history_index := -1
+
+
+func _build_recent_messages_button() -> void:
+	var button := MenuButton.new()
+	button.icon = get_theme_icon("History", "EditorIcons")
+	button.flat = true
+	button.tooltip_text = "Recent commit messages"
+	var popup := button.get_popup()
+	popup.about_to_popup.connect(func() -> void:
+		popup.clear()
+		_message_history = _repo.recent_commit_messages(MESSAGE_HISTORY_SIZE)
+		for i in _message_history.size():
+			popup.add_item(_message_history[i].get_slice("\n", 0).left(80), i)
+		if _message_history.is_empty():
+			popup.add_item("(no commits yet)")
+			popup.set_item_disabled(0, true)
+	)
+	popup.id_pressed.connect(func(id: int) -> void:
+		_commit_message.text = _message_history[id]
+		_commit_message.grab_focus()
+		_update_commit_buttons_enabled()
+	)
+	_amend_check.get_parent().add_child(button)
+	_amend_check.get_parent().move_child(button, _amend_check.get_index())
+
+
+## Up in an empty box (or one still showing a recalled message) steps back through previous messages; Down steps forward, back to empty.
+func _browse_message_history(step: int) -> bool:
+	var browsing := _message_history_index >= 0 and _message_history_index < _message_history.size() and _commit_message.text == _message_history[_message_history_index]
+	if not browsing:
+		if step < 0 or not _commit_message.text.is_empty():
+			return false
+		_message_history = _repo.recent_commit_messages(MESSAGE_HISTORY_SIZE)
+		_message_history_index = -1
+	var next := _message_history_index + step
+	if next >= _message_history.size():
+		return browsing
+	_message_history_index = maxi(next, -1)
+	_commit_message.text = _message_history[_message_history_index] if _message_history_index >= 0 else ""
+	_update_commit_buttons_enabled()
+	return true
+
+
 func _on_commit_message_gui_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode in [KEY_UP, KEY_DOWN] and not event.shift_pressed:
+		var up: bool = event.keycode == KEY_UP
+		var at_edge := _commit_message.get_caret_line() == 0 if up else _commit_message.get_caret_line() == _commit_message.get_line_count() - 1
+		if at_edge and _browse_message_history(1 if up else -1):
+			_commit_message.accept_event()
+			return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER] \
 			and (event.ctrl_pressed or event.meta_pressed):
 		_commit_message.accept_event()
