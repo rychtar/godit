@@ -26,7 +26,7 @@ const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
 const AUTO_STAGE_SETTING_KEY := "auto_stage_changes"
 const AUTO_ADD_SETTING_KEY := "auto_add_new_files"
 const AUTO_ADD_MASKS_SETTING_KEY := "auto_add_ignore_masks"
-const DEFAULT_AUTO_ADD_MASKS := ["*.import", "*.tmp", "*.bak", "*.orig", "*~", ".DS_Store"]
+const DEFAULT_AUTO_ADD_MASKS := ["*.tmp", "*.bak", "*.orig", "*~", ".DS_Store"]
 const LIST_PANE_RATIO := 0.4
 
 const MENU_MOVE_TO_SUBMENU := "MoveToMenu"
@@ -524,7 +524,7 @@ func _build_options_button() -> MenuButton:
 func _edit_auto_add_masks() -> void:
 	var masks: Array = Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, DEFAULT_AUTO_ADD_MASKS)
 	var answer: Variant = await Dialogs.form(self, "Auto-add Ignore Masks", [
-		{ "type": "label", "label": "New files matching these stay in New Files instead of being added to Git automatically. One glob per line: *.import matches file names, build/ a folder, addons/*.tmp a path." },
+		{ "type": "label", "label": "New files matching these stay in New Files instead of being added to Git automatically. One glob per line: *.psd matches file names, build/ a folder, addons/*.tmp a path." },
 		{ "key": "masks", "type": "multiline", "default": "\n".join(masks) },
 	], "Save")
 	if answer == null:
