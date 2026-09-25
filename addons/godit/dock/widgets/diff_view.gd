@@ -94,7 +94,6 @@ func _init() -> void:
 	_scene_toggle.toggle_mode = true
 	_scene_toggle.flat = true
 	_scene_toggle.visible = false
-	_scene_toggle.tooltip_text = "Show the change node by node (added/removed nodes, changed properties, connections) instead of as text"
 	_scene_toggle.toggled.connect(func(on: bool) -> void:
 		Settings.set_value("diff_scene_view", on)
 		_rerender(true)
@@ -266,8 +265,12 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_stats_removed.text = ("−%d" % parsed["removed"]) if parsed["removed"] > 0 else ""
 
 	var show_image := _show_image_preview(path)
-	var can_show_scene: bool = SceneText.is_scene_file(path) and _context.get("repo", null) != null and _context.has("new_rev")
+	var is_config := SceneText.is_config_file(path)
+	var can_show_scene: bool = (SceneText.is_scene_file(path) or is_config) and _context.get("repo", null) != null and _context.has("new_rev")
 	_scene_toggle.visible = can_show_scene
+	_scene_toggle.text = "Settings" if is_config else "Scene"
+	_scene_toggle.tooltip_text = "Show the change setting by setting, grouped by section, instead of as text" if is_config \
+			else "Show the change node by node (added/removed nodes, changed properties, connections) instead of as text"
 	_scene_toggle.set_pressed_no_signal(_setting("scene_view", true))
 	_scene_tree.visible = can_show_scene and _scene_toggle.button_pressed and not _diff_text.is_empty()
 	if _scene_tree.visible:
@@ -304,7 +307,8 @@ func _build_scene_tree(path: String) -> void:
 	var repo: RefCounted = _context["repo"]
 	var old_text: String = repo.get_file_bytes(_context.get("old_rev", "HEAD"), _context.get("old_path", path)).get_string_from_utf8()
 	var new_text: String = repo.get_file_bytes(_context.get("new_rev", ""), path).get_string_from_utf8()
-	var d := SceneText.diff(old_text, new_text)
+	var is_config := SceneText.is_config_file(path)
+	var d := SceneText.config_diff(old_text, new_text) if is_config else SceneText.diff(old_text, new_text)
 	_scene_tree.clear()
 	var root := _scene_tree.create_item()
 	for n in d["nodes"]:
@@ -320,7 +324,8 @@ func _build_scene_tree(path: String) -> void:
 		for c in d["connections_removed"]:
 			_scene_line(group, "− " + c, SCENE_REMOVED_COLOR)
 	if root.get_child_count() == 0:
-		_scene_line(root, "No changes to nodes, resources or connections — only ids or formatting (see the text diff).", Color(1, 1, 1, 0.6))
+		_scene_line(root, "No setting changed — only formatting (see the text diff)." if is_config \
+				else "No changes to nodes, resources or connections — only ids or formatting (see the text diff).", Color(1, 1, 1, 0.6))
 
 
 func _scene_group(parent: TreeItem, title: String) -> TreeItem:
