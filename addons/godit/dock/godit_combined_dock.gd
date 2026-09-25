@@ -24,6 +24,8 @@ var _panels: Dictionary = {}
 var _sync_bar: Control
 var _layout: VBoxContainer
 var _sidebar: VBoxContainer
+## Darker background with a line on the right, setting the sidebar apart from the view.
+var _sidebar_panel: PanelContainer
 var _buttons: BoxContainer
 var _views: TabContainer
 var _view_buttons := {}
@@ -59,7 +61,9 @@ func _init(panels: Dictionary) -> void:
 	_sidebar = VBoxContainer.new()
 	_sidebar.custom_minimum_size.x = UiScale.px(SIDEBAR_WIDTH)
 	_sidebar.add_theme_constant_override("separation", int(UiScale.px(2)))
-	split.add_child(_sidebar)
+	_sidebar_panel = PanelContainer.new()
+	_sidebar_panel.add_child(_sidebar)
+	split.add_child(_sidebar_panel)
 	_views = TabContainer.new()
 	_views.tabs_visible = false
 	_views.size_flags_horizontal = SIZE_EXPAND_FILL
@@ -129,9 +133,21 @@ func _notification(what: int) -> void:
 		if has_theme_icon(VIEW_ICONS[view], &"EditorIcons"):
 			_view_buttons[view].icon = get_theme_icon(VIEW_ICONS[view], &"EditorIcons")
 		_style_view_button(_view_buttons[view])
+	_style_sidebar_panel()
 	var small := int(get_theme_font_size(&"font_size", &"Label") * 0.85)
 	for header in _headers:
 		header.add_theme_font_size_override("font_size", small)
+
+
+func _style_sidebar_panel() -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = get_theme_color(&"dark_color_2", &"Editor") if has_theme_color(&"dark_color_2", &"Editor") else Color(0, 0, 0, 0.2)
+	style.border_color = Color(get_theme_color(&"font_color", &"Label"), 0.12)
+	style.border_width_right = int(maxf(1.0, UiScale.px(1)))
+	style.content_margin_top = UiScale.px(4)
+	style.content_margin_left = UiScale.px(4)
+	style.content_margin_right = UiScale.px(4)
+	_sidebar_panel.add_theme_stylebox_override("panel", style)
 
 
 ## Flat rows with a hover tint and the current view marked by an accent bar and background, instead of the stock button look.
@@ -187,7 +203,7 @@ func _set_wide(wide: bool) -> void:
 		_layout.add_child(_buttons)
 		_layout.move_child(_buttons, 1)
 		_views.add_child(branches)
-	_sidebar.visible = wide
+	_sidebar_panel.visible = wide
 	show_view("changes" if wide and _view == "branches" else _view)
 
 
