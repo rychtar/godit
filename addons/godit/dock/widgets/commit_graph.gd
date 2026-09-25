@@ -31,6 +31,10 @@ const AUTHOR_COLOR := Color(0.85, 0.85, 0.88)
 const DATE_COLOR := Color(0.58, 0.58, 0.62)
 const HASH_COLOR := Color(0.55, 0.58, 0.66)
 const DIVIDER_COLOR := Color(1, 1, 1, 0.08)
+const WORKTREE_COLOR := Color(0.62, 0.62, 0.66)
+
+## Pseudo-oid of the "Uncommitted changes" row, whose only parent is HEAD.
+const WORKTREE_OID := "worktree"
 
 const LANE_COLORS := [
 	Color(0.36, 0.66, 0.96),
@@ -50,23 +54,64 @@ var _selected_row := -1
 var _selected_rows := {}
 var _head_oid := ""
 
-## User-resizable via dragging the column dividers; persisted across editor
-## sessions through util/settings.gd. 0 = not dragging, 1 = the divider
-## between the message and hash columns, 2 = between hash and author,
-## 3 = between author and date.
-var _hash_col_width: float = DEFAULT_HASH_COL_WIDTH
-var _author_col_width: float = DEFAULT_AUTHOR_COL_WIDTH
-var _date_col_width: float = DEFAULT_DATE_COL_WIDTH
-var _dragging_divider := 0
+## Optional columns right of the message, in display order.
+const COLUMNS := ["hash", "author", "date"]
+const COLUMN_TITLES := { "hash": "Hash", "author": "Author", "date": "Date" }
+const VISIBLE_COLUMNS_SETTING_KEY := "history_visible_columns"
+const ABSOLUTE_DATES_SETTING_KEY := "history_absolute_dates"
+
+## Widths are user-resizable by dragging the dividers and persisted via util/settings.gd.
+var _col_width := {}
+var _visible_columns: Array = COLUMNS.duplicate()
+var _absolute_dates := false
+## Visible column whose left divider is being dragged, or "".
+var _dragging_column := ""
 
 
 func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	resized.connect(queue_redraw)
 	focus_mode = Control.FOCUS_CLICK
-	_hash_col_width = Settings.get_value("history_hash_col_width", DEFAULT_HASH_COL_WIDTH)
-	_author_col_width = Settings.get_value("history_author_col_width", DEFAULT_AUTHOR_COL_WIDTH)
-	_date_col_width = Settings.get_value("history_date_col_width", DEFAULT_DATE_COL_WIDTH)
+	var defaults := { "hash": DEFAULT_HASH_COL_WIDTH, "author": DEFAULT_AUTHOR_COL_WIDTH, "date": DEFAULT_DATE_COL_WIDTH }
+	for column in COLUMNS:
+		_col_width[column] = Settings.get_value("history_%s_col_width" % column, defaults[column])
+	_visible_columns = COLUMNS.filter(func(c: String) -> bool: return Settings.get_value(VISIBLE_COLUMNS_SETTING_KEY, COLUMNS).has(c))
+	_absolute_dates = Settings.get_value(ABSOLUTE_DATES_SETTING_KEY, false)
+
+
+func is_column_visible(column: String) -> bool:
+	return _visible_columns.has(column)
+
+
+func set_column_visible(column: String, shown: bool) -> void:
+	_visible_columns = COLUMNS.filter(func(c: String) -> bool: return c == column and shown or c != column and _visible_columns.has(c))
+	Settings.set_value(VISIBLE_COLUMNS_SETTING_KEY, _visible_columns)
+	queue_redraw()
+
+
+func uses_absolute_dates() -> bool:
+	return _absolute_dates
+
+
+func set_absolute_dates(on: bool) -> void:
+	_absolute_dates = on
+	Settings.set_value(ABSOLUTE_DATES_SETTING_KEY, on)
+	queue_redraw()
+
+
+## Left edge of each visible column, laid out from the right edge.
+func _column_x() -> Dictionary:
+	var xs := {}
+	var x := size.x
+	for i in range(_visible_columns.size() - 1, -1, -1):
+		x -= _col_width[_visible_columns[i]]
+		xs[_visible_columns[i]] = x
+	return xs
+
+
+func _columns_left() -> float:
+	var xs := _column_x()
+	return xs[_visible_columns[0]] if not _visible_columns.is_empty() else size.x
 
 
 ## head_oid gets a ring around its dot. Selection survives if the selected commits are still listed.
@@ -233,6 +278,11 @@ static func _truncate_to_width(font: Font, font_size: int, text: String, max_wid
 
 ## "25 minutes ago", falling back to a "DD.MM.YYYY, HH:MM" stamp once
 ## it's more than a week old.
+static func format_absolute_time(unix_time: int) -> String:
+	var dt := Time.get_datetime_dict_from_unix_time(unix_time)
+	return "%02d.%02d.%04d, %02d:%02d" % [dt["day"], dt["month"], dt["year"], dt["hour"], dt["minute"]]
+
+
 static func format_relative_time(unix_time: int, now: int = -1) -> String:
 	if now < 0:
 		now = int(Time.get_unix_time_from_system())
@@ -252,8 +302,7 @@ static func format_relative_time(unix_time: int, now: int = -1) -> String:
 		var d := delta / 86400
 		return "%d day%s ago" % [d, "" if d == 1 else "s"]
 
-	var dt := Time.get_datetime_dict_from_unix_time(unix_time)
-	return "%02d.%02d.%04d, %02d:%02d" % [dt["day"], dt["month"], dt["year"], dt["hour"], dt["minute"]]
+	return format_absolute_time(unix_time)
 
 
 func _draw() -> void:
@@ -288,23 +337,31 @@ func _draw() -> void:
 				if int(parent_entry["row"]) < first_row:
 					continue
 				var to := Vector2(_lane_x(parent_entry["lane"]), _row_y(parent_entry["row"]))
-				draw_line(from, to, _lane_color(entry["lane"]), 2.0, true)
+				if entry["oid"] == WORKTREE_OID:
+					draw_dashed_line(from, to, WORKTREE_COLOR, 2.0, 4.0)
+				else:
+					draw_line(from, to, _lane_color(entry["lane"]), 2.0, true)
 
 	var graph_width := LEFT_MARGIN + (_max_lane() + 1) * LANE_WIDTH + TEXT_GAP
 	var text_x := graph_width
-	var date_x := size.x - _date_col_width
-	var author_x := date_x - _author_col_width
-	var hash_x := author_x - _hash_col_width
-	var message_max_width := maxf(0.0, hash_x - COLUMN_GAP - text_x)
+	var col_x := _column_x()
+	var message_max_width := maxf(0.0, _columns_left() - (COLUMN_GAP if not _visible_columns.is_empty() else 0.0) - text_x)
 	var now := int(Time.get_unix_time_from_system())
 
-	draw_line(Vector2(hash_x - COLUMN_GAP * 0.5, 0), Vector2(hash_x - COLUMN_GAP * 0.5, size.y), DIVIDER_COLOR, 1.0)
-	draw_line(Vector2(author_x - COLUMN_GAP * 0.5, 0), Vector2(author_x - COLUMN_GAP * 0.5, size.y), DIVIDER_COLOR, 1.0)
-	draw_line(Vector2(date_x - COLUMN_GAP * 0.5, 0), Vector2(date_x - COLUMN_GAP * 0.5, size.y), DIVIDER_COLOR, 1.0)
+	for column in _visible_columns:
+		var divider_x: float = col_x[column] - COLUMN_GAP * 0.5
+		draw_line(Vector2(divider_x, 0), Vector2(divider_x, size.y), DIVIDER_COLOR, 1.0)
 
 	for row in range(first_row, last_row + 1):
 		var entry: Dictionary = _commits[row]
 		var dot := Vector2(_lane_x(entry["lane"]), _row_y(entry["row"]))
+		if entry["oid"] == WORKTREE_OID:
+			draw_circle(dot, DOT_RADIUS, WORKTREE_COLOR, false, 1.5, true)
+			var worktree_baseline := _row_y(row) + font_size * 0.35
+			var bold := get_theme_font("bold", "EditorFonts")
+			draw_string(bold if bold != null else font, Vector2(text_x, worktree_baseline), _truncate_to_width(font, font_size, entry["summary"], message_max_width),
+					HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+			continue
 		draw_circle(dot, DOT_RADIUS, _lane_color(entry["lane"]))
 		if entry["oid"] == _head_oid:
 			draw_arc(dot, DOT_RADIUS + 3.0, 0.0, TAU, 20, Color.WHITE, 1.5, true)
@@ -344,56 +401,52 @@ func _draw() -> void:
 						HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, b["fg"])
 				badge_x += b["width"] + BADGE_GAP
 
-		draw_string(font, Vector2(hash_x, baseline_y), String(entry["oid"]).substr(0, 7),
-				HORIZONTAL_ALIGNMENT_LEFT, _hash_col_width - COLUMN_GAP, font_size, HASH_COLOR)
+		for column in _visible_columns:
+			var width: float = _col_width[column]
+			var cell_pos := Vector2(col_x[column], baseline_y)
+			match column:
+				"hash":
+					draw_string(font, cell_pos, String(entry["oid"]).substr(0, 7), HORIZONTAL_ALIGNMENT_LEFT, width - COLUMN_GAP, font_size, HASH_COLOR)
+				"author":
+					draw_string(font, cell_pos, _truncate_to_width(font, font_size, entry.get("author_name", ""), width - COLUMN_GAP),
+							HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, AUTHOR_COLOR)
+				"date":
+					var time := int(entry.get("time", 0))
+					var date_text := format_absolute_time(time) if _absolute_dates else format_relative_time(time, now)
+					draw_string(font, cell_pos, _truncate_to_width(font, font_size, date_text, width), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, DATE_COLOR)
 
-		var author: String = entry.get("author_name", "")
-		draw_string(font, Vector2(author_x, baseline_y), _truncate_to_width(font, font_size, author, _author_col_width - COLUMN_GAP),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, AUTHOR_COLOR)
 
-		var date_text := format_relative_time(int(entry.get("time", 0)), now)
-		draw_string(font, Vector2(date_x, baseline_y), date_text,
-				HORIZONTAL_ALIGNMENT_LEFT, _date_col_width, font_size, DATE_COLOR)
-
-
-## Which divider (if any) is within DIVIDER_HIT_MARGIN of local x: 1 for the
-## message/hash divider, 2 for hash/author, 3 for author/date, 0 for neither.
-func _divider_at_x(x: float) -> int:
-	var divider1_x := size.x - _date_col_width - _author_col_width - _hash_col_width - COLUMN_GAP * 0.5
-	var divider2_x := size.x - _date_col_width - _author_col_width - COLUMN_GAP * 0.5
-	var divider3_x := size.x - _date_col_width - COLUMN_GAP * 0.5
-	if absf(x - divider1_x) <= DIVIDER_HIT_MARGIN:
-		return 1
-	if absf(x - divider2_x) <= DIVIDER_HIT_MARGIN:
-		return 2
-	if absf(x - divider3_x) <= DIVIDER_HIT_MARGIN:
-		return 3
-	return 0
+## Visible column whose left divider is within DIVIDER_HIT_MARGIN of local x, or "".
+func _divider_at_x(x: float) -> String:
+	var col_x := _column_x()
+	for column in _visible_columns:
+		if absf(x - (col_x[column] - COLUMN_GAP * 0.5)) <= DIVIDER_HIT_MARGIN:
+			return column
+	return ""
 
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
-		if _dragging_divider == 1:
-			_hash_col_width = clampf(size.x - _date_col_width - _author_col_width - COLUMN_GAP * 0.5 - event.position.x,
-					MIN_COL_WIDTH, size.x - _date_col_width - _author_col_width - MIN_COL_WIDTH)
-			queue_redraw()
-		elif _dragging_divider == 2:
-			_author_col_width = clampf(size.x - _date_col_width - COLUMN_GAP * 0.5 - event.position.x,
-					MIN_COL_WIDTH, size.x - _date_col_width - _hash_col_width - MIN_COL_WIDTH)
-			queue_redraw()
-		elif _dragging_divider == 3:
-			_date_col_width = clampf(size.x - COLUMN_GAP * 0.5 - event.position.x,
-					MIN_COL_WIDTH, size.x - _author_col_width - _hash_col_width - MIN_COL_WIDTH)
+		if not _dragging_column.is_empty():
+			var index := _visible_columns.find(_dragging_column)
+			var after := 0.0
+			var others := 0.0
+			for i in _visible_columns.size():
+				if i > index:
+					after += _col_width[_visible_columns[i]]
+				if i != index:
+					others += _col_width[_visible_columns[i]]
+			_col_width[_dragging_column] = clampf(size.x - after - COLUMN_GAP * 0.5 - event.position.x, MIN_COL_WIDTH, maxf(MIN_COL_WIDTH, size.x - others - MIN_COL_WIDTH))
 			queue_redraw()
 		else:
-			mouse_default_cursor_shape = Control.CURSOR_HSIZE if _divider_at_x(event.position.x) != 0 else Control.CURSOR_ARROW
+			mouse_default_cursor_shape = Control.CURSOR_HSIZE if not _divider_at_x(event.position.x).is_empty() else Control.CURSOR_ARROW
 		return
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			var divider := _divider_at_x(event.position.x)
-			if divider != 0:
-				_dragging_divider = divider
+			if not divider.is_empty():
+				_dragging_column = divider
 				return
 
 			var row := int(event.position.y / ROW_HEIGHT)
@@ -416,16 +469,14 @@ func _gui_input(event: InputEvent) -> void:
 					queue_redraw()
 				else:
 					_select_single(row)
-		elif _dragging_divider != 0:
-			_dragging_divider = 0
-			Settings.set_value("history_hash_col_width", _hash_col_width)
-			Settings.set_value("history_author_col_width", _author_col_width)
-			Settings.set_value("history_date_col_width", _date_col_width)
+		elif not _dragging_column.is_empty():
+			Settings.set_value("history_%s_col_width" % _dragging_column, _col_width[_dragging_column])
+			_dragging_column = ""
 		return
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		var row := int(event.position.y / ROW_HEIGHT)
-		if row < 0 or row >= _commits.size():
+		if row < 0 or row >= _commits.size() or _commits[row]["oid"] == WORKTREE_OID:
 			return
 		# Right-click inside a multi-selection keeps it (the menu acts on all of them).
 		if not _selected_rows.has(row):

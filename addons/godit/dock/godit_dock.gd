@@ -62,6 +62,8 @@ func apply_auto_fetch_setting() -> void:
 		_auto_fetch_timer.stop()
 
 
+##
+
 ## Silent on failure (offline, no credentials): the manual Fetch button is where errors get explained.
 func _on_auto_fetch_timeout() -> void:
 	var r: Dictionary = await _repo.auto_fetch()
