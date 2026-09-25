@@ -49,6 +49,13 @@ var _context: Dictionary = {}
 ## What the section headers say, where it isn't their key.
 const SECTION_TITLES := { "Local": "Branches", "Remote": "Remote Branches" }
 
+## The "+" on a section header: the context menu action it runs, and its tooltip.
+const SECTION_ADD := {
+	"Local": [ID_NEW_BRANCH_FROM, "New branch from the current HEAD"],
+	"Tags": [ID_NEW_TAG, "New tag at HEAD"],
+	"Remotes": [ID_ADD_REMOTE, "Add a remote"],
+}
+
 ## Section headers' collapsed state, kept across refreshes (keyed by section title).
 var _collapsed_sections := { "Tags": true, "Stashes": false }
 ## Frame of the last ref_selected(), so a click that also changed the selection emits it once.
@@ -70,6 +77,10 @@ func _ready() -> void:
 	)
 
 	_tree.item_selected.connect(_on_tree_item_selected)
+	_tree.button_clicked.connect(func(item: TreeItem, _column: int, id: int, _mouse_button: int) -> void:
+		_context = item.get_metadata(0)
+		_on_context_menu_id_pressed(id)
+	)
 	# Clicking the already selected row again shows it again too.
 	_tree.item_mouse_selected.connect(func(_pos: Vector2, button: int) -> void:
 		if button == MOUSE_BUTTON_LEFT and _ref_selected_frame != Engine.get_process_frames():
@@ -293,6 +304,10 @@ func _section(root: TreeItem, title: String) -> TreeItem:
 	item.set_custom_font_size(0, int(get_theme_font_size(&"font_size", &"Tree") * 0.85))
 	item.set_custom_minimum_height(int(UiScale.px(28)))
 	item.collapsed = _collapsed_sections.get(title, false)
+	var add_icon := _icon(&"Add")
+	if SECTION_ADD.has(title) and add_icon != null:
+		item.add_button(0, add_icon, SECTION_ADD[title][0], false, SECTION_ADD[title][1])
+		item.set_button_color(0, 0, Color(1, 1, 1, 0.6))
 	return item
 
 
@@ -323,10 +338,6 @@ static func _sync_text(ahead: int, behind: int) -> String:
 
 func _on_filter_edit_text_changed(_text: String) -> void:
 	refresh()
-
-
-func _on_new_branch_button_pressed() -> void:
-	await _new_branch_from("HEAD")
 
 
 func _new_branch_from(start_point: String) -> void:
@@ -475,8 +486,10 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 					m.add_item("Fetch All and Prune Deleted Branches", ID_FETCH_PRUNE)
 				"Tags":
 					m.add_item("New Tag at HEAD…", ID_NEW_TAG)
-				_:
+				"Local":
 					m.add_item("New Branch…", ID_NEW_BRANCH_FROM)
+				_:
+					return # Stashes: nothing to add from here
 		_:
 			return
 
