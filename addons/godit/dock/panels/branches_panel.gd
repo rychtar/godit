@@ -100,9 +100,11 @@ func set_repo(repo: RefCounted) -> void:
 	RepoWatcher.watch(self, _on_polled)
 
 
-## In the combined dock's sidebar: no branch/Fetch/Pull/Push row of its own (there's a shared one above, the progress strip stays) and a frameless tree.
-func set_sidebar_mode(on: bool) -> void:
+## In the combined dock's sidebar: no branch/Fetch/Pull/Push row of its own, messages in the shared toolbar's strip (shared_bar) and a frameless tree.
+func set_sidebar_mode(on: bool, shared_bar: HBoxContainer = null) -> void:
 	_sync_bar.set_row_visible(not on)
+	_sync_bar.use_operation_bar(shared_bar if on else null)
+	_operation_bar = _sync_bar.operation_bar
 	for stylebox in [&"panel", &"focus"]:
 		if on:
 			_tree.add_theme_stylebox_override(stylebox, StyleBoxEmpty.new())

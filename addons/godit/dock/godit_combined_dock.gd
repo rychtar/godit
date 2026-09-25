@@ -57,7 +57,7 @@ func _init(panels: Dictionary) -> void:
 	_toolbar = PanelContainer.new()
 	_toolbar.add_child(_sync_bar)
 	_layout.add_child(_toolbar)
-	panels["branches"].set_sidebar_mode(true)
+	panels["branches"].set_sidebar_mode(true, _sync_bar.operation_bar)
 	panels["branches"].ref_selected.connect(_on_ref_selected)
 
 	var split := HSplitContainer.new()
