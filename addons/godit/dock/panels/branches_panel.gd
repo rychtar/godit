@@ -127,15 +127,14 @@ func set_sidebar_mode(on: bool) -> void:
 func _maybe_refresh() -> void:
 	if _repo == null or _repo.is_busy():
 		return
-	if _signature() != _last_signature:
+	if _signature(int(AUTO_REFRESH_INTERVAL * 1000.0) - 500) != _last_signature:
 		refresh()
 
 
-func _signature() -> String:
-	var refs: Dictionary = _repo.run_read(["for-each-ref", "--format=%(refname) %(objectname) %(HEAD) %(upstream:track)"])
-	# Remotes live in config and stashes in the stash reflog; reading the files saves two git processes per tick.
+## Refs and HEAD (shared with Git Log's poll; ahead/behind can only change with them), remotes and upstreams from config, stashes from their reflog.
+func _signature(max_age_msec := 0) -> String:
 	var common_dir: String = _repo.get_common_dir()
-	return refs["text"] + _read_file(common_dir.path_join("config")) + _read_file(common_dir.path_join("logs/refs/stash"))
+	return _repo.get_refs_signature(max_age_msec) + _read_file(common_dir.path_join("config")) + _read_file(common_dir.path_join("logs/refs/stash"))
 
 
 static func _read_file(path: String) -> String:

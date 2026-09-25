@@ -40,7 +40,8 @@ func get_repo_root() -> String:
 
 
 func get_status() -> Array:
-	var result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--branch", "--untracked-files=all"])
+	# No optional locks: a poll mustn't hold index.lock while the user runs git in a terminal.
+	var result := GitCli.run(_repo_root, ["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=all"])
 	var entries: Array = []
 	status_header = ""
 	for line in GitCli.lines(result["text"]):
@@ -642,11 +643,6 @@ func set_remote_url(name: String, url: String) -> Dictionary:
 	return _simple(["remote", "set-url", name, url])
 
 
-## Read-only git call for callers that only need raw output (e.g. change-detection signatures).
-func run_read(args: Array) -> Dictionary:
-	return GitCli.run(_repo_root, args)
-
-
 ## Array[{"ref": "stash@{0}", "message", "date"}], newest first.
 func list_stashes() -> Array:
 	var r := GitCli.run(_repo_root, ["stash", "list", "--format=%gd" + US + "%gs" + US + "%cr"])
@@ -1089,9 +1085,18 @@ func read_head_oid() -> String:
 	return head if head.length() >= 40 and not head.contains(" ") else get_head_oid()
 
 
-## Every ref and its target in one process, so pollers can cheaply tell whether history moved.
-func get_refs_signature() -> String:
-	return GitCli.run(_repo_root, ["for-each-ref", "--format=%(refname) %(objectname)"])["text"] + read_head_oid()
+## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved; shared by all instances on this root while at most max_age_msec old.
+func get_refs_signature(max_age_msec := 0) -> String:
+	var cached: Dictionary = _refs_cache.get(_repo_root, {})
+	if not cached.is_empty() and Time.get_ticks_msec() - int(cached["msec"]) <= max_age_msec:
+		return cached["text"]
+	var text: String = GitCli.run(_repo_root, ["for-each-ref", "--format=%(refname) %(objectname)"])["text"] + _read_small(get_git_dir().path_join("HEAD")) + read_head_oid()
+	_refs_cache[_repo_root] = { "msec": Time.get_ticks_msec(), "text": text }
+	return text
+
+
+## repo root -> {"msec", "text"} of the latest get_refs_signature().
+static var _refs_cache := {}
 
 
 func is_ancestor_of_head(oid: String) -> bool:

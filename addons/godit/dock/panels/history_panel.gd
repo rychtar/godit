@@ -363,7 +363,7 @@ func _maybe_refresh(fresh_status := false) -> void:
 	# The Changes panel polls `git status` on the same interval; reuse its result when it's that fresh.
 	# fresh_status still takes a status the Changes panel fetched a moment ago for the same save.
 	var status: Array = _repo.get_recent_status(250 if fresh_status else int(AUTO_REFRESH_INTERVAL * 1000.0) + 500)
-	if _refs_signature() == _last_refs_signature and _status_signature(status) == _last_status_signature:
+	if _refs_signature(int(AUTO_REFRESH_INTERVAL * 1000.0) - 500) == _last_refs_signature and _status_signature(status) == _last_status_signature:
 		return
 	_update_branch_option()
 	refresh(status)
@@ -407,8 +407,8 @@ func refresh(status_entries: Variant = null) -> void:
 
 
 ## Refs plus the stash reflog, which changes on drops that leave refs/stash alone.
-func _refs_signature() -> String:
-	return _repo.get_refs_signature() + FileAccess.get_file_as_string(_repo.get_common_dir().path_join("logs/refs/stash"))
+func _refs_signature(max_age_msec := 0) -> String:
+	return _repo.get_refs_signature(max_age_msec) + FileAccess.get_file_as_string(_repo.get_common_dir().path_join("logs/refs/stash"))
 
 
 func _update_undo_button() -> void:
