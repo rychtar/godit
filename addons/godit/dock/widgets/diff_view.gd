@@ -6,6 +6,7 @@ const DiffHunks := preload("res://addons/godit/util/diff_hunks.gd")
 const SyntaxColors := preload("res://addons/godit/util/syntax_colors.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
+const SceneText := preload("res://addons/godit/util/scene_text.gd")
 
 const IMAGE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
 ## Godot rewrites these on save without any real change; with "Hide Godot noise" on, a -/+ pair differing only here is dimmed.
@@ -40,6 +41,9 @@ var _empty_label: Label
 var _scroll: ScrollContainer
 var _rows_view: Control
 var _image_view: HBoxContainer
+var _scene_toggle: Button
+## Node-by-node view of a .tscn/.tres change, instead of the text diff.
+var _scene_tree: Tree
 
 var _diff_text := ""
 var _context: Dictionary = {}
@@ -85,6 +89,18 @@ func _init() -> void:
 	_stats_removed.add_theme_color_override("font_color", DiffRows.COLOR_REMOVED_TEXT)
 	header_row.add_child(_stats_removed)
 
+	_scene_toggle = Button.new()
+	_scene_toggle.text = "Scene"
+	_scene_toggle.toggle_mode = true
+	_scene_toggle.flat = true
+	_scene_toggle.visible = false
+	_scene_toggle.tooltip_text = "Show the change node by node (added/removed nodes, changed properties, connections) instead of as text"
+	_scene_toggle.toggled.connect(func(on: bool) -> void:
+		Settings.set_value("diff_scene_view", on)
+		_rerender(true)
+	)
+	header_row.add_child(_scene_toggle)
+
 	_options_button = MenuButton.new()
 	_options_button.text = "⋯"
 	_options_button.tooltip_text = "Diff options"
@@ -108,6 +124,12 @@ func _init() -> void:
 	_image_view.size_flags_vertical = SIZE_EXPAND_FILL
 	_image_view.visible = false
 	add_child(_image_view)
+
+	_scene_tree = Tree.new()
+	_scene_tree.hide_root = true
+	_scene_tree.size_flags_vertical = SIZE_EXPAND_FILL
+	_scene_tree.visible = false
+	add_child(_scene_tree)
 
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_horizontal = SIZE_EXPAND_FILL
@@ -244,6 +266,15 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_stats_removed.text = ("−%d" % parsed["removed"]) if parsed["removed"] > 0 else ""
 
 	var show_image := _show_image_preview(path)
+	var can_show_scene: bool = SceneText.is_scene_file(path) and _context.get("repo", null) != null and _context.has("new_rev")
+	_scene_toggle.visible = can_show_scene
+	_scene_toggle.set_pressed_no_signal(_setting("scene_view", true))
+	_scene_tree.visible = can_show_scene and _scene_toggle.button_pressed and not _diff_text.is_empty()
+	if _scene_tree.visible:
+		_build_scene_tree(path)
+		_scroll.visible = false
+		_empty_label.visible = false
+		return
 	var actions: Array = _context.get("actions", [])
 	var line_level: bool = not parsed["is_new"] and not parsed["is_deleted"]
 	if _setting("ignore_whitespace", false):
@@ -261,6 +292,81 @@ func _rerender(keep_scroll: bool = false) -> void:
 		# Otherwise the previous file's scroll offset carries over and clips the top of the new diff.
 		_scroll.scroll_horizontal = 0
 		_scroll.scroll_vertical = 0
+
+
+const SCENE_ADDED_COLOR := Color(0.55, 0.85, 0.55)
+const SCENE_REMOVED_COLOR := Color(0.95, 0.5, 0.5)
+const SCENE_CHANGED_COLOR := Color(0.95, 0.82, 0.5)
+const SCENE_VALUE_MAX := 120
+
+
+func _build_scene_tree(path: String) -> void:
+	var repo: RefCounted = _context["repo"]
+	var old_text: String = repo.get_file_bytes(_context.get("old_rev", "HEAD"), _context.get("old_path", path)).get_string_from_utf8()
+	var new_text: String = repo.get_file_bytes(_context.get("new_rev", ""), path).get_string_from_utf8()
+	var d := SceneText.diff(old_text, new_text)
+	_scene_tree.clear()
+	var root := _scene_tree.create_item()
+	for n in d["nodes"]:
+		_add_scene_item(root, n)
+	if not d["resources"].is_empty():
+		var group := _scene_group(root, "Resources")
+		for r in d["resources"]:
+			_add_scene_item(group, r)
+	if not d["connections_added"].is_empty() or not d["connections_removed"].is_empty():
+		var group := _scene_group(root, "Signal connections")
+		for c in d["connections_added"]:
+			_scene_line(group, "+ " + c, SCENE_ADDED_COLOR)
+		for c in d["connections_removed"]:
+			_scene_line(group, "− " + c, SCENE_REMOVED_COLOR)
+	if root.get_child_count() == 0:
+		_scene_line(root, "No changes to nodes, resources or connections — only ids or formatting (see the text diff).", Color(1, 1, 1, 0.6))
+
+
+func _scene_group(parent: TreeItem, title: String) -> TreeItem:
+	var item := _scene_tree.create_item(parent)
+	item.set_text(0, title)
+	item.set_custom_color(0, Color(1, 1, 1, 0.6))
+	item.set_selectable(0, false)
+	return item
+
+
+func _scene_line(parent: TreeItem, text: String, color: Color) -> TreeItem:
+	var item := _scene_tree.create_item(parent)
+	var shown := text.replace("\n", " ⏎ ")
+	item.set_text(0, shown if shown.length() <= SCENE_VALUE_MAX * 2 else shown.left(SCENE_VALUE_MAX * 2) + "…")
+	item.set_tooltip_text(0, text)
+	item.set_custom_color(0, color)
+	return item
+
+
+## One node or resource: "+ Root/Enemy (Sprite2D)", with its property changes underneath.
+func _add_scene_item(parent: TreeItem, entry: Dictionary) -> void:
+	var status: String = entry["status"]
+	var color: Color = { "added": SCENE_ADDED_COLOR, "removed": SCENE_REMOVED_COLOR }.get(status, SCENE_CHANGED_COLOR)
+	var sign: String = { "added": "+ ", "removed": "− " }.get(status, "")
+	var type: String = entry["type"]
+	var item := _scene_line(parent, "%s%s%s" % [sign, entry["path"], "  (%s)" % type if not type.is_empty() else ""], color)
+	if has_theme_icon(type, "EditorIcons"):
+		item.set_icon(0, get_theme_icon(type, "EditorIcons"))
+	if status == "removed":
+		return
+	for change in entry["props"]:
+		if change["key"] == "(type)" and status == "added":
+			continue
+		var key: String = change["key"]
+		if change["old"] == null:
+			_scene_line(item, "%s = %s" % [key, _short(change["new"])], SCENE_ADDED_COLOR).set_tooltip_text(0, "%s = %s" % [key, change["new"]])
+		elif change["new"] == null:
+			_scene_line(item, "%s (removed, was %s)" % [key, _short(change["old"])], SCENE_REMOVED_COLOR).set_tooltip_text(0, "%s was %s" % [key, change["old"]])
+		else:
+			_scene_line(item, "%s: %s → %s" % [key, _short(change["old"]), _short(change["new"])], Color.WHITE).set_tooltip_text(0, "%s\nbefore: %s\nafter: %s" % [key, change["old"], change["new"]])
+	item.collapsed = status == "added" and entry["props"].size() > 6
+
+
+static func _short(value: String) -> String:
+	value = value.replace("\n", " ⏎ ")
+	return value if value.length() <= SCENE_VALUE_MAX else value.left(SCENE_VALUE_MAX) + "…"
 
 
 func _on_rows_action_pressed(action: String, hunk_index: int, selected: PackedInt32Array) -> void:
