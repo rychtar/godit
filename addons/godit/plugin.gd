@@ -146,6 +146,7 @@ func _enter_tree() -> void:
 	script_menu.show_commit = _show_commit
 	script_menu.show_file_history = _show_file_history
 	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_SCRIPT_EDITOR_CODE, script_menu)
+	diff_gutter.text_tab_refreshed.connect(script_menu.hook_text_editor)
 	dock_instance.file_history_requested.connect(_show_file_history)
 
 	filesystem_colors = FilesystemColorsScript.new()
@@ -204,6 +205,7 @@ func _exit_tree() -> void:
 
 	diff_gutter.disable()
 	diff_gutter.free()
+	script_menu.unhook_text_editors()
 	remove_context_menu_plugin(script_menu)
 	script_menu = null
 	remove_context_menu_plugin(filesystem_menu)

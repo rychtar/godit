@@ -8,6 +8,7 @@ signal toggle_requested(enabled: bool)
 const DiffGutter := preload("res://addons/godit/dock/gutter/diff_gutter.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 
 const GUTTER_NAME := "godit_blame"
 ## Upper bound for the column, before editor scale; the actual width fits the longest label.
@@ -76,15 +77,15 @@ func _refresh_current() -> void:
 		return
 	if _script_editor == null:
 		_script_editor = EditorInterface.get_script_editor()
-	var script := _script_editor.get_current_script()
 	var editor_base := _script_editor.get_current_editor()
-	if script == null or editor_base == null or not script.resource_path.begins_with("res://"):
+	var res_path := EditorOpen.current_tab_path()
+	if editor_base == null or not res_path.begins_with("res://"):
 		return
 	var code_edit := editor_base.get_base_editor() as CodeEdit
 	if code_edit == null:
 		return
 
-	var resolved := DiffGutter.resolve_repo(script.resource_path)
+	var resolved := DiffGutter.resolve_repo(res_path)
 	if resolved.is_empty():
 		return
 	var text := code_edit.text

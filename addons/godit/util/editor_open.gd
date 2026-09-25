@@ -99,6 +99,21 @@ static func sync_open_scripts(discarded := PackedStringArray()) -> void:
 			tab["script"].source_code = disk
 
 
+## res:// path of the script editor's current tab, a script or a text file (.md, .json...); "" for help pages and built-in scripts.
+static func current_tab_path() -> String:
+	var script_editor := EditorInterface.get_script_editor()
+	var current: ScriptEditorBase = script_editor.get_current_editor() if script_editor != null else null
+	if current == null:
+		return ""
+	if current.get_class() == "ScriptTextEditor":
+		var script := script_editor.get_current_script()
+		return script.resource_path if script != null and not script.resource_path.contains("::") else ""
+	for tab: Dictionary in _open_tabs(script_editor):
+		if tab["editor"] == current:
+			return tab["path"]
+	return ""
+
+
 ## [{"editor", "path", "script" (null for a text file)}] for every script and text file tab with a file behind it.
 static func _open_tabs(script_editor: ScriptEditor) -> Array:
 	var tabs: Array = []
