@@ -12,6 +12,7 @@ const Settings := preload("res://addons/godit/util/settings.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
+const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_resolver.gd")
 
@@ -1630,6 +1631,8 @@ func _do_commit(push_after: bool) -> void:
 		if not await SaveGuard.ensure_saved(self, "Commit", true):
 			return
 		refresh() # auto-stages what was just saved
+	if not await _check_large_files():
+		return
 
 	var result: Dictionary = _repo.commit(message, _amend_check.button_pressed)
 	if not result["ok"]:
@@ -1645,6 +1648,42 @@ func _do_commit(push_after: bool) -> void:
 
 	if push_after:
 		_do_push()
+
+
+## Staged files over this size get a warning before the commit (GitHub rejects anything over 100 MB).
+const LARGE_FILE_BYTES := 10 * 1024 * 1024
+
+
+## Coroutine: warns about big staged files, offering Git LFS or ignoring them. False = cancel the commit.
+func _check_large_files() -> bool:
+	var large: Array = _repo.large_staged_files(LARGE_FILE_BYTES)
+	if large.is_empty():
+		return true
+	var paths: Array = large.map(func(e: Dictionary) -> String: return e["path"])
+	var listed := "\n".join(large.map(func(e: Dictionary) -> String: return "  %s  (%s)" % [e["path"], String.humanize_size(e["size"])]))
+	var actions := {}
+	if RepoSetup.lfs_available():
+		actions["lfs"] = "Track with Git LFS"
+	actions["ignore"] = "Unstage and Ignore"
+	actions["commit"] = "Commit Anyway"
+	var answer: String = await Dialogs.error_with_actions(self, "Large Files", ("%s:\n%s\n\nOnce committed, big files stay in the history forever and make every clone slower; GitHub rejects files over 100 MB. "
+			+ ("Git LFS stores them outside the history." if actions.has("lfs") else "Installing Git LFS (git-lfs.com) would let you store them outside the history."))
+			% ["This file is over 10 MB" if large.size() == 1 else "These %d files are over 10 MB" % large.size(), listed], actions)
+	match answer:
+		"lfs":
+			var result: Dictionary = _repo.lfs_track(paths)
+			if not result["ok"]:
+				await Dialogs.error(self, "Git LFS failed", result["error"])
+				return false
+		"ignore":
+			for path in paths:
+				_repo.unstage_file(path)
+				_ignore_path(path)
+		"commit":
+			pass
+		_:
+			return false
+	return true
 
 
 func _do_push() -> void:

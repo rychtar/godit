@@ -1105,6 +1105,38 @@ func has_staged_changes() -> bool:
 	return GitCli.run(_repo_root, ["diff", "--cached", "--quiet"])["exit_code"] != 0
 
 
+## Staged added/modified files bigger than limit_bytes that Git LFS doesn't already take care of: [{"path", "size"}].
+func large_staged_files(limit_bytes: int) -> Array:
+	var large: Array = []
+	for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=AM"])["text"]):
+		var f := FileAccess.open(_repo_root.path_join(path), FileAccess.READ)
+		if f != null and f.get_length() > limit_bytes:
+			large.append({ "path": path, "size": f.get_length() })
+	if large.is_empty():
+		return large
+	var lfs := {}
+	var attrs: String = GitCli.run(_repo_root, ["check-attr", "filter", "--"] + large.map(func(e: Dictionary) -> String: return e["path"]))["text"]
+	for line in GitCli.lines(attrs):
+		if line.ends_with(": filter: lfs"):
+			lfs[line.trim_suffix(": filter: lfs")] = true
+	return large.filter(func(e: Dictionary) -> bool: return not lfs.has(e["path"]))
+
+
+## Tracks every file with the same extension as one of paths with Git LFS ("*.png"), and re-stages paths so they're stored as LFS pointers.
+func lfs_track(paths: Array) -> Dictionary:
+	var patterns: Array = []
+	for path in paths:
+		var pattern: String = "*." + String(path).get_extension() if not path.get_extension().is_empty() else path
+		if not patterns.has(pattern):
+			patterns.append(pattern)
+	var r := GitCli.run(_repo_root, ["lfs", "track"] + patterns, true)
+	if r["exit_code"] != 0:
+		return { "ok": false, "error": r["text"].strip_edges() }
+	GitCli.run(_repo_root, ["add", ".gitattributes"], true)
+	# The blobs are already staged as regular files; --renormalize runs them through the new LFS filter.
+	return _simple(["add", "--renormalize", "--"] + paths)
+
+
 ## Applies commits (given newest first, as the log shows them) on top of HEAD, oldest first. no_commit leaves the result staged instead.
 func cherry_pick(oids: PackedStringArray, no_commit: bool = false) -> Dictionary:
 	var args := ["cherry-pick"]
