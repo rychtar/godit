@@ -1118,6 +1118,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_context_menu.add_item("Show History", ID_SHOW_HISTORY)
 				_context_menu.add_item("Copy Path", ID_COPY_PATH)
 				_context_menu.add_separator()
+				_context_menu.add_item("Stash...", ID_STASH_GROUP)
 				_context_menu.add_item("Revert...", ID_REVERT)
 				_context_menu.add_item("Remove...", ID_REMOVE)
 		"folder":
@@ -1301,7 +1302,8 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			await _revert_paths(_context_target["paths"])
 		ID_STASH_GROUP:
 			var group_name: String = _context_target.get("name", "")
-			await _stash_dialog(PackedStringArray(_context_target["paths"]), group_name)
+			# A single file's target has just "path".
+			await _stash_dialog(PackedStringArray(_context_target.get("paths", [_context_target.get("path", "")])), group_name)
 
 
 ## Reverts or removes the file, per _confirm_dialog_action (set by whichever menu item opened this dialog).

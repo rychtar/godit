@@ -11,7 +11,7 @@ const Settings := preload("res://addons/godit/util/settings.gd")
 const GitCli := preload("res://addons/godit/util/git_cli.gd")
 const GoditDockScript := preload("res://addons/godit/dock/godit_dock.gd")
 const ChangesPanelScript := preload("res://addons/godit/dock/panels/changes_panel.gd")
-
+##
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger

@@ -62,7 +62,21 @@ func get_status() -> Array:
 			"status": _status_bits(xy),
 			"renamed_from": renamed_from,
 		})
+	_status_cache[_repo_root] = { "msec": Time.get_ticks_msec(), "entries": entries.duplicate(true), "header": status_header }
 	return entries
+
+
+## Last get_status() result of any repo instance on this root (the two docks each open their own) if at most max_age_msec old, else a fresh one — lets pollers share one `git status`.
+func get_recent_status(max_age_msec: int) -> Array:
+	var cached: Dictionary = _status_cache.get(_repo_root, {})
+	if cached.is_empty() or Time.get_ticks_msec() - int(cached["msec"]) > max_age_msec:
+		return get_status()
+	status_header = cached["header"]
+	return cached["entries"].duplicate(true)
+
+
+## repo root -> {"msec", "entries", "header"} of the latest get_status(), for get_recent_status().
+static var _status_cache := {}
 
 
 ## Maps porcelain v1's two-letter XY status into GitStatusFlags' bitmask.
@@ -612,6 +626,21 @@ func list_stashes() -> Array:
 		if f.size() < 3:
 			continue
 		stashes.append({ "ref": f[0], "message": f[1], "date": f[2] })
+	return stashes
+
+
+## Stashes as Git Log rows: [{"oid", "parents" (just the commit it was made on), "stash" (its stash@{n} ref), "summary", "message", "author_name", "author_email", "time"}], newest first.
+func list_stash_commits() -> Array:
+	var r := GitCli.run(_repo_root, ["stash", "list", "--format=%H" + US + "%P" + US + "%gd" + US + "%gs" + US + "%an" + US + "%ae" + US + "%at"])
+	var stashes: Array = []
+	for line in GitCli.lines(r["text"]):
+		var f := line.split(US)
+		if f.size() < 7:
+			continue
+		stashes.append({
+			"oid": f[0], "parents": PackedStringArray([f[1].get_slice(" ", 0)]), "stash": f[2], "summary": f[3], "message": f[3],
+			"author_name": f[4], "author_email": f[5], "time": f[6].to_int(), "refs": PackedStringArray(), "tags": PackedStringArray(),
+		})
 	return stashes
 
 

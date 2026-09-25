@@ -33,6 +33,8 @@ const DATE_COLOR := Color(0.58, 0.58, 0.62)
 const HASH_COLOR := Color(0.55, 0.58, 0.66)
 const DIVIDER_COLOR := Color(1, 1, 1, 0.08)
 const WORKTREE_COLOR := Color(0.62, 0.62, 0.66)
+const STASH_COLOR := Color(0.72, 0.6, 0.9)
+const STASH_BADGE_BG_COLOR := Color(0.72, 0.6, 0.9, 0.25)
 
 ## Pseudo-oid of the "Uncommitted changes" row, whose only parent is HEAD.
 const WORKTREE_OID := "worktree"
@@ -338,8 +340,8 @@ func _draw() -> void:
 				if int(parent_entry["row"]) < first_row:
 					continue
 				var to := Vector2(_lane_x(parent_entry["lane"]), _row_y(parent_entry["row"]))
-				if entry["oid"] == WORKTREE_OID:
-					draw_dashed_line(from, to, WORKTREE_COLOR, 2.0, 4.0)
+				if entry["oid"] == WORKTREE_OID or entry.has("stash"):
+					draw_dashed_line(from, to, STASH_COLOR if entry.has("stash") else WORKTREE_COLOR, 2.0, 4.0)
 				else:
 					draw_line(from, to, _lane_color(entry["lane"]), 2.0, true)
 
@@ -367,7 +369,10 @@ func _draw() -> void:
 			draw_string(font, Vector2(note_x, worktree_baseline), _truncate_to_width(font, font_size, entry.get("note", ""), text_x + message_max_width - note_x),
 					HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, WORKTREE_COLOR)
 			continue
-		draw_circle(dot, DOT_RADIUS, _lane_color(entry["lane"]))
+		if entry.has("stash"):
+			draw_rect(Rect2(dot - Vector2.ONE * DOT_RADIUS, Vector2.ONE * DOT_RADIUS * 2.0), STASH_COLOR, false, 1.5)
+		else:
+			draw_circle(dot, DOT_RADIUS, _lane_color(entry["lane"]))
 		if entry["oid"] == _head_oid:
 			draw_arc(dot, DOT_RADIUS + 3.0, 0.0, TAU, 20, Color.WHITE, 1.5, true)
 
@@ -378,6 +383,9 @@ func _draw() -> void:
 		# Branches and tags get separate colored pills (tags gold-ish) since
 		# both can be present on the same commit.
 		var badges: Array = []
+		if entry.has("stash"):
+			badges.append({"text": entry["stash"], "bg": STASH_BADGE_BG_COLOR, "fg": STASH_COLOR})
+			message_color = MERGE_MESSAGE_COLOR
 		var refs: PackedStringArray = entry["refs"]
 		if not refs.is_empty():
 			badges.append({"text": _badge_label(refs), "bg": BADGE_BG_COLOR, "fg": BADGE_TEXT_COLOR})
