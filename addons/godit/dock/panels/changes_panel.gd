@@ -1354,7 +1354,7 @@ func _revert_paths(paths: Array) -> void:
 			errors.append("%s: %s" % [path, result["error"]])
 		_changelist_state["assignments"].erase(path)
 	_save_changelist_state()
-	EditorOpen.refresh_all_external_changes()
+	EditorOpen.refresh_external_changes(_repo.get_repo_root(), paths)
 	if not errors.is_empty():
 		Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
 	refresh()
