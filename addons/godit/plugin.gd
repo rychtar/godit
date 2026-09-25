@@ -106,12 +106,35 @@ func _enter_tree() -> void:
 	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_SCRIPT_EDITOR_CODE, script_menu)
 	dock_instance.file_history_requested.connect(_show_file_history)
 	history_dock_instance.changes_requested.connect(_show_changes)
+	# Saves show up right away; the panels' polling still catches changes made outside the editor.
+	resource_saved.connect(func(_r: Resource) -> void: _queue_poll())
+	scene_saved.connect(func(_p: String) -> void: _queue_poll())
+	EditorInterface.get_resource_filesystem().filesystem_changed.connect(_queue_poll)
+
+
+var _poll_queued := false
+
+
+## One poll per frame however many saves (Save All) or rescans triggered it.
+func _queue_poll() -> void:
+	if _poll_queued:
+		return
+	_poll_queued = true
+	(func() -> void:
+		_poll_queued = false
+		# Changes first: its fresh `git status` is then reused by the log.
+		if is_instance_valid(dock_instance):
+			dock_instance.poll_now()
+		if is_instance_valid(history_dock_instance):
+			history_dock_instance.poll_now()
+	).call_deferred()
 
 
 func _exit_tree() -> void:
 	# Before freeing the UI: a fetch/push still running would otherwise outlive the plugin and resume coroutines on freed panels.
 	GitCli.shutdown()
 	remove_tool_menu_item("Godit")
+	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
 
 	if bottom_dock_container != null:
 		# dock_instance was already removed from the left docks when this was

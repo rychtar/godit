@@ -20,7 +20,14 @@ signal changes_requested(action: String)
 
 const DETAILS_VISIBLE_SETTING_KEY := "history_details_visible"
 const SHOW_REMOTES_SETTING_KEY := "history_show_remotes"
+const SHOW_STASHES_SETTING_KEY := "history_show_stashes"
 const SEARCH_LIMIT := 500
+const MERGE_MODES := {
+	"Default (fast-forward when possible)": "",
+	"Always create a merge commit (--no-ff)": "no-ff",
+	"Fast-forward only": "ff-only",
+	"Squash (stage the changes, commit them yourself)": "squash",
+}
 
 const DETAIL_PANE_RATIO := 1.0 / 3.0
 
@@ -35,7 +42,7 @@ enum {
 	ID_COMPARE_SELECTED, ID_REWORD, ID_FIXUP, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES,
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
-enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP }
+enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
 enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
 
 @onready var _search_edit: LineEdit = %SearchEdit
@@ -90,6 +97,7 @@ var _stashes: Array = []
 
 var _branch_option: OptionButton
 var _remotes_check: CheckBox
+var _stashes_check: CheckBox
 var _path_chip: HBoxContainer
 var _path_label: Label
 var _path_filter := ""
@@ -114,6 +122,8 @@ func _ready() -> void:
 	_details_toggle.button_pressed = Settings.get_value(DETAILS_VISIBLE_SETTING_KEY, true)
 	_build_toolbar()
 	_build_file_diff()
+	_graph.commits_dropped.connect(_on_commits_dropped)
+	_graph.refs_dropped.connect(_on_refs_dropped)
 	_graph.commit_activated.connect(func(oid: String) -> void:
 		if oid == WORKTREE_OID:
 			changes_requested.emit("commit")
@@ -160,6 +170,17 @@ func _build_toolbar() -> void:
 	toolbar.add_child(_remotes_check)
 	toolbar.move_child(_remotes_check, 2)
 
+	_stashes_check = CheckBox.new()
+	_stashes_check.text = "Stashes"
+	_stashes_check.tooltip_text = "Show stashes next to the commits they were made on"
+	_stashes_check.button_pressed = Settings.get_value(SHOW_STASHES_SETTING_KEY, true)
+	_stashes_check.toggled.connect(func(on: bool) -> void:
+		Settings.set_value(SHOW_STASHES_SETTING_KEY, on)
+		refresh()
+	)
+	toolbar.add_child(_stashes_check)
+	toolbar.move_child(_stashes_check, 3)
+
 	_path_chip = HBoxContainer.new()
 	_path_chip.visible = false
 	_path_label = Label.new()
@@ -175,7 +196,7 @@ func _build_toolbar() -> void:
 	clear.pressed.connect(func() -> void: set_path_filter(""))
 	_path_chip.add_child(clear)
 	toolbar.add_child(_path_chip)
-	toolbar.move_child(_path_chip, 3)
+	toolbar.move_child(_path_chip, 4)
 
 	_search_mode = OptionButton.new()
 	_search_mode.add_item("Message", 0)
@@ -319,12 +340,18 @@ func _update_branch_option() -> void:
 		_branch_option.select(0)
 
 
+## Checks right away instead of on the next tick, e.g. after a save in the editor.
+func poll_now() -> void:
+	_maybe_refresh(true)
+
+
 ## Reloads the graph only when a ref or HEAD moved — one cheap for-each-ref instead of a full log per tick.
-func _maybe_refresh() -> void:
+func _maybe_refresh(fresh_status := false) -> void:
 	if _repo == null or _repo.is_busy():
 		return
 	# The Changes panel polls `git status` on the same interval; reuse its result when it's that fresh.
-	var status: Array = _repo.get_recent_status(int(AUTO_REFRESH_INTERVAL * 1000.0) + 500)
+	# fresh_status still takes a status the Changes panel fetched a moment ago for the same save.
+	var status: Array = _repo.get_recent_status(250 if fresh_status else int(AUTO_REFRESH_INTERVAL * 1000.0) + 500)
 	if _refs_signature() == _last_refs_signature and _status_signature(status) == _last_status_signature:
 		return
 	_update_branch_option()
@@ -337,9 +364,10 @@ func refresh(status_entries: Variant = null) -> void:
 		return
 
 	var status: Array = status_entries if status_entries != null else _repo.get_status()
+	_graph.current_branch = _repo.get_current_branch()
 	_last_refs_signature = _refs_signature()
 	_last_status_signature = _status_signature(status)
-	_stashes = _repo.list_stash_commits() if _path_filter.is_empty() else []
+	_stashes = _repo.list_stash_commits() if _path_filter.is_empty() and _stashes_check.button_pressed else []
 	_worktree_files = status.filter(func(e: Dictionary) -> bool:
 		return not e["status"] & GitStatusFlags.IGNORED and (_path_filter.is_empty() or e["path"] == _path_filter or e["path"].begins_with(_path_filter.trim_suffix("/") + "/")))
 	_all_commits = _repo.get_commit_graph(_limit, _log_options())
@@ -782,6 +810,7 @@ func _show_stash_menu(screen_position: Vector2) -> void:
 	var m := _context_menu
 	m.clear()
 	m.add_item("Show Changes…", ID_STASH_SHOW)
+	m.add_item("Compare with Working Tree…", ID_STASH_COMPARE_WORKTREE)
 	m.add_item("Apply", ID_STASH_APPLY)
 	m.add_item("Pop (apply and drop)", ID_STASH_POP)
 	m.add_item("Copy Commit Hash", ID_COPY_HASH)
@@ -797,6 +826,8 @@ func _on_context_menu_id_pressed(id: int) -> void:
 	match id:
 		ID_STASH_SHOW:
 			_open_changeset("%s  %s" % [stash_ref, _summary(_context_oid)], stash_ref + "^", stash_ref)
+		ID_STASH_COMPARE_WORKTREE:
+			_open_changeset("%s ↔ working tree" % stash_ref, _context_oid, "")
 		ID_STASH_APPLY, ID_STASH_POP:
 			_after_operation(_repo.stash_apply(stash_ref, id == ID_STASH_POP), "Pop" if id == ID_STASH_POP else "Apply")
 		ID_STASH_DROP:
@@ -871,6 +902,44 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				_after_operation(_repo.drop_commit(_context_oid), "Drop")
 		ID_UNDO_LAST:
 			_after(_repo.undo_last_commit(), "Undo commit failed", true)
+
+
+## Dragged onto the current branch's row: cherry-pick the ones it doesn't have yet.
+func _on_commits_dropped(oids: PackedStringArray, _target_oid: String) -> void:
+	var branch: String = _repo.get_current_branch()
+	var missing := PackedStringArray(Array(oids).filter(func(o: String) -> bool: return not _repo.is_ancestor_of_head(o)))
+	if missing.is_empty():
+		Dialogs.error(self, "Nothing to Cherry-pick", "%s already contains %s." % [branch, "these commits" if oids.size() > 1 else "this commit"])
+		return
+	var what := "%d commits" % missing.size() if missing.size() > 1 else "%s \"%s\"" % [missing[0].substr(0, 7), _summary(missing[0])]
+	if await Dialogs.confirm(self, "Cherry-pick", "Cherry-pick %s into %s?" % [what, branch], "Cherry-pick"):
+		_after_operation(_repo.cherry_pick(missing), "Cherry-pick")
+
+
+## A branch dragged onto another, one of them checked out: merge the other into it, or rebase it onto the other.
+func _on_refs_dropped(refs: PackedStringArray, target_oid: String) -> void:
+	var current: String = _repo.get_current_branch()
+	var others: Array = Array(_commits_by_oid.get(target_oid, {}).get("refs", PackedStringArray())) if refs.has(current) else Array(refs)
+	others = others.filter(func(r: String) -> bool: return r != current)
+	if others.is_empty():
+		return
+	var actions: Array = []
+	for other in others:
+		actions.append("Merge %s into %s" % [other, current])
+		actions.append("Rebase %s onto %s" % [current, other])
+	var answer: Variant = await Dialogs.form(self, "Merge or Rebase", [
+		{ "key": "action", "label": "Action", "type": "option", "options": actions, "default": actions[0] },
+		{ "key": "mode", "label": "Merge mode", "type": "option", "options": MERGE_MODES.keys(), "default": MERGE_MODES.keys()[0] },
+		{ "type": "label", "label": "Rebase rewrites %s's history — don't do it to commits others already pulled." % current },
+	], "Run")
+	if answer == null:
+		return
+	var index := actions.find(answer["action"])
+	var other: String = others[index / 2]
+	if index % 2 == 0:
+		_after_operation(_repo.merge(other, MERGE_MODES[answer["mode"]]), "Merge")
+	else:
+		_after_operation(_repo.rebase(other), "Rebase")
 
 
 func _summary(oid: String) -> String:

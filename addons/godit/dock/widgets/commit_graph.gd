@@ -4,6 +4,10 @@ extends Control
 signal commit_selected(oid: String)
 signal commit_context_requested(oid: String, screen_position: Vector2)
 signal commit_activated(oid: String)
+## Commits dragged onto the current branch's row (cherry-pick), newest first.
+signal commits_dropped(oids: PackedStringArray, target_oid: String)
+## A branch badge dragged onto another branch's row, one of them the current branch (merge / rebase).
+signal refs_dropped(refs: PackedStringArray, target_oid: String)
 
 const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
@@ -56,6 +60,14 @@ var _selected_row := -1
 ## Rows in the (Ctrl/Cmd/Shift-click) multi-selection, _selected_row included.
 var _selected_rows := {}
 var _head_oid := ""
+## Checked-out branch ("" when detached), set by the owner; drops only make sense onto or from it.
+var current_branch := ""
+## Row -> Rect2 of its branch badge, from the last _draw(), so a drag can start on a badge.
+var _badge_rects := {}
+## Row a drag is hovering as a valid drop target, or -1.
+var _drop_row := -1
+## Row pressed inside a multi-selection: it becomes the only selection on release unless a drag started.
+var _pending_single_row := -1
 
 ## Optional columns right of the message, in display order.
 const COLUMNS := ["hash", "author", "date"]
@@ -314,6 +326,7 @@ func _draw() -> void:
 
 	var font := get_theme_default_font()
 	var font_size := get_theme_default_font_size()
+	_badge_rects.clear()
 
 	# Only rows inside the scroll viewport are drawn — the log can be thousands of commits long once "load more" kicks in.
 	var sc := get_parent() as ScrollContainer
@@ -327,6 +340,8 @@ func _draw() -> void:
 			draw_rect(Rect2(0, row * ROW_HEIGHT, size.x, ROW_HEIGHT), Color(1, 1, 1, 0.08 if row == _selected_row else 0.05))
 	if _selected_rows.size() > 1 and _selected_row >= first_row and _selected_row <= last_row:
 		draw_rect(Rect2(0, _selected_row * ROW_HEIGHT, 3.0, ROW_HEIGHT), BADGE_TEXT_COLOR)
+	if _drop_row >= 0:
+		draw_rect(Rect2(1, _drop_row * ROW_HEIGHT + 1, size.x - 2, ROW_HEIGHT - 2), BADGE_TEXT_COLOR, false, 2.0)
 
 	# Connectors first (dots draw on top); a line spanning many rows is drawn whenever it crosses the view.
 	for entry in _commits:
@@ -388,7 +403,7 @@ func _draw() -> void:
 			message_color = MERGE_MESSAGE_COLOR
 		var refs: PackedStringArray = entry["refs"]
 		if not refs.is_empty():
-			badges.append({"text": _badge_label(refs), "bg": BADGE_BG_COLOR, "fg": BADGE_TEXT_COLOR})
+			badges.append({"text": _badge_label(refs), "bg": BADGE_BG_COLOR, "fg": BADGE_TEXT_COLOR, "branches": true})
 		var tags: PackedStringArray = entry.get("tags", PackedStringArray())
 		if not tags.is_empty():
 			badges.append({"text": _badge_label(tags), "bg": TAG_BADGE_BG_COLOR, "fg": TAG_BADGE_TEXT_COLOR})
@@ -410,6 +425,8 @@ func _draw() -> void:
 			for b in badges:
 				var badge_rect := Rect2(badge_x, _row_y(entry["row"]) - font_size * 0.65, b["width"], font_size * 1.3)
 				draw_rect(badge_rect, b["bg"])
+				if b.get("branches", false):
+					_badge_rects[row] = badge_rect
 				draw_string(font, Vector2(badge_x + BADGE_PADDING, baseline_y), b["text"],
 						HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, b["fg"])
 				badge_x += b["width"] + BADGE_GAP
@@ -480,10 +497,16 @@ func _gui_input(event: InputEvent) -> void:
 						_selected_row = row
 						commit_selected.emit(_commits[row]["oid"])
 					queue_redraw()
+				elif _selected_rows.has(row) and _selected_rows.size() > 1 and not event.double_click:
+					_pending_single_row = row # keep the selection for a drag of all of it
 				else:
 					_select_single(row)
 					if event.double_click:
 						commit_activated.emit(_commits[row]["oid"])
+		elif _pending_single_row >= 0:
+			if _pending_single_row < _commits.size():
+				_select_single(_pending_single_row)
+			_pending_single_row = -1
 		elif not _dragging_column.is_empty():
 			Settings.set_value("history_%s_col_width" % _dragging_column, _col_width[_dragging_column])
 			_dragging_column = ""
@@ -511,3 +534,74 @@ func _gui_input(event: InputEvent) -> void:
 		if step != 0:
 			_select_single(clampi(_selected_row + step, 0, _commits.size() - 1))
 			accept_event()
+
+
+static func _is_pseudo(entry: Dictionary) -> bool:
+	return entry["oid"] == WORKTREE_OID or entry.has("stash")
+
+
+func _row_at(y: float) -> int:
+	var row := int(y / ROW_HEIGHT)
+	return row if row >= 0 and row < _commits.size() else -1
+
+
+## A branch badge drags its branches; any other spot drags the commit (or the whole selection it's part of).
+func _get_drag_data(at_position: Vector2) -> Variant:
+	var row := _row_at(at_position.y)
+	if not _dragging_column.is_empty() or row < 0 or _is_pseudo(_commits[row]):
+		return null
+	_pending_single_row = -1
+	var preview := Label.new()
+	preview.add_theme_color_override("font_color", BADGE_TEXT_COLOR)
+	if _badge_rects.has(row) and (_badge_rects[row] as Rect2).grow(2.0).has_point(at_position):
+		var refs: PackedStringArray = _commits[row]["refs"]
+		preview.text = _badge_label(refs)
+		set_drag_preview(preview)
+		return { "godit_refs": refs, "from_row": row }
+	if not _selected_rows.has(row):
+		_select_single(row)
+	var oids := PackedStringArray(Array(get_selected_oids()).filter(func(o: String) -> bool: return not _is_pseudo(_by_oid[o])))
+	preview.text = "%d commits" % oids.size() if oids.size() > 1 else "%s  %s" % [oids[0].substr(0, 7), _commits[row]["summary"]]
+	set_drag_preview(preview)
+	return { "godit_commits": oids, "from_row": row }
+
+
+## Commits drop onto the current branch's row; a branch drops onto another branch's row when one of the two is the current branch.
+func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
+	var row := _row_at(at_position.y)
+	var ok: bool = row >= 0 and data is Dictionary and row != data.get("from_row", -1) and not _is_pseudo(_commits[row]) and _accepts(_commits[row], data)
+	var shown := row if ok else -1
+	if shown != _drop_row:
+		_drop_row = shown
+		queue_redraw()
+	return ok
+
+
+func _accepts(target: Dictionary, data: Dictionary) -> bool:
+	if current_branch.is_empty():
+		return false
+	var target_refs: PackedStringArray = target["refs"]
+	if data.has("godit_commits"):
+		return (target_refs.has(current_branch) or target["oid"] == _head_oid) and not (data["godit_commits"] as PackedStringArray).has(target["oid"])
+	if data.has("godit_refs"):
+		var refs: PackedStringArray = data["godit_refs"]
+		if refs.has(current_branch):
+			return Array(target_refs).any(func(r: String) -> bool: return r != current_branch)
+		return target_refs.has(current_branch)
+	return false
+
+
+func _drop_data(at_position: Vector2, data: Variant) -> void:
+	var target_oid: String = _commits[_row_at(at_position.y)]["oid"]
+	_drop_row = -1
+	queue_redraw()
+	if data.has("godit_commits"):
+		commits_dropped.emit(data["godit_commits"], target_oid)
+	else:
+		refs_dropped.emit(data["godit_refs"], target_oid)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_END and _drop_row >= 0:
+		_drop_row = -1
+		queue_redraw()

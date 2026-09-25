@@ -46,6 +46,12 @@ func _add_console_tab() -> void:
 	_tabs = tabs
 
 
+## Called by plugin.gd after a save in the editor.
+func poll_now() -> void:
+	if _repo != null and _history_panel.is_visible_in_tree():
+		_history_panel.poll_now()
+
+
 ## Brings the Log tab to front with oid selected.
 func show_commit(oid: String) -> void:
 	if _repo == null:

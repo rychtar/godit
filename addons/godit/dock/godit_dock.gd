@@ -72,6 +72,12 @@ func _on_auto_fetch_timeout() -> void:
 		_branches_panel.refresh()
 
 
+## Called by plugin.gd after a save in the editor.
+func poll_now() -> void:
+	if _repo != null and _changes_panel.is_visible_in_tree():
+		_changes_panel._maybe_refresh()
+
+
 ## Brings the Changes tab to front within this dock and runs action there (see changes_panel.gd's run_action()).
 func show_changes(action: String) -> void:
 	if _changes_panel.get_parent() == _tab_container:

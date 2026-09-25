@@ -1255,7 +1255,7 @@ func branches_containing(oid: String) -> PackedStringArray:
 
 
 func _refs_by_oid(ref_prefixes: Array) -> Dictionary:
-	var fmt := "%(objectname)" + GitCli.US + "%(refname:short)"
+	var fmt := "%(objectname)" + GitCli.US + "%(refname:short)" + GitCli.US + "%(refname)"
 	var args := ["for-each-ref", "--format=" + fmt]
 	args.append_array(ref_prefixes)
 	var result := GitCli.run(_repo_root, args)
@@ -1267,7 +1267,8 @@ func _refs_by_oid(ref_prefixes: Array) -> Dictionary:
 			continue
 		var oid: String = fields[0]
 		var name: String = fields[1]
-		if name.ends_with("/HEAD"):
+		# refs/remotes/origin/HEAD shortens to just "origin", so check the full name.
+		if fields[fields.size() - 1].ends_with("/HEAD"):
 			continue
 		# Mutating a PackedStringArray fetched from a Dictionary in place
 		# doesn't write back (COW) — reassign it instead.
