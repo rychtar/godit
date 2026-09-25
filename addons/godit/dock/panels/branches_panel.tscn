@@ -26,11 +26,6 @@ layout_mode = 2
 [node name="Row3" type="HBoxContainer" parent="Layout/Toolbar" unique_id=1702780565]
 layout_mode = 2
 
-[node name="NewBranchButton" type="Button" parent="Layout/Toolbar/Row3" unique_id=363961289]
-layout_mode = 2
-tooltip_text = "New branch from the current HEAD"
-text = "+ Branch"
-
 [node name="FilterEdit" type="LineEdit" parent="Layout/Toolbar/Row3" unique_id=363961290]
 unique_name_in_owner = true
 layout_mode = 2
@@ -51,7 +46,6 @@ hide_root = true
 [node name="ContextMenu" type="PopupMenu" parent="." unique_id=1764193319]
 unique_name_in_owner = true
 
-[connection signal="pressed" from="Layout/Toolbar/Row3/NewBranchButton" to="." method="_on_new_branch_button_pressed"]
 [connection signal="text_changed" from="Layout/Toolbar/Row3/FilterEdit" to="." method="_on_filter_edit_text_changed"]
 [connection signal="item_activated" from="Layout/BranchesTree" to="." method="_on_branches_tree_item_activated"]
 [connection signal="item_mouse_selected" from="Layout/BranchesTree" to="." method="_on_branches_tree_item_mouse_selected"]

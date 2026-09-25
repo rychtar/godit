@@ -1,6 +1,8 @@
 ## "Git: …" items in the script editor's right-click menu: preview/rollback the change at the caret, the commit behind the caret's line, file history, and the blame toggle. Plain items rather than a submenu: a PopupMenu handed to add_context_submenu_item() gets parented into the editor's menu, and freeing it on plugin reload left the editor with a dangling submenu that crashed on the next right-click.
 extends EditorContextMenuPlugin
 
+const WebLinks := preload("res://addons/godit/util/web_links.gd")
+
 ## Set by plugin.gd.
 var diff_gutter: Node
 var blame_gutter: Node
@@ -20,6 +22,11 @@ func _popup_menu(paths: PackedStringArray) -> void:
 		add_context_menu_item("Git: Show Change in Changes Panel", _on_show_in_changes)
 	add_context_menu_item("Git: Show Commit for This Line", _on_line_commit)
 	add_context_menu_item("Git: Show History of This File", _on_file_history)
+	var resolved: Dictionary = diff_gutter.resolve_repo(code_edit.get_meta(diff_gutter.META_RES_PATH, ""))
+	if not resolved.is_empty():
+		var site := WebLinks.site(resolved["repo"])
+		if not site.is_empty():
+			add_context_menu_item("Git: Open Line on %s" % site["name"], _on_open_on_web)
 	add_context_menu_item("Git: Hide Blame" if blame_gutter.is_enabled() else "Git: Show Blame", _on_toggle_blame)
 
 
@@ -65,6 +72,20 @@ func _on_file_history(target: Variant) -> void:
 	var code_edit := _code_edit_from(target)
 	if code_edit != null:
 		show_file_history.call(code_edit.get_meta(diff_gutter.META_REL_PATH, ""))
+
+
+## The caret's line in the last pushed version of the file (lines may be off by your unpushed edits).
+func _on_open_on_web(target: Variant) -> void:
+	var code_edit := _code_edit_from(target)
+	if code_edit == null:
+		return
+	var resolved: Dictionary = diff_gutter.resolve_repo(code_edit.get_meta(diff_gutter.META_RES_PATH, ""))
+	var repo: RefCounted = resolved["repo"]
+	var ref := WebLinks.pushed_base(repo)
+	if ref.is_empty():
+		EditorInterface.get_editor_toaster().push_toast("Git: this branch isn't pushed yet, so there's nothing to open.")
+		return
+	OS.shell_open(WebLinks.file_url(WebLinks.site(repo), ref, resolved["rel_path"], code_edit.get_caret_line() + 1))
 
 
 func _on_toggle_blame(_target: Variant) -> void:

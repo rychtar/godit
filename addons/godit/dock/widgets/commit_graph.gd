@@ -3,6 +3,11 @@ extends Control
 
 signal commit_selected(oid: String)
 signal commit_context_requested(oid: String, screen_position: Vector2)
+signal commit_activated(oid: String)
+## Commits dragged onto the current branch's row (cherry-pick), newest first.
+signal commits_dropped(oids: PackedStringArray, target_oid: String)
+## A branch badge dragged onto another branch's row, one of them the current branch (merge / rebase).
+signal refs_dropped(refs: PackedStringArray, target_oid: String)
 
 const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
@@ -31,6 +36,12 @@ const AUTHOR_COLOR := Color(0.85, 0.85, 0.88)
 const DATE_COLOR := Color(0.58, 0.58, 0.62)
 const HASH_COLOR := Color(0.55, 0.58, 0.66)
 const DIVIDER_COLOR := Color(1, 1, 1, 0.08)
+const WORKTREE_COLOR := Color(0.62, 0.62, 0.66)
+const STASH_COLOR := Color(0.72, 0.6, 0.9)
+const STASH_BADGE_BG_COLOR := Color(0.72, 0.6, 0.9, 0.25)
+
+## Pseudo-oid of the "Uncommitted changes" row, whose only parent is HEAD.
+const WORKTREE_OID := "worktree"
 
 const LANE_COLORS := [
 	Color(0.36, 0.66, 0.96),
@@ -49,24 +60,73 @@ var _selected_row := -1
 ## Rows in the (Ctrl/Cmd/Shift-click) multi-selection, _selected_row included.
 var _selected_rows := {}
 var _head_oid := ""
+## Checked-out branch ("" when detached), set by the owner; drops only make sense onto or from it.
+var current_branch := ""
+## Row -> Rect2 of its branch badge, from the last _draw(), so a drag can start on a badge.
+var _badge_rects := {}
+## Row a drag is hovering as a valid drop target, or -1.
+var _drop_row := -1
+## Row pressed inside a multi-selection: it becomes the only selection on release unless a drag started.
+var _pending_single_row := -1
 
-## User-resizable via dragging the column dividers; persisted across editor
-## sessions through util/settings.gd. 0 = not dragging, 1 = the divider
-## between the message and hash columns, 2 = between hash and author,
-## 3 = between author and date.
-var _hash_col_width: float = DEFAULT_HASH_COL_WIDTH
-var _author_col_width: float = DEFAULT_AUTHOR_COL_WIDTH
-var _date_col_width: float = DEFAULT_DATE_COL_WIDTH
-var _dragging_divider := 0
+## Optional columns right of the message, in display order.
+const COLUMNS := ["hash", "author", "date"]
+const COLUMN_TITLES := { "hash": "Hash", "author": "Author", "date": "Date" }
+const VISIBLE_COLUMNS_SETTING_KEY := "history_visible_columns"
+const ABSOLUTE_DATES_SETTING_KEY := "history_absolute_dates"
+
+## Widths are user-resizable by dragging the dividers and persisted via util/settings.gd.
+var _col_width := {}
+var _visible_columns: Array = COLUMNS.duplicate()
+var _absolute_dates := false
+## Visible column whose left divider is being dragged, or "".
+var _dragging_column := ""
 
 
 func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	resized.connect(queue_redraw)
 	focus_mode = Control.FOCUS_CLICK
-	_hash_col_width = Settings.get_value("history_hash_col_width", DEFAULT_HASH_COL_WIDTH)
-	_author_col_width = Settings.get_value("history_author_col_width", DEFAULT_AUTHOR_COL_WIDTH)
-	_date_col_width = Settings.get_value("history_date_col_width", DEFAULT_DATE_COL_WIDTH)
+	var defaults := { "hash": DEFAULT_HASH_COL_WIDTH, "author": DEFAULT_AUTHOR_COL_WIDTH, "date": DEFAULT_DATE_COL_WIDTH }
+	for column in COLUMNS:
+		_col_width[column] = Settings.get_value("history_%s_col_width" % column, defaults[column])
+	_visible_columns = COLUMNS.filter(func(c: String) -> bool: return Settings.get_value(VISIBLE_COLUMNS_SETTING_KEY, COLUMNS).has(c))
+	_absolute_dates = Settings.get_value(ABSOLUTE_DATES_SETTING_KEY, false)
+
+
+func is_column_visible(column: String) -> bool:
+	return _visible_columns.has(column)
+
+
+func set_column_visible(column: String, shown: bool) -> void:
+	_visible_columns = COLUMNS.filter(func(c: String) -> bool: return c == column and shown or c != column and _visible_columns.has(c))
+	Settings.set_value(VISIBLE_COLUMNS_SETTING_KEY, _visible_columns)
+	queue_redraw()
+
+
+func uses_absolute_dates() -> bool:
+	return _absolute_dates
+
+
+func set_absolute_dates(on: bool) -> void:
+	_absolute_dates = on
+	Settings.set_value(ABSOLUTE_DATES_SETTING_KEY, on)
+	queue_redraw()
+
+
+## Left edge of each visible column, laid out from the right edge.
+func _column_x() -> Dictionary:
+	var xs := {}
+	var x := size.x
+	for i in range(_visible_columns.size() - 1, -1, -1):
+		x -= _col_width[_visible_columns[i]]
+		xs[_visible_columns[i]] = x
+	return xs
+
+
+func _columns_left() -> float:
+	var xs := _column_x()
+	return xs[_visible_columns[0]] if not _visible_columns.is_empty() else size.x
 
 
 ## head_oid gets a ring around its dot. Selection survives if the selected commits are still listed.
@@ -233,6 +293,11 @@ static func _truncate_to_width(font: Font, font_size: int, text: String, max_wid
 
 ## "25 minutes ago", falling back to a "DD.MM.YYYY, HH:MM" stamp once
 ## it's more than a week old.
+static func format_absolute_time(unix_time: int) -> String:
+	var dt := Time.get_datetime_dict_from_unix_time(unix_time)
+	return "%02d.%02d.%04d, %02d:%02d" % [dt["day"], dt["month"], dt["year"], dt["hour"], dt["minute"]]
+
+
 static func format_relative_time(unix_time: int, now: int = -1) -> String:
 	if now < 0:
 		now = int(Time.get_unix_time_from_system())
@@ -252,8 +317,7 @@ static func format_relative_time(unix_time: int, now: int = -1) -> String:
 		var d := delta / 86400
 		return "%d day%s ago" % [d, "" if d == 1 else "s"]
 
-	var dt := Time.get_datetime_dict_from_unix_time(unix_time)
-	return "%02d.%02d.%04d, %02d:%02d" % [dt["day"], dt["month"], dt["year"], dt["hour"], dt["minute"]]
+	return format_absolute_time(unix_time)
 
 
 func _draw() -> void:
@@ -262,6 +326,7 @@ func _draw() -> void:
 
 	var font := get_theme_default_font()
 	var font_size := get_theme_default_font_size()
+	_badge_rects.clear()
 
 	# Only rows inside the scroll viewport are drawn — the log can be thousands of commits long once "load more" kicks in.
 	var sc := get_parent() as ScrollContainer
@@ -275,6 +340,8 @@ func _draw() -> void:
 			draw_rect(Rect2(0, row * ROW_HEIGHT, size.x, ROW_HEIGHT), Color(1, 1, 1, 0.08 if row == _selected_row else 0.05))
 	if _selected_rows.size() > 1 and _selected_row >= first_row and _selected_row <= last_row:
 		draw_rect(Rect2(0, _selected_row * ROW_HEIGHT, 3.0, ROW_HEIGHT), BADGE_TEXT_COLOR)
+	if _drop_row >= 0:
+		draw_rect(Rect2(1, _drop_row * ROW_HEIGHT + 1, size.x - 2, ROW_HEIGHT - 2), BADGE_TEXT_COLOR, false, 2.0)
 
 	# Connectors first (dots draw on top); a line spanning many rows is drawn whenever it crosses the view.
 	for entry in _commits:
@@ -288,24 +355,39 @@ func _draw() -> void:
 				if int(parent_entry["row"]) < first_row:
 					continue
 				var to := Vector2(_lane_x(parent_entry["lane"]), _row_y(parent_entry["row"]))
-				draw_line(from, to, _lane_color(entry["lane"]), 2.0, true)
+				if entry["oid"] == WORKTREE_OID or entry.has("stash"):
+					draw_dashed_line(from, to, STASH_COLOR if entry.has("stash") else WORKTREE_COLOR, 2.0, 4.0)
+				else:
+					draw_line(from, to, _lane_color(entry["lane"]), 2.0, true)
 
 	var graph_width := LEFT_MARGIN + (_max_lane() + 1) * LANE_WIDTH + TEXT_GAP
 	var text_x := graph_width
-	var date_x := size.x - _date_col_width
-	var author_x := date_x - _author_col_width
-	var hash_x := author_x - _hash_col_width
-	var message_max_width := maxf(0.0, hash_x - COLUMN_GAP - text_x)
+	var col_x := _column_x()
+	var message_max_width := maxf(0.0, _columns_left() - (COLUMN_GAP if not _visible_columns.is_empty() else 0.0) - text_x)
 	var now := int(Time.get_unix_time_from_system())
 
-	draw_line(Vector2(hash_x - COLUMN_GAP * 0.5, 0), Vector2(hash_x - COLUMN_GAP * 0.5, size.y), DIVIDER_COLOR, 1.0)
-	draw_line(Vector2(author_x - COLUMN_GAP * 0.5, 0), Vector2(author_x - COLUMN_GAP * 0.5, size.y), DIVIDER_COLOR, 1.0)
-	draw_line(Vector2(date_x - COLUMN_GAP * 0.5, 0), Vector2(date_x - COLUMN_GAP * 0.5, size.y), DIVIDER_COLOR, 1.0)
+	for column in _visible_columns:
+		var divider_x: float = col_x[column] - COLUMN_GAP * 0.5
+		draw_line(Vector2(divider_x, 0), Vector2(divider_x, size.y), DIVIDER_COLOR, 1.0)
 
 	for row in range(first_row, last_row + 1):
 		var entry: Dictionary = _commits[row]
 		var dot := Vector2(_lane_x(entry["lane"]), _row_y(entry["row"]))
-		draw_circle(dot, DOT_RADIUS, _lane_color(entry["lane"]))
+		if entry["oid"] == WORKTREE_OID:
+			draw_circle(dot, DOT_RADIUS, WORKTREE_COLOR, false, 1.5, true)
+			var worktree_baseline := _row_y(row) + font_size * 0.35
+			var bold := get_theme_font("bold", "EditorFonts")
+			var title_font: Font = bold if bold != null else font
+			var title := _truncate_to_width(title_font, font_size, entry["summary"], message_max_width)
+			draw_string(title_font, Vector2(text_x, worktree_baseline), title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+			var note_x := text_x + title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + BADGE_GAP
+			draw_string(font, Vector2(note_x, worktree_baseline), _truncate_to_width(font, font_size, entry.get("note", ""), text_x + message_max_width - note_x),
+					HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, WORKTREE_COLOR)
+			continue
+		if entry.has("stash"):
+			draw_rect(Rect2(dot - Vector2.ONE * DOT_RADIUS, Vector2.ONE * DOT_RADIUS * 2.0), STASH_COLOR, false, 1.5)
+		else:
+			draw_circle(dot, DOT_RADIUS, _lane_color(entry["lane"]))
 		if entry["oid"] == _head_oid:
 			draw_arc(dot, DOT_RADIUS + 3.0, 0.0, TAU, 20, Color.WHITE, 1.5, true)
 
@@ -316,9 +398,12 @@ func _draw() -> void:
 		# Branches and tags get separate colored pills (tags gold-ish) since
 		# both can be present on the same commit.
 		var badges: Array = []
+		if entry.has("stash"):
+			badges.append({"text": entry["stash"], "bg": STASH_BADGE_BG_COLOR, "fg": STASH_COLOR})
+			message_color = MERGE_MESSAGE_COLOR
 		var refs: PackedStringArray = entry["refs"]
 		if not refs.is_empty():
-			badges.append({"text": _badge_label(refs), "bg": BADGE_BG_COLOR, "fg": BADGE_TEXT_COLOR})
+			badges.append({"text": _badge_label(refs), "bg": BADGE_BG_COLOR, "fg": BADGE_TEXT_COLOR, "branches": true})
 		var tags: PackedStringArray = entry.get("tags", PackedStringArray())
 		if not tags.is_empty():
 			badges.append({"text": _badge_label(tags), "bg": TAG_BADGE_BG_COLOR, "fg": TAG_BADGE_TEXT_COLOR})
@@ -340,60 +425,58 @@ func _draw() -> void:
 			for b in badges:
 				var badge_rect := Rect2(badge_x, _row_y(entry["row"]) - font_size * 0.65, b["width"], font_size * 1.3)
 				draw_rect(badge_rect, b["bg"])
+				if b.get("branches", false):
+					_badge_rects[row] = badge_rect
 				draw_string(font, Vector2(badge_x + BADGE_PADDING, baseline_y), b["text"],
 						HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, b["fg"])
 				badge_x += b["width"] + BADGE_GAP
 
-		draw_string(font, Vector2(hash_x, baseline_y), String(entry["oid"]).substr(0, 7),
-				HORIZONTAL_ALIGNMENT_LEFT, _hash_col_width - COLUMN_GAP, font_size, HASH_COLOR)
+		for column in _visible_columns:
+			var width: float = _col_width[column]
+			var cell_pos := Vector2(col_x[column], baseline_y)
+			match column:
+				"hash":
+					draw_string(font, cell_pos, String(entry["oid"]).substr(0, 7), HORIZONTAL_ALIGNMENT_LEFT, width - COLUMN_GAP, font_size, HASH_COLOR)
+				"author":
+					draw_string(font, cell_pos, _truncate_to_width(font, font_size, entry.get("author_name", ""), width - COLUMN_GAP),
+							HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, AUTHOR_COLOR)
+				"date":
+					var time := int(entry.get("time", 0))
+					var date_text := format_absolute_time(time) if _absolute_dates else format_relative_time(time, now)
+					draw_string(font, cell_pos, _truncate_to_width(font, font_size, date_text, width), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, DATE_COLOR)
 
-		var author: String = entry.get("author_name", "")
-		draw_string(font, Vector2(author_x, baseline_y), _truncate_to_width(font, font_size, author, _author_col_width - COLUMN_GAP),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, AUTHOR_COLOR)
 
-		var date_text := format_relative_time(int(entry.get("time", 0)), now)
-		draw_string(font, Vector2(date_x, baseline_y), date_text,
-				HORIZONTAL_ALIGNMENT_LEFT, _date_col_width, font_size, DATE_COLOR)
-
-
-## Which divider (if any) is within DIVIDER_HIT_MARGIN of local x: 1 for the
-## message/hash divider, 2 for hash/author, 3 for author/date, 0 for neither.
-func _divider_at_x(x: float) -> int:
-	var divider1_x := size.x - _date_col_width - _author_col_width - _hash_col_width - COLUMN_GAP * 0.5
-	var divider2_x := size.x - _date_col_width - _author_col_width - COLUMN_GAP * 0.5
-	var divider3_x := size.x - _date_col_width - COLUMN_GAP * 0.5
-	if absf(x - divider1_x) <= DIVIDER_HIT_MARGIN:
-		return 1
-	if absf(x - divider2_x) <= DIVIDER_HIT_MARGIN:
-		return 2
-	if absf(x - divider3_x) <= DIVIDER_HIT_MARGIN:
-		return 3
-	return 0
+## Visible column whose left divider is within DIVIDER_HIT_MARGIN of local x, or "".
+func _divider_at_x(x: float) -> String:
+	var col_x := _column_x()
+	for column in _visible_columns:
+		if absf(x - (col_x[column] - COLUMN_GAP * 0.5)) <= DIVIDER_HIT_MARGIN:
+			return column
+	return ""
 
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
-		if _dragging_divider == 1:
-			_hash_col_width = clampf(size.x - _date_col_width - _author_col_width - COLUMN_GAP * 0.5 - event.position.x,
-					MIN_COL_WIDTH, size.x - _date_col_width - _author_col_width - MIN_COL_WIDTH)
-			queue_redraw()
-		elif _dragging_divider == 2:
-			_author_col_width = clampf(size.x - _date_col_width - COLUMN_GAP * 0.5 - event.position.x,
-					MIN_COL_WIDTH, size.x - _date_col_width - _hash_col_width - MIN_COL_WIDTH)
-			queue_redraw()
-		elif _dragging_divider == 3:
-			_date_col_width = clampf(size.x - COLUMN_GAP * 0.5 - event.position.x,
-					MIN_COL_WIDTH, size.x - _author_col_width - _hash_col_width - MIN_COL_WIDTH)
+		if not _dragging_column.is_empty():
+			var index := _visible_columns.find(_dragging_column)
+			var after := 0.0
+			var others := 0.0
+			for i in _visible_columns.size():
+				if i > index:
+					after += _col_width[_visible_columns[i]]
+				if i != index:
+					others += _col_width[_visible_columns[i]]
+			_col_width[_dragging_column] = clampf(size.x - after - COLUMN_GAP * 0.5 - event.position.x, MIN_COL_WIDTH, maxf(MIN_COL_WIDTH, size.x - others - MIN_COL_WIDTH))
 			queue_redraw()
 		else:
-			mouse_default_cursor_shape = Control.CURSOR_HSIZE if _divider_at_x(event.position.x) != 0 else Control.CURSOR_ARROW
+			mouse_default_cursor_shape = Control.CURSOR_HSIZE if not _divider_at_x(event.position.x).is_empty() else Control.CURSOR_ARROW
 		return
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			var divider := _divider_at_x(event.position.x)
-			if divider != 0:
-				_dragging_divider = divider
+			if not divider.is_empty():
+				_dragging_column = divider
 				return
 
 			var row := int(event.position.y / ROW_HEIGHT)
@@ -414,13 +497,19 @@ func _gui_input(event: InputEvent) -> void:
 						_selected_row = row
 						commit_selected.emit(_commits[row]["oid"])
 					queue_redraw()
+				elif _selected_rows.has(row) and _selected_rows.size() > 1 and not event.double_click:
+					_pending_single_row = row # keep the selection for a drag of all of it
 				else:
 					_select_single(row)
-		elif _dragging_divider != 0:
-			_dragging_divider = 0
-			Settings.set_value("history_hash_col_width", _hash_col_width)
-			Settings.set_value("history_author_col_width", _author_col_width)
-			Settings.set_value("history_date_col_width", _date_col_width)
+					if event.double_click:
+						commit_activated.emit(_commits[row]["oid"])
+		elif _pending_single_row >= 0:
+			if _pending_single_row < _commits.size():
+				_select_single(_pending_single_row)
+			_pending_single_row = -1
+		elif not _dragging_column.is_empty():
+			Settings.set_value("history_%s_col_width" % _dragging_column, _col_width[_dragging_column])
+			_dragging_column = ""
 		return
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
@@ -445,3 +534,77 @@ func _gui_input(event: InputEvent) -> void:
 		if step != 0:
 			_select_single(clampi(_selected_row + step, 0, _commits.size() - 1))
 			accept_event()
+
+
+static func _is_pseudo(entry: Dictionary) -> bool:
+	return entry["oid"] == WORKTREE_OID or entry.has("stash")
+
+
+func _row_at(y: float) -> int:
+	var row := int(y / ROW_HEIGHT)
+	return row if row >= 0 and row < _commits.size() else -1
+
+
+## A branch badge drags its branches; any other spot drags the commit (or the whole selection it's part of).
+func _get_drag_data(at_position: Vector2) -> Variant:
+	var row := _row_at(at_position.y)
+	if not _dragging_column.is_empty() or row < 0 or _is_pseudo(_commits[row]):
+		return null
+	_pending_single_row = -1
+	var preview := Label.new()
+	preview.add_theme_color_override("font_color", BADGE_TEXT_COLOR)
+	if _badge_rects.has(row) and (_badge_rects[row] as Rect2).grow(2.0).has_point(at_position):
+		var refs: PackedStringArray = _commits[row]["refs"]
+		preview.text = _badge_label(refs)
+		set_drag_preview(preview)
+		return { "godit_refs": refs, "from_row": row }
+	if not _selected_rows.has(row):
+		_select_single(row)
+	var oids := PackedStringArray(Array(get_selected_oids()).filter(func(o: String) -> bool: return not _is_pseudo(_by_oid[o])))
+	preview.text = "%d commits" % oids.size() if oids.size() > 1 else "%s  %s" % [oids[0].substr(0, 7), _commits[row]["summary"]]
+	set_drag_preview(preview)
+	return { "godit_commits": oids, "from_row": row }
+
+
+## Commits drop onto the current branch's row; a branch drops onto another branch's row when one of the two is the current branch.
+func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
+	var row := _row_at(at_position.y)
+	var ok: bool = row >= 0 and data is Dictionary and row != data.get("from_row", -1) and not _is_pseudo(_commits[row]) and _accepts(_commits[row], data)
+	var shown := row if ok else -1
+	if shown != _drop_row:
+		_drop_row = shown
+		queue_redraw()
+	return ok
+
+
+func _accepts(target: Dictionary, data: Dictionary) -> bool:
+	if current_branch.is_empty():
+		return false
+	var target_refs: PackedStringArray = target["refs"]
+	if data.has("godit_commits"):
+		return (target_refs.has(current_branch) or target["oid"] == _head_oid) and not (data["godit_commits"] as PackedStringArray).has(target["oid"])
+	if data.has("godit_refs"):
+		var refs: PackedStringArray = data["godit_refs"]
+		if refs.has(current_branch):
+			return Array(target_refs).any(func(r: String) -> bool: return r != current_branch)
+		return target_refs.has(current_branch)
+	return false
+
+
+func _drop_data(at_position: Vector2, data: Variant) -> void:
+	var target_oid: String = _commits[_row_at(at_position.y)]["oid"]
+	_drop_row = -1
+	queue_redraw()
+	if data.has("godit_commits"):
+		commits_dropped.emit(data["godit_commits"], target_oid)
+	else:
+		refs_dropped.emit(data["godit_refs"], target_oid)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_END and _drop_row >= 0:
+		_drop_row = -1
+		queue_redraw()
+	# _draw() only covers the rows the scroll viewport showed then; a taller viewport (bigger panel, floating window) must redraw, though this control's own size stays the same.
+	elif what == NOTIFICATION_READY and get_parent() is ScrollContainer:
+		get_parent().resized.connect(queue_redraw)

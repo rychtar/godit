@@ -10,7 +10,8 @@ const SECTION := "godit"
 static func get_value(key: String, default: Variant) -> Variant:
 	var cfg := ConfigFile.new()
 	cfg.load(CONFIG_PATH) # missing file is fine: falls through to `default` below
-	return cfg.get_value(SECTION, key, default)
+	# ConfigFile.get_value() logs an error for a missing key when default is null.
+	return cfg.get_value(SECTION, key) if cfg.has_section_key(SECTION, key) else default
 
 
 static func set_value(key: String, value: Variant) -> void:

@@ -11,8 +11,13 @@ const ChangelistStore := preload("res://addons/godit/util/changelist_store.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
+const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_resolver.gd")
+const SceneConflictResolver := preload("res://addons/godit/dock/widgets/scene_conflict_resolver.gd")
+const SceneText := preload("res://addons/godit/util/scene_text.gd")
+const CompanionFiles := preload("res://addons/godit/util/companion_files.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 ## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
@@ -21,7 +26,7 @@ const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
 const AUTO_STAGE_SETTING_KEY := "auto_stage_changes"
 const AUTO_ADD_SETTING_KEY := "auto_add_new_files"
 const AUTO_ADD_MASKS_SETTING_KEY := "auto_add_ignore_masks"
-const DEFAULT_AUTO_ADD_MASKS := ["*.import", "*.tmp", "*.bak", "*.orig", "*~", ".DS_Store"]
+const DEFAULT_AUTO_ADD_MASKS := ["*.tmp", "*.bak", "*.orig", "*~", ".DS_Store"]
 const LIST_PANE_RATIO := 0.4
 
 const MENU_MOVE_TO_SUBMENU := "MoveToMenu"
@@ -56,6 +61,8 @@ const OPT_EDIT_MASKS := 2
 
 ## "Show History" on a file — godit_dock.gd forwards it to the Git Log panel.
 signal file_history_requested(path: String)
+## After every refresh: how many changed and new files there are (the combined dock's File Status badge).
+signal changes_counted(count: int)
 
 const AUTO_REFRESH_INTERVAL := 3.0
 
@@ -114,6 +121,8 @@ var _confirm_dialog_action := "revert"
 
 ## Pauses while the panel is hidden or the editor is in the background.
 var _auto_refresh_timer: PollTimer
+## Changed + new files at the last refresh (see changes_counted).
+var change_count := 0
 var _operation_bar: HBoxContainer
 
 ## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar (see _update_operation_banner()).
@@ -147,6 +156,7 @@ func _ready() -> void:
 	if UiScale.is_in_edited_scene(self):
 		return # opened in the scene editor, not running in a dock
 	UiScale.scale_scene(self)
+	_migrate_auto_add_masks()
 	_tree.columns = 2
 	_tree.set_column_expand(CHECKBOX_COLUMN, false)
 	_tree.set_column_custom_minimum_width(CHECKBOX_COLUMN, CHECKBOX_COLUMN_WIDTH)
@@ -191,7 +201,8 @@ func _ready() -> void:
 			Dialogs.error(self, "Can't open file", error)
 	)
 	_commit_message.gui_input.connect(_on_commit_message_gui_input)
-	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push"
+	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push\nUp/Down in an empty box: your previous messages"
+	_build_recent_messages_button()
 
 	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
 	_auto_refresh_timer.poll.connect(_maybe_refresh)
@@ -219,6 +230,20 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 	if _auto_refresh_timer != null:
 		_auto_refresh_timer.active = true
+
+
+## Hands the branch/Fetch/Pull/Push header to the combined dock, which shows it above every view.
+func detach_sync_bar() -> Control:
+	_sync_bar.get_parent().remove_child(_sync_bar)
+	return _sync_bar
+
+
+## Reverses detach_sync_bar().
+func reattach_sync_bar() -> void:
+	if _sync_bar.get_parent() != null:
+		_sync_bar.get_parent().remove_child(_sync_bar)
+	$Layout.add_child(_sync_bar)
+	$Layout.move_child(_sync_bar, 0)
 
 
 ## Re-fetches status and only calls refresh() — which rebuilds the tree from
@@ -326,7 +351,11 @@ func refresh(status_entries: Variant = null) -> void:
 	_prune_assignments(entries)
 	var current_branch: String = _repo.get_current_branch()
 
-	for entry in entries:
+	# Sidecars (.uid/.import) of a changed file go last, nested under that file's row.
+	var file_items := {}
+	var ordered_entries: Array = entries.filter(func(e: Dictionary) -> bool: return not _nests_under_owner(e["path"]))
+	ordered_entries.append_array(entries.filter(func(e: Dictionary) -> bool: return _nests_under_owner(e["path"])))
+	for entry in ordered_entries:
 		var path: String = entry["path"]
 		var status: int = entry["status"]
 		if status & GitStatusFlags.CONFLICTED:
@@ -341,11 +370,15 @@ func refresh(status_entries: Variant = null) -> void:
 		# it as untracked again, but it shouldn't vanish into New Files.
 		var assignments: Dictionary = _changelist_state["assignments"]
 		var is_new: bool = GitStatusFlags.is_untracked(status) and not assignments.has(path)
-		if is_new:
-			_add_file_item(untracked_group, untracked_folders, path, status, staged, false)
+		var owner_item: TreeItem = file_items.get(CompanionFiles.owner_of(path))
+		if owner_item != null:
+			file_items[path] = _add_file_item(null, {}, path, status, staged, not is_new, owner_item)
+			owner_item.set_text(TEXT_COLUMN, owner_item.get_text(TEXT_COLUMN) + "  +" + path.get_extension())
+		elif is_new:
+			file_items[path] = _add_file_item(untracked_group, untracked_folders, path, status, staged, false)
 		else:
 			var list_name := _changelist_for_path(path)
-			_add_file_item(changelist_groups[list_name], changelist_folders[list_name], path, status, staged, true)
+			file_items[path] = _add_file_item(changelist_groups[list_name], changelist_folders[list_name], path, status, staged, true)
 
 	var tracked_count := 0
 	var counts := {}
@@ -363,6 +396,8 @@ func refresh(status_entries: Variant = null) -> void:
 		# Hide empty inactive changelists (still reachable via "Move to
 		# Changelist"); keep the active one visible even when empty.
 		group.set_visible(count > 0 or is_active)
+
+	var overlap := _mark_incoming_overlap(entries, file_items)
 
 	conflict_group.set_text(TEXT_COLUMN, "⚠ Conflicts  %d %s — resolve, then Continue" % [conflict_count, "file" if conflict_count == 1 else "files"])
 	conflict_group.set_visible(conflict_count > 0)
@@ -382,8 +417,50 @@ func refresh(status_entries: Variant = null) -> void:
 
 	if Time.get_ticks_msec() >= _note_until: # else a _notify() note is still up
 		_status_label.text = "No changes." if untracked_count == 0 and tracked_count == 0 else ""
+		if not overlap.is_empty():
+			_status_label.text = "⚠ %d file%s you changed %s also changed on %s — pull to merge now, while it's small." % [
+					overlap.size(), "" if overlap.size() == 1 else "s", "is" if overlap.size() == 1 else "are", _repo.get_upstream()]
 
 	_update_commit_buttons_enabled(any_staged)
+	change_count = tracked_count + untracked_count
+	changes_counted.emit(change_count)
+
+
+## Flags rows whose file the upstream changed too (pulling may conflict); returns incoming_overlap() for the status line.
+func _mark_incoming_overlap(entries: Array, file_items: Dictionary) -> Dictionary:
+	var overlap: Dictionary = _repo.incoming_overlap(entries.map(func(e: Dictionary) -> String: return e["path"]))
+	for path in overlap:
+		var item: TreeItem = file_items.get(path)
+		if item == null:
+			continue
+		item.set_text(TEXT_COLUMN, item.get_text(TEXT_COLUMN) + "  ⚠")
+		item.set_tooltip_text(TEXT_COLUMN, item.get_tooltip_text(TEXT_COLUMN) + "\n⚠ Also changed on %s: pulling may conflict. Pull soon, or commit and pull." % _repo.get_upstream())
+	return overlap
+
+
+## True for a changed .uid/.import whose own file is changed too (it's listed under that file).
+func _nests_under_owner(path: String) -> bool:
+	var owner := CompanionFiles.owner_of(path)
+	return not owner.is_empty() and _known_status.has(owner) and not _known_status[owner] & GitStatusFlags.CONFLICTED
+
+
+## paths plus their changed .uid/.import sidecars, which go wherever their file goes.
+func _with_companions(paths: Array) -> Array:
+	return CompanionFiles.with_companions(paths, _known_status)
+
+
+## Stages (or unstages) paths with their sidecars; new sidecars are added to the file's changelist.
+func _set_staged(paths: Array, stage: bool) -> void:
+	var new_files: Array = []
+	for path in _with_companions(paths):
+		if not stage:
+			_repo.unstage_file(path)
+		elif GitStatusFlags.is_untracked(_known_status.get(path, 0)) and not _changelist_state["assignments"].has(path):
+			new_files.append(path)
+		else:
+			_repo.stage_file(path)
+	if not new_files.is_empty():
+		_add_to_vcs(new_files, _changelist_for_path(paths[0]))
 
 
 ## Stages changes that appeared since the last refresh in the active changelist and adds new files not matching the auto-add masks; returns fresh status if it touched anything.
@@ -438,6 +515,17 @@ func _remember_statuses(entries: Array) -> void:
 		_known_status[entry["path"]] = entry["status"]
 
 
+## Masks saved by older versions carry "*.import" from the old default; .import files belong in the repo, so it's dropped once.
+static func _migrate_auto_add_masks() -> void:
+	if Settings.get_value("auto_add_masks_import_migrated", false):
+		return
+	Settings.set_value("auto_add_masks_import_migrated", true)
+	var masks: Variant = Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, null)
+	if masks is Array and masks.has("*.import"):
+		masks.erase("*.import")
+		Settings.set_value(AUTO_ADD_MASKS_SETTING_KEY, masks)
+
+
 ## Masks are globs; one without "/" matches the file name, one ending in "/" a folder anywhere, anything else the repo-relative path.
 static func is_auto_add_masked(path: String) -> bool:
 	for raw in Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, DEFAULT_AUTO_ADD_MASKS):
@@ -485,7 +573,7 @@ func _build_options_button() -> MenuButton:
 func _edit_auto_add_masks() -> void:
 	var masks: Array = Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, DEFAULT_AUTO_ADD_MASKS)
 	var answer: Variant = await Dialogs.form(self, "Auto-add Ignore Masks", [
-		{ "type": "label", "label": "New files matching these stay in New Files instead of being added to Git automatically. One glob per line: *.import matches file names, build/ a folder, addons/*.tmp a path." },
+		{ "type": "label", "label": "New files matching these stay in New Files instead of being added to Git automatically. One glob per line: *.psd matches file names, build/ a folder, addons/*.tmp a path." },
 		{ "key": "masks", "type": "multiline", "default": "\n".join(masks) },
 	], "Save")
 	if answer == null:
@@ -589,7 +677,7 @@ func _drop_tree_data(at_position: Vector2, data: Variant) -> void:
 	if not data["paths"].is_empty():
 		_move_files_to_changelist(data["paths"], name)
 	if not data["new_paths"].is_empty():
-		_add_to_vcs(data["new_paths"], name)
+		_add_to_vcs(_with_companions(data["new_paths"]), name)
 		refresh.call_deferred()
 
 
@@ -867,15 +955,16 @@ func _update_changelist_option(counts: Dictionary = {}) -> void:
 func _aggregate_files(item: TreeItem) -> Dictionary:
 	var meta: Dictionary = item.get_metadata(0)
 	var kind: String = meta.get("kind", "") if not meta.is_empty() else ""
-	if kind == "file":
-		return { "count": 1, "staged": 1 if item.is_checked(CHECKBOX_COLUMN) else 0, "touched": 1 if meta["staged"] else 0 }
-	if kind == "untracked_file":
-		return { "count": 1, "staged": 0, "touched": 0 }
-
 	var total := 0
 	var staged := 0
 	var touched := 0
-	var child := item.get_first_child()
+	if kind == "file":
+		total = 1
+		staged = 1 if item.is_checked(CHECKBOX_COLUMN) else 0
+		touched = 1 if meta["staged"] else 0
+	elif kind == "untracked_file":
+		total = 1
+	var child := item.get_first_child() # folders' files, or a file's nested .uid/.import
 	while child:
 		var r := _aggregate_files(child)
 		total += r["count"]
@@ -911,8 +1000,9 @@ func _collect_file_paths(item: TreeItem, out: Array, kind := "file") -> void:
 		child = child.get_next()
 
 
-func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String, status: int, staged: bool, in_changelist: bool) -> void:
-	var parent := TreeFolders.get_or_create_folder(_tree, group_root, folder_cache, path.get_base_dir(), TEXT_COLUMN, CHECKBOX_COLUMN)
+## Adds a file row in its folder under group_root, or directly under parent_item (a sidecar under its file's row).
+func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String, status: int, staged: bool, in_changelist: bool, parent_item: TreeItem = null) -> TreeItem:
+	var parent := parent_item if parent_item != null else TreeFolders.get_or_create_folder(_tree, group_root, folder_cache, path.get_base_dir(), TEXT_COLUMN, CHECKBOX_COLUMN)
 
 	var item := _tree.create_item(parent)
 	# New files get a checkbox too: checking one adds it to Git in the active changelist (same gesture as staging).
@@ -928,6 +1018,9 @@ func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String
 	item.set_metadata(0, meta)
 	var hint := "Check to stage, uncheck to unstage. Double-click to open." if in_changelist else "Check to add to Git. Right-click to ignore. Double-click to open."
 	item.set_tooltip_text(TEXT_COLUMN, "%s — %s\n%s" % [path, GitStatusFlags.short_label(status), hint])
+	if parent_item != null:
+		parent_item.collapsed = true
+	return item
 
 
 func _on_changes_tree_item_edited() -> void:
@@ -943,13 +1036,10 @@ func _on_changes_tree_item_edited() -> void:
 
 	var kind: String = meta.get("kind", "")
 	if kind == "file":
-		if item.is_checked(CHECKBOX_COLUMN):
-			_repo.stage_file(meta["path"])
-		else:
-			_repo.unstage_file(meta["path"])
+		_set_staged([meta["path"]], item.is_checked(CHECKBOX_COLUMN))
 	elif kind == "untracked_file":
 		if item.is_checked(CHECKBOX_COLUMN):
-			_add_to_vcs([meta["path"]])
+			_add_to_vcs(_with_companions([meta["path"]]))
 	else:
 		# "folder" or "changelist_group": cascade the new checked state to
 		# every file underneath. emit_signal off since we stage/unstage
@@ -1066,7 +1156,16 @@ func _on_changes_tree_item_activated() -> void:
 		_show_error("Can't open file", error)
 
 
-func _open_conflict_resolver(path: String) -> void:
+## Scenes and resources get the node-by-node merge; as_text (or a merge that can't read them) falls back to the line-based resolver.
+func _open_conflict_resolver(path: String, as_text := false) -> void:
+	if SceneText.is_scene_file(path) and not as_text:
+		var scene_resolver := SceneConflictResolver.new()
+		add_child(scene_resolver)
+		scene_resolver.saved.connect(func(_p: String, _marked: bool) -> void: refresh())
+		scene_resolver.text_mode_requested.connect(func(p: String) -> void: _open_conflict_resolver(p, true))
+		if scene_resolver.open(_repo, path)["ok"]:
+			return
+		scene_resolver.queue_free()
 	var resolver := ConflictResolver.new()
 	add_child(resolver)
 	resolver.saved.connect(func(_p: String, _marked: bool) -> void: refresh())
@@ -1118,6 +1217,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_context_menu.add_item("Show History", ID_SHOW_HISTORY)
 				_context_menu.add_item("Copy Path", ID_COPY_PATH)
 				_context_menu.add_separator()
+				_context_menu.add_item("Stash...", ID_STASH_GROUP)
 				_context_menu.add_item("Revert...", ID_REVERT)
 				_context_menu.add_item("Remove...", ID_REMOVE)
 		"folder":
@@ -1222,7 +1322,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			if not error.is_empty():
 				_show_error("Can't open file", error)
 		ID_ADD_TO_VCS:
-			_add_to_vcs([_context_target["path"]])
+			_add_to_vcs(_with_companions([_context_target["path"]]))
 			refresh.call_deferred()
 		ID_ADD_ALL_TO_VCS:
 			var new_paths: Array = []
@@ -1251,11 +1351,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 		ID_NEW_CHANGELIST:
 			_open_new_changelist_dialog()
 		ID_TOGGLE_STAGE:
-			for path in _context_paths():
-				if _context_target["staged"]:
-					_repo.unstage_file(path)
-				else:
-					_repo.stage_file(path)
+			_set_staged(_context_paths(), not _context_target["staged"])
 			refresh.call_deferred()
 		ID_DONT_AUTO_ADD_EXT:
 			_add_auto_add_mask("*." + String(_context_target["path"]).get_extension())
@@ -1264,17 +1360,19 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_confirm_dialog_action = "revert"
 			_revert_confirm_dialog.title = "Revert"
 			_revert_confirm_dialog.ok_button_text = "Revert"
-			_revert_confirm_dialog.dialog_text = "Discard all changes to \"%s\"? This can't be undone." % path.get_file()
+			_revert_confirm_dialog.dialog_text = "Discard all changes to \"%s\"%s? This can't be undone." % [path.get_file(), _companions_note(path)]
 			_revert_confirm_dialog.popup_centered()
 		ID_REMOVE:
 			var path: String = _context_target["path"]
 			_confirm_dialog_action = "remove"
 			_revert_confirm_dialog.title = "Remove File"
 			_revert_confirm_dialog.ok_button_text = "Remove"
-			_revert_confirm_dialog.dialog_text = "Remove \"%s\" from Git and delete it from disk? This can't be undone." % path.get_file()
+			_revert_confirm_dialog.dialog_text = "Remove \"%s\"%s from Git and delete it from disk? This can't be undone." % [path.get_file(), _companions_note(path)]
 			_revert_confirm_dialog.popup_centered()
 		ID_IGNORE:
 			_ignore_path(_context_target["path"])
+			for path in _with_companions([_context_target["path"]]).slice(1):
+				_ignore_path(path)
 		ID_COPY_PATH:
 			DisplayServer.clipboard_set(_context_target["path"])
 		ID_RESOLVE:
@@ -1298,35 +1396,32 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				Dialogs.error(self, "Resolve failed", result["error"])
 			refresh()
 		ID_REVERT_ALL:
-			var paths: Array = _context_target["paths"]
-			if await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
-				var errors: Array = []
-				for path in paths:
-					var result: Dictionary = _repo.revert_file(path)
-					if not result["ok"]:
-						errors.append("%s: %s" % [path, result["error"]])
-					_changelist_state["assignments"].erase(path)
-				_save_changelist_state()
-				EditorOpen.refresh_all_external_changes()
-				if not errors.is_empty():
-					Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
-				refresh()
+			await _revert_paths(_context_target["paths"])
 		ID_STASH_GROUP:
 			var group_name: String = _context_target.get("name", "")
-			await _stash_dialog(PackedStringArray(_context_target["paths"]), group_name)
+			# A single file's target has just "path".
+			await _stash_dialog(PackedStringArray(_context_target.get("paths", [_context_target.get("path", "")])), group_name)
 
 
 ## Reverts or removes the file, per _confirm_dialog_action (set by whichever menu item opened this dialog).
 func _on_revert_confirm_dialog_confirmed() -> void:
-	var path: String = _context_target["path"]
-	var result: Dictionary = _repo.remove_file(path) if _confirm_dialog_action == "remove" else _repo.revert_file(path)
-	if not result["ok"]:
-		_show_error("Remove failed" if _confirm_dialog_action == "remove" else "Revert failed", result["error"])
-		return
-	_changelist_state["assignments"].erase(path)
+	for path in _with_companions([_context_target["path"]]):
+		# A new sidecar isn't in Git to remove: deleting it is what revert does.
+		var remove: bool = _confirm_dialog_action == "remove" and not GitStatusFlags.is_untracked(_known_status.get(path, 0))
+		var result: Dictionary = _repo.remove_file(path) if remove else _repo.revert_file(path)
+		if not result["ok"]:
+			_show_error("Remove failed" if _confirm_dialog_action == "remove" else "Revert failed", result["error"])
+			break
+		_changelist_state["assignments"].erase(path)
+		EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
 	_save_changelist_state()
-	EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
 	refresh()
+
+
+## " (and its .uid)" when path has changed sidecars that go along with it, else "".
+func _companions_note(path: String) -> String:
+	var companions := _with_companions([path]).slice(1)
+	return "" if companions.is_empty() else " (and its %s)" % ", ".join(companions.map(func(p: String) -> String: return "." + p.get_extension()))
 
 
 static func _path_list(paths: Array) -> String:
@@ -1337,22 +1432,56 @@ static func _path_list(paths: Array) -> String:
 	return text
 
 
+## Asks, then discards every change to paths (new files are deleted).
+func _revert_paths(paths: Array) -> void:
+	paths = _with_companions(paths)
+	if not await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
+		return
+	var errors: Array = []
+	for path in paths:
+		var result: Dictionary = _repo.revert_file(path)
+		if not result["ok"]:
+			errors.append("%s: %s" % [path, result["error"]])
+		_changelist_state["assignments"].erase(path)
+	_save_changelist_state()
+	EditorOpen.refresh_all_external_changes()
+	if not errors.is_empty():
+		Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
+	refresh()
+
+
+## Requested from the Git Log's "Uncommitted changes" row: "commit" focuses the message, "stash"/"revert" act on every change.
+func run_action(action: String) -> void:
+	match action:
+		"commit":
+			_commit_message.grab_focus()
+		"stash":
+			await _stash_dialog(PackedStringArray(), "")
+		"revert":
+			var paths: Array = _repo.get_status().filter(func(e: Dictionary) -> bool: return not e["status"] & GitStatusFlags.IGNORED).map(func(e: Dictionary) -> String: return e["path"])
+			if not paths.is_empty():
+				await _revert_paths(paths)
+
+
 func _on_stash_button_pressed() -> void:
 	await _stash_dialog(PackedStringArray(), "")
 
 
 ## paths empty = stash everything.
 func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
+	paths = PackedStringArray(_with_companions(Array(paths)))
+	# A new .uid of a stashed script is stashed with it, so untracked files default on when the paths include one.
+	var any_new := Array(paths).any(func(p: String) -> bool: return GitStatusFlags.is_untracked(_known_status.get(p, 0)))
 	var fields: Array = [
 		{ "key": "message", "label": "Message", "default": suggested_message, "placeholder": "WIP: what these changes are" },
-		{ "key": "untracked", "label": "Include untracked (new) files", "type": "check", "default": paths.is_empty() },
+		{ "key": "untracked", "label": "Include untracked (new) files", "type": "check", "default": paths.is_empty() or any_new },
 	]
 	if paths.is_empty():
 		fields.append({ "key": "keep_index", "label": "Keep staged changes in the working tree too", "type": "check", "default": false })
 	else:
 		fields.push_front({ "type": "label", "label": "Stash %d file%s:\n%s" % [paths.size(), "" if paths.size() == 1 else "s", _path_list(Array(paths))] })
 	var answer: Variant = await Dialogs.form(self, "Stash Changes", fields, "Stash")
-	if answer == null:
+	if answer == null or not await SaveGuard.ensure_saved(self, "Stash"):
 		return
 	var result: Dictionary = _repo.stash_push(String(answer["message"]).strip_edges(), answer["untracked"], paths, answer.get("keep_index", false))
 	EditorOpen.refresh_all_external_changes()
@@ -1365,7 +1494,61 @@ func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
 	refresh()
 
 
+const MESSAGE_HISTORY_SIZE := 20
+
+## Previous messages for Up/Down in the message box, loaded when browsing starts; -1 = not browsing.
+var _message_history := PackedStringArray()
+var _message_history_index := -1
+
+
+func _build_recent_messages_button() -> void:
+	var button := MenuButton.new()
+	button.icon = get_theme_icon("History", "EditorIcons")
+	button.flat = true
+	button.tooltip_text = "Recent commit messages"
+	var popup := button.get_popup()
+	popup.about_to_popup.connect(func() -> void:
+		popup.clear()
+		_message_history = _repo.recent_commit_messages(MESSAGE_HISTORY_SIZE)
+		for i in _message_history.size():
+			popup.add_item(_message_history[i].get_slice("\n", 0).left(80), i)
+		if _message_history.is_empty():
+			popup.add_item("(no commits yet)")
+			popup.set_item_disabled(0, true)
+	)
+	popup.id_pressed.connect(func(id: int) -> void:
+		_commit_message.text = _message_history[id]
+		_commit_message.grab_focus()
+		_update_commit_buttons_enabled()
+	)
+	_amend_check.get_parent().add_child(button)
+	_amend_check.get_parent().move_child(button, _amend_check.get_index())
+
+
+## Up in an empty box (or one still showing a recalled message) steps back through previous messages; Down steps forward, back to empty.
+func _browse_message_history(step: int) -> bool:
+	var browsing := _message_history_index >= 0 and _message_history_index < _message_history.size() and _commit_message.text == _message_history[_message_history_index]
+	if not browsing:
+		if step < 0 or not _commit_message.text.is_empty():
+			return false
+		_message_history = _repo.recent_commit_messages(MESSAGE_HISTORY_SIZE)
+		_message_history_index = -1
+	var next := _message_history_index + step
+	if next >= _message_history.size():
+		return browsing
+	_message_history_index = maxi(next, -1)
+	_commit_message.text = _message_history[_message_history_index] if _message_history_index >= 0 else ""
+	_update_commit_buttons_enabled()
+	return true
+
+
 func _on_commit_message_gui_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode in [KEY_UP, KEY_DOWN] and not event.shift_pressed:
+		var up: bool = event.keycode == KEY_UP
+		var at_edge := _commit_message.get_caret_line() == 0 if up else _commit_message.get_caret_line() == _commit_message.get_line_count() - 1
+		if at_edge and _browse_message_history(1 if up else -1):
+			_commit_message.accept_event()
+			return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER] \
 			and (event.ctrl_pressed or event.meta_pressed):
 		_commit_message.accept_event()
@@ -1544,6 +1727,7 @@ func _set_active_changelist(name: String) -> void:
 
 ## Moving into the active changelist stages the files, moving out of it unstages them, so checkboxes keep meaning "goes into the next commit".
 func _move_files_to_changelist(paths: Array, name: String) -> void:
+	paths = _with_companions(paths)
 	var active: String = _changelist_state["active"]
 	for path in paths:
 		var was_active := _changelist_for_path(path) == active
@@ -1605,6 +1789,12 @@ func _do_commit(push_after: bool) -> void:
 	if message.is_empty():
 		_show_error("Commit failed", "Commit message can't be empty.")
 		return
+	if not SaveGuard.unsaved_files().is_empty():
+		if not await SaveGuard.ensure_saved(self, "Commit", true):
+			return
+		refresh() # auto-stages what was just saved
+	if not await _check_large_files():
+		return
 
 	var result: Dictionary = _repo.commit(message, _amend_check.button_pressed)
 	if not result["ok"]:
@@ -1620,6 +1810,42 @@ func _do_commit(push_after: bool) -> void:
 
 	if push_after:
 		_do_push()
+
+
+## Staged files over this size get a warning before the commit (GitHub rejects anything over 100 MB).
+const LARGE_FILE_BYTES := 10 * 1024 * 1024
+
+
+## Coroutine: warns about big staged files, offering Git LFS or ignoring them. False = cancel the commit.
+func _check_large_files() -> bool:
+	var large: Array = _repo.large_staged_files(LARGE_FILE_BYTES)
+	if large.is_empty():
+		return true
+	var paths: Array = large.map(func(e: Dictionary) -> String: return e["path"])
+	var listed := "\n".join(large.map(func(e: Dictionary) -> String: return "  %s  (%s)" % [e["path"], String.humanize_size(e["size"])]))
+	var actions := {}
+	if RepoSetup.lfs_available():
+		actions["lfs"] = "Track with Git LFS"
+	actions["ignore"] = "Unstage and Ignore"
+	actions["commit"] = "Commit Anyway"
+	var answer: String = await Dialogs.error_with_actions(self, "Large Files", ("%s:\n%s\n\nOnce committed, big files stay in the history forever and make every clone slower; GitHub rejects files over 100 MB. "
+			+ ("Git LFS stores them outside the history." if actions.has("lfs") else "Installing Git LFS (git-lfs.com) would let you store them outside the history."))
+			% ["This file is over 10 MB" if large.size() == 1 else "These %d files are over 10 MB" % large.size(), listed], actions)
+	match answer:
+		"lfs":
+			var result: Dictionary = _repo.lfs_track(paths)
+			if not result["ok"]:
+				await Dialogs.error(self, "Git LFS failed", result["error"])
+				return false
+		"ignore":
+			for path in paths:
+				_repo.unstage_file(path)
+				_ignore_path(path)
+		"commit":
+			pass
+		_:
+			return false
+	return true
 
 
 func _do_push() -> void:

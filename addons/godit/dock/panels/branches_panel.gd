@@ -6,8 +6,10 @@ const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
 const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
+const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 
 const AUTO_REFRESH_INTERVAL := 3.0
@@ -18,10 +20,13 @@ enum {
 	ID_PUSH_TAG, ID_DELETE_TAG, ID_DELETE_REMOTE_TAG, ID_FETCH_REMOTE, ID_EDIT_REMOTE_URL,
 	ID_RENAME_REMOTE, ID_REMOVE_REMOTE, ID_ADD_REMOTE, ID_FETCH_PRUNE, ID_NEW_TAG,
 	ID_COMPARE, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_SHOW, ID_STASH_BRANCH,
+	ID_OPEN_ON_WEB, ID_PULL_REQUEST,
 }
 
 ## Opens the changeset dialog, wired up by godit_dock.gd: (title, base_ref, target_ref). target "" means the working tree.
 signal compare_requested(title: String, base: String, target: String)
+## A branch, tag or stash was selected: its full ref name, for the combined dock to show it in History.
+signal ref_selected(ref: String)
 
 @onready var _tree: Tree = %BranchesTree
 @onready var _filter_edit: LineEdit = %FilterEdit
@@ -41,8 +46,13 @@ var _last_signature := ""
 ## {"kind": "local"|"remote_branch"|"tag"|"remote"|"stash"|"section", ...} for whatever the context menu was opened on.
 var _context: Dictionary = {}
 
+## What the section headers say, where it isn't their key.
+const SECTION_TITLES := { "Local": "Branches", "Remote": "Remote Branches" }
+
 ## Section headers' collapsed state, kept across refreshes (keyed by section title).
 var _collapsed_sections := { "Tags": true, "Stashes": false }
+## Frame of the last ref_selected(), so a click that also changed the selection emits it once.
+var _ref_selected_frame := -1
 
 
 func _ready() -> void:
@@ -59,6 +69,22 @@ func _ready() -> void:
 			refresh()
 	)
 
+	_tree.item_selected.connect(_on_tree_item_selected)
+	# item_mouse_selected skips rows that can't be selected — section headers and remote folders — so their menu opens from here.
+	_tree.gui_input.connect(func(event: InputEvent) -> void:
+		var mb := event as InputEventMouseButton
+		if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_RIGHT:
+			return
+		var item := _tree.get_item_at_position(mb.position)
+		if item != null and not item.is_selectable(0) and item.get_metadata(0) is Dictionary:
+			_show_context_menu(item.get_metadata(0), _tree.get_screen_position() + mb.position)
+			_tree.accept_event()
+	)
+	# Clicking the already selected row again shows it again too.
+	_tree.item_mouse_selected.connect(func(_pos: Vector2, button: int) -> void:
+		if button == MOUSE_BUTTON_LEFT and _ref_selected_frame != Engine.get_process_frames():
+			_on_tree_item_selected()
+	)
 	_tree.item_collapsed.connect(func(item: TreeItem) -> void:
 		var meta: Variant = item.get_metadata(0)
 		if meta is Dictionary and meta.get("kind", "") == "section":
@@ -80,6 +106,21 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 	if _auto_refresh_timer != null:
 		_auto_refresh_timer.active = true
+
+
+## In the combined dock's sidebar: no branch/Fetch/Pull/Push row of its own (there's a shared one above, the progress strip stays) and a frameless tree.
+func set_sidebar_mode(on: bool) -> void:
+	_sync_bar.set_row_visible(not on)
+	for stylebox in [&"panel", &"focus"]:
+		if on:
+			_tree.add_theme_stylebox_override(stylebox, StyleBoxEmpty.new())
+		else:
+			_tree.remove_theme_stylebox_override(stylebox)
+	for constant in [&"draw_relationship_lines", &"draw_guides"]:
+		if on:
+			_tree.add_theme_constant_override(constant, 0)
+		else:
+			_tree.remove_theme_constant_override(constant)
 
 
 ## Cheap check (refs + stash list) so the tree is only rebuilt — losing scroll and selection — when something changed.
@@ -126,12 +167,19 @@ func refresh() -> void:
 		if not b["upstream"].is_empty():
 			var sync := _sync_text(b["ahead"], b["behind"])
 			tracking = "%s%s%s" % [b["upstream"], "  " + sync if not sync.is_empty() else "", "  (gone)" if b["gone"] else ""]
-		_fill_row(item, ("● " if b["is_head"] else "") + b["name"], tracking, b)
+		_fill_row(item, b["name"], tracking, b)
+		if not _wide: # just ↑↓ after the name; the upstream is in the tooltip
+			item.set_suffix(0, _sync_text(b["ahead"], b["behind"]) + ("  gone" if b["gone"] else ""))
+		item.set_icon(0, _icon(&"VcsBranches"))
 		item.set_metadata(0, { "kind": "local", "name": b["name"], "upstream": b["upstream"], "is_head": b["is_head"] })
-		item.set_tooltip_text(0, "%s — %s %s (%s)\nDouble-click to checkout, right-click for more" % [b["name"], b["oid"], b["summary"], b["date"]])
+		item.set_tooltip_text(0, "%s%s — %s %s (%s)%s\nDouble-click to checkout, right-click for more" % [
+				b["name"], "  (current)" if b["is_head"] else "", b["oid"], b["summary"], b["date"], "\nTracking " + tracking if not tracking.is_empty() else ""])
 		if b["is_head"]:
+			var success := get_theme_color(&"success_color", &"Editor")
+			item.set_custom_font(0, get_theme_font(&"bold", &"EditorFonts"))
+			item.set_icon_modulate(0, success)
 			for col in _tree.columns:
-				item.set_custom_color(col, get_theme_color(&"success_color", &"Editor"))
+				item.set_custom_color(col, success)
 	_finish_section(local_section, local_count)
 
 	var remote_section := _section(root, "Remote")
@@ -151,6 +199,8 @@ func refresh() -> void:
 		remote_count += 1
 		var item := _tree.create_item(remote_folders[remote_name])
 		_fill_row(item, b["name"].substr(remote_name.length() + 1), "", b)
+		item.set_icon(0, _icon(&"VcsBranches"))
+		item.set_icon_modulate(0, Color(1, 1, 1, 0.55))
 		item.set_metadata(0, { "kind": "remote_branch", "name": b["name"], "remote": remote_name })
 		item.set_tooltip_text(0, "%s — %s %s (%s)\nDouble-click to check out as a local tracking branch" % [b["name"], b["oid"], b["summary"], b["date"]])
 		item.set_custom_color(0, Color(0.72, 0.78, 0.9))
@@ -167,6 +217,7 @@ func refresh() -> void:
 		item.set_metadata(0, { "kind": "tag", "name": t["name"] })
 		item.set_tooltip_text(0, "%s — %s %s%s" % [t["name"], t["oid"], t["summary"], "  (annotated)" if t["annotated"] else ""])
 		item.set_custom_color(0, Color(0.95, 0.85, 0.55))
+		item.set_icon(0, _icon(&"Pin"))
 	_finish_section(tags_section, tag_count)
 
 	var stash_section := _section(root, "Stashes")
@@ -174,6 +225,7 @@ func refresh() -> void:
 	for st in stashes:
 		var item := _tree.create_item(stash_section)
 		_fill_row(item, st["message"], st["ref"], { "oid": "", "summary": "", "date": st["date"] })
+		item.set_icon(0, _icon(&"VCSCommit"))
 		item.set_metadata(0, { "kind": "stash", "ref": st["ref"], "message": st["message"] })
 		item.set_tooltip_text(0, "%s — %s\nDouble-click to apply, right-click for more" % [st["ref"], st["message"]])
 	_finish_section(stash_section, stashes.size())
@@ -183,7 +235,7 @@ func refresh() -> void:
 	for r in remotes:
 		var item := _tree.create_item(remotes_section)
 		_fill_row(item, r["name"], r["fetch_url"], {})
-		item.set_icon(0, _icon(&"Remote"))
+		item.set_icon(0, _icon(&"ExternalLink"))
 		item.set_metadata(0, { "kind": "remote", "name": r["name"], "url": r["fetch_url"] })
 		var push_note: String = "\nPush URL: " + r["push_url"] if r["push_url"] != r["fetch_url"] else ""
 		item.set_tooltip_text(0, "%s\nFetch URL: %s%s\nDouble-click to edit URL" % [r["name"], r["fetch_url"], push_note])
@@ -219,7 +271,7 @@ func _setup_columns() -> void:
 ## Fills a row's columns; in single-column mode the tracking info is appended to the name instead.
 func _fill_row(item: TreeItem, name: String, tracking: String, info: Dictionary) -> void:
 	if not _wide:
-		item.set_text(0, name + ("   → " + tracking if not tracking.is_empty() and info.has("upstream") else ""))
+		item.set_text(0, name)
 		return
 	item.set_text(0, name)
 	item.set_text(1, tracking)
@@ -246,14 +298,17 @@ func _section(root: TreeItem, title: String) -> TreeItem:
 	item.set_metadata(0, { "kind": "section", "title": title })
 	for col in _tree.columns:
 		item.set_selectable(col, false)
-	item.set_custom_color(0, Color(0.68, 0.85, 1.0))
+	# Small dimmed caps with some air above, like the combined dock's WORKSPACE header.
+	item.set_custom_color(0, Color(get_theme_color(&"font_color", &"Tree"), 0.55))
+	item.set_custom_font_size(0, int(get_theme_font_size(&"font_size", &"Tree") * 0.85))
+	item.set_custom_minimum_height(int(UiScale.px(28)))
 	item.collapsed = _collapsed_sections.get(title, false)
 	return item
 
 
 func _finish_section(section: TreeItem, count: int) -> void:
 	var meta: Dictionary = section.get_metadata(0)
-	section.set_text(0, "%s  %d" % [meta["title"], count])
+	section.set_text(0, "%s  %d" % [SECTION_TITLES.get(meta["title"], meta["title"]).to_upper(), count])
 
 
 func _matches(filter: String, name: String) -> bool:
@@ -280,10 +335,6 @@ func _on_filter_edit_text_changed(_text: String) -> void:
 	refresh()
 
 
-func _on_new_branch_button_pressed() -> void:
-	await _new_branch_from("HEAD")
-
-
 func _new_branch_from(start_point: String) -> void:
 	await _sync_bar.new_branch_dialog(start_point)
 
@@ -295,9 +346,24 @@ func _push_branch_to(branch: String) -> void:
 # --- tree ------------------------------------------------------------------
 
 
+func _on_tree_item_selected() -> void:
+	var meta: Variant = _tree.get_selected().get_metadata(0)
+	if not meta is Dictionary:
+		return
+	var prefixes := { "local": "refs/heads/", "remote_branch": "refs/remotes/", "tag": "refs/tags/" }
+	var kind: String = meta.get("kind", "")
+	if kind == "stash":
+		ref_selected.emit(meta["ref"])
+	elif prefixes.has(kind):
+		ref_selected.emit(prefixes[kind] + meta["name"])
+	else:
+		return
+	_ref_selected_frame = Engine.get_process_frames()
+
+
 func _on_branches_tree_item_activated() -> void:
 	var item := _tree.get_selected()
-	if item == null:
+	if item == null or not await SaveGuard.ensure_saved(self, "Checkout"):
 		return
 	var meta: Variant = item.get_metadata(0)
 	if not meta is Dictionary:
@@ -361,6 +427,10 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("Set Upstream…", ID_SET_UPSTREAM)
 			if not meta["upstream"].is_empty():
 				m.add_item("Unset Upstream", ID_UNSET_UPSTREAM)
+				var site := WebLinks.site(_repo, String(meta["upstream"]).get_slice("/", 0))
+				if not site.is_empty():
+					m.add_item("Open on %s" % site["name"], ID_OPEN_ON_WEB)
+					m.add_item("Create %s on %s…" % ["Merge Request" if site["kind"] == "gitlab" else "Pull Request", site["name"]], ID_PULL_REQUEST)
 			m.add_separator()
 			m.add_item("Rename…", ID_RENAME)
 			m.add_item("Delete…", ID_DELETE)
@@ -374,6 +444,9 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("Merge into %s…" % current_label, ID_MERGE)
 			m.add_item("Rebase %s onto This…" % current_label, ID_REBASE)
 			m.set_item_disabled(m.get_item_index(ID_REBASE), current.is_empty())
+			var remote_site := WebLinks.site(_repo, String(meta.get("remote", "")))
+			if not remote_site.is_empty():
+				m.add_item("Open on %s" % remote_site["name"], ID_OPEN_ON_WEB)
 			m.add_separator()
 			m.add_item("Delete from Remote…", ID_DELETE_REMOTE_BRANCH)
 			m.add_item("Copy Name", ID_COPY_NAME)
@@ -408,8 +481,10 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 					m.add_item("Fetch All and Prune Deleted Branches", ID_FETCH_PRUNE)
 				"Tags":
 					m.add_item("New Tag at HEAD…", ID_NEW_TAG)
-				_:
+				"Local":
 					m.add_item("New Branch…", ID_NEW_BRANCH_FROM)
+				_:
+					return # Stashes: nothing to add from here
 		_:
 			return
 
@@ -421,6 +496,9 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 func _on_context_menu_id_pressed(id: int) -> void:
 	var kind: String = _context.get("kind", "")
 	var name: String = _context.get("name", "")
+	var verbs := { ID_CHECKOUT: "Checkout", ID_MERGE: "Merge", ID_REBASE: "Rebase", ID_STASH_APPLY: "Apply", ID_STASH_POP: "Pop", ID_STASH_BRANCH: "Checkout" }
+	if verbs.has(id) and not await SaveGuard.ensure_saved(self, verbs[id]):
+		return
 	match id:
 		ID_CHECKOUT:
 			match kind:
@@ -458,6 +536,13 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				await _push_refspec(remote, ":refs/heads/" + branch, "Deleted %s." % name)
 		ID_COPY_NAME:
 			DisplayServer.clipboard_set(name)
+		ID_OPEN_ON_WEB, ID_PULL_REQUEST:
+			# A local branch opens as its upstream; a remote one as itself.
+			var remote_ref: String = _context.get("upstream", "") if kind == "local" else name
+			var remote_name := remote_ref.get_slice("/", 0)
+			var site := WebLinks.site(_repo, remote_name)
+			var branch := remote_ref.substr(remote_name.length() + 1)
+			OS.shell_open(WebLinks.branch_url(site, branch) if id == ID_OPEN_ON_WEB else WebLinks.new_pull_request_url(site, branch))
 		ID_PUSH_TAG:
 			var remote := RemoteActions.default_remote(_repo)
 			if remote.is_empty():

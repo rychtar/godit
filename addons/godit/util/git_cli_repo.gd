@@ -62,7 +62,21 @@ func get_status() -> Array:
 			"status": _status_bits(xy),
 			"renamed_from": renamed_from,
 		})
+	_status_cache[_repo_root] = { "msec": Time.get_ticks_msec(), "entries": entries.duplicate(true), "header": status_header }
 	return entries
+
+
+## Last get_status() result of any repo instance on this root (the two docks each open their own) if at most max_age_msec old, else a fresh one — lets pollers share one `git status`.
+func get_recent_status(max_age_msec: int) -> Array:
+	var cached: Dictionary = _status_cache.get(_repo_root, {})
+	if cached.is_empty() or Time.get_ticks_msec() - int(cached["msec"]) > max_age_msec:
+		return get_status()
+	status_header = cached["header"]
+	return cached["entries"].duplicate(true)
+
+
+## repo root -> {"msec", "entries", "header"} of the latest get_status(), for get_recent_status().
+static var _status_cache := {}
 
 
 ## Maps porcelain v1's two-letter XY status into GitStatusFlags' bitmask.
@@ -558,6 +572,36 @@ func get_sync_status() -> Dictionary:
 	return info
 
 
+## "HEAD oid\nupstream oid" the incoming/outgoing file lists below were read for.
+var _overlap_key := ""
+var _incoming_files := {}
+var _outgoing_files: Array = []
+
+
+## Files the upstream changed since this branch forked off that are changed here too, so pulling may conflict:
+## {path: "uncommitted" (one of local_paths) | "committed" (in an unpushed commit)}; empty when there's nothing to pull.
+func incoming_overlap(local_paths: Array) -> Dictionary:
+	var r := GitCli.run(_repo_root, ["rev-parse", "HEAD", "@{upstream}"])
+	var oids := GitCli.lines(r["text"])
+	if r["exit_code"] != 0 or oids.size() != 2 or oids[0] == oids[1]:
+		return {}
+	var key := "\n".join(oids)
+	if key != _overlap_key:
+		_overlap_key = key
+		_incoming_files = {}
+		for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "HEAD...@{upstream}"])["text"]):
+			_incoming_files[path] = true
+		_outgoing_files = Array(GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "@{upstream}...HEAD"])["text"]))
+	var overlap := {}
+	for path in local_paths:
+		if _incoming_files.has(path):
+			overlap[path] = "uncommitted"
+	for path in _outgoing_files:
+		if _incoming_files.has(path) and not overlap.has(path):
+			overlap[path] = "committed"
+	return overlap
+
+
 ## Array[{"name", "fetch_url", "push_url"}].
 func list_remotes() -> Array:
 	var r := GitCli.run(_repo_root, ["remote", "-v"])
@@ -612,6 +656,21 @@ func list_stashes() -> Array:
 		if f.size() < 3:
 			continue
 		stashes.append({ "ref": f[0], "message": f[1], "date": f[2] })
+	return stashes
+
+
+## Stashes as Git Log rows: [{"oid", "parents" (just the commit it was made on), "stash" (its stash@{n} ref), "summary", "message", "author_name", "author_email", "time"}], newest first.
+func list_stash_commits() -> Array:
+	var r := GitCli.run(_repo_root, ["stash", "list", "--format=%H" + US + "%P" + US + "%gd" + US + "%gs" + US + "%an" + US + "%ae" + US + "%at"])
+	var stashes: Array = []
+	for line in GitCli.lines(r["text"]):
+		var f := line.split(US)
+		if f.size() < 7:
+			continue
+		stashes.append({
+			"oid": f[0], "parents": PackedStringArray([f[1].get_slice(" ", 0)]), "stash": f[2], "summary": f[3], "message": f[3],
+			"author_name": f[4], "author_email": f[5], "time": f[6].to_int(), "refs": PackedStringArray(), "tags": PackedStringArray(),
+		})
 	return stashes
 
 
@@ -1016,6 +1075,12 @@ func get_head_oid() -> String:
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
 
 
+## The commit a full ref name ("refs/heads/main", "stash@{1}", a tag) points to, or "" if it doesn't resolve.
+func resolve_commit(ref: String) -> String:
+	var r := GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", ref + "^{commit}"])
+	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
 ## get_head_oid() read straight from .git's files where possible, for polling without spawning git.
 func read_head_oid() -> String:
 	var head := _read_small(get_git_dir().path_join("HEAD"))
@@ -1076,6 +1141,38 @@ func has_staged_changes() -> bool:
 	return GitCli.run(_repo_root, ["diff", "--cached", "--quiet"])["exit_code"] != 0
 
 
+## Staged added/modified files bigger than limit_bytes that Git LFS doesn't already take care of: [{"path", "size"}].
+func large_staged_files(limit_bytes: int) -> Array:
+	var large: Array = []
+	for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=AM"])["text"]):
+		var f := FileAccess.open(_repo_root.path_join(path), FileAccess.READ)
+		if f != null and f.get_length() > limit_bytes:
+			large.append({ "path": path, "size": f.get_length() })
+	if large.is_empty():
+		return large
+	var lfs := {}
+	var attrs: String = GitCli.run(_repo_root, ["check-attr", "filter", "--"] + large.map(func(e: Dictionary) -> String: return e["path"]))["text"]
+	for line in GitCli.lines(attrs):
+		if line.ends_with(": filter: lfs"):
+			lfs[line.trim_suffix(": filter: lfs")] = true
+	return large.filter(func(e: Dictionary) -> bool: return not lfs.has(e["path"]))
+
+
+## Tracks every file with the same extension as one of paths with Git LFS ("*.png"), and re-stages paths so they're stored as LFS pointers.
+func lfs_track(paths: Array) -> Dictionary:
+	var patterns: Array = []
+	for path in paths:
+		var pattern: String = "*." + String(path).get_extension() if not path.get_extension().is_empty() else path
+		if not patterns.has(pattern):
+			patterns.append(pattern)
+	var r := GitCli.run(_repo_root, ["lfs", "track"] + patterns, true)
+	if r["exit_code"] != 0:
+		return { "ok": false, "error": r["text"].strip_edges() }
+	GitCli.run(_repo_root, ["add", ".gitattributes"], true)
+	# The blobs are already staged as regular files; --renormalize runs them through the new LFS filter.
+	return _simple(["add", "--renormalize", "--"] + paths)
+
+
 ## Applies commits (given newest first, as the log shows them) on top of HEAD, oldest first. no_commit leaves the result staged instead.
 func cherry_pick(oids: PackedStringArray, no_commit: bool = false) -> Dictionary:
 	var args := ["cherry-pick"]
@@ -1106,6 +1203,68 @@ func _parent_count(oid: String) -> int:
 
 
 ## Moves the branch back one commit, keeping that commit's changes staged.
+## The latest thing that moved HEAD (per its reflog) and how to take it back: {"label": "Undo commit “Fix jump”", "mode": "soft"|"keep"|"checkout", "target": rev to go back to}, or {} when there's nothing to undo.
+## Entries that didn't move HEAD (a stash's "reset: moving to HEAD") are skipped; a finished rebase goes back to before its start.
+func last_head_operation() -> Dictionary:
+	var entries: Array = []
+	for line in GitCli.lines(GitCli.run(_repo_root, ["reflog", "-n", "200", "--format=%H" + US + "%gs"])["text"]):
+		var f := line.split(US)
+		if f.size() >= 2:
+			entries.append({ "oid": f[0], "subject": f[1] })
+	for i in entries.size() - 1:
+		var subject: String = entries[i]["subject"]
+		var action := subject.get_slice(": ", 0)
+		var detail := subject.substr(action.length() + 2).strip_edges()
+		var target: String = entries[i + 1]["oid"]
+		# A rebase's finish and a checkout -b to a new branch switch branches without moving HEAD's commit.
+		var switched := action.ends_with("(finish)") or action == "checkout" and detail.get_slice(" to ", 0) != "moving from " + detail.get_slice(" to ", 1)
+		if entries[i]["oid"] == target and not switched:
+			continue
+		if action.ends_with("(finish)"):
+			var start := action.replace("(finish)", "(start)")
+			for j in range(i + 1, entries.size() - 1):
+				if String(entries[j]["subject"]).begins_with(start):
+					target = entries[j + 1]["oid"]
+					break
+			return { "label": "Undo %s" % action.trim_suffix(" (finish)"), "mode": "keep", "target": target }
+		if action == "commit (initial)" or action.contains("(start)") or action.contains("(pick)") or action.contains("(continue)"):
+			return {} # nothing before the first commit; a rebase still in progress is aborted instead
+		if action == "commit (amend)":
+			return { "label": "Undo amend of “%s”" % detail, "mode": "soft", "target": target }
+		if action.begins_with("commit"):
+			return { "label": "Undo commit “%s”" % detail, "mode": "soft", "target": target }
+		if action == "checkout":
+			var from := detail.trim_prefix("moving from ").get_slice(" to ", 0)
+			return { "label": "Undo checkout of %s (back to %s)" % [detail.get_slice(" to ", 1), from], "mode": "checkout", "target": from }
+		if action == "cherry-pick" or action == "revert":
+			return { "label": "Undo %s “%s”" % [action, detail], "mode": "keep", "target": target }
+		return { "label": "Undo %s" % action, "mode": "keep", "target": target }
+	return {}
+
+
+## Takes back last_head_operation(): "soft" keeps the undone commit's changes staged, "keep" moves the branch back but refuses to overwrite local changes.
+func undo_head_operation(op: Dictionary) -> Dictionary:
+	match op.get("mode", ""):
+		"soft": return _simple(["reset", "--soft", op["target"]])
+		"keep": return _simple(["reset", "--keep", op["target"]])
+		"checkout": return _checkout(op["target"])
+	return { "ok": false, "error": "Nothing to undo.", "output": "" }
+
+
+## Full messages of the latest commits on HEAD, newest first, duplicates dropped — yours only when git knows your email.
+func recent_commit_messages(limit: int) -> PackedStringArray:
+	var args := ["log", "-n", str(limit * 2), "--format=%B" + GitCli.RS]
+	var email: String = GitCli.run(_repo_root, ["config", "user.email"])["text"].strip_edges()
+	if not email.is_empty():
+		args.append("--author=" + email)
+	var messages := PackedStringArray()
+	for message in GitCli.run(_repo_root, args)["text"].split(GitCli.RS):
+		message = message.strip_edges()
+		if not message.is_empty() and not messages.has(message):
+			messages.append(message)
+	return messages.slice(0, limit)
+
+
 func undo_last_commit() -> Dictionary:
 	if not has_parent("HEAD"):
 		return { "ok": false, "error": "This is the first commit — there's nothing before it to go back to.", "output": "" }
@@ -1226,7 +1385,7 @@ func branches_containing(oid: String) -> PackedStringArray:
 
 
 func _refs_by_oid(ref_prefixes: Array) -> Dictionary:
-	var fmt := "%(objectname)" + GitCli.US + "%(refname:short)"
+	var fmt := "%(objectname)" + GitCli.US + "%(refname:short)" + GitCli.US + "%(refname)"
 	var args := ["for-each-ref", "--format=" + fmt]
 	args.append_array(ref_prefixes)
 	var result := GitCli.run(_repo_root, args)
@@ -1238,7 +1397,8 @@ func _refs_by_oid(ref_prefixes: Array) -> Dictionary:
 			continue
 		var oid: String = fields[0]
 		var name: String = fields[1]
-		if name.ends_with("/HEAD"):
+		# refs/remotes/origin/HEAD shortens to just "origin", so check the full name.
+		if fields[fields.size() - 1].ends_with("/HEAD"):
 			continue
 		# Mutating a PackedStringArray fetched from a Dictionary in place
 		# doesn't write back (COW) — reassign it instead.

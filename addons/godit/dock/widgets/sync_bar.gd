@@ -3,8 +3,10 @@
 extends VBoxContainer
 
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const OperationBar := preload("res://addons/godit/dock/widgets/operation_bar.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
+const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 
@@ -12,7 +14,7 @@ const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 signal changed
 
 enum { PULL_DEFAULT, PULL_MERGE, PULL_REBASE, PULL_FF_ONLY, PULL_AUTOSTASH }
-enum { PUSH_DEFAULT, PUSH_WITH_TAGS, PUSH_TO, PUSH_FORCE }
+enum { PUSH_DEFAULT, PUSH_WITH_TAGS, PUSH_TO, PUSH_FORCE, PUSH_PULL_REQUEST }
 const ID_NEW_BRANCH := 100000
 
 var operation_bar: HBoxContainer
@@ -73,6 +75,7 @@ func _init() -> void:
 	push_popup.add_separator()
 	push_popup.add_item("Force Push (with lease)…", PUSH_FORCE)
 	push_popup.id_pressed.connect(_on_push_menu_id_pressed)
+	push_popup.about_to_popup.connect(_update_pull_request_item.bind(push_popup))
 
 	var refresh := _button(row, "", "Refresh", func() -> void: changed.emit())
 	refresh.flat = true
@@ -122,6 +125,19 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 
 
+## The combined dock's window-wide toolbar: no branch switcher (the sidebar lists and switches branches) and Fetch/Pull/Push at the left instead of far off at the right.
+func set_toolbar_mode(on: bool) -> void:
+	var row := get_child(0)
+	_branch_button.visible = not on
+	row.move_child(_upstream_label, row.get_child_count() - 1 if on else 1)
+	refresh()
+
+
+## Hides the branch/Fetch/Pull/Push row but keeps the progress strip, for the Branches sidebar under the combined dock's shared row.
+func set_row_visible(on: bool) -> void:
+	get_child(0).visible = on
+
+
 ## Re-reads branch, upstream and ahead/behind (cheap: a few rev-parse calls).
 func refresh() -> void:
 	if _repo == null:
@@ -141,8 +157,12 @@ func refresh() -> void:
 		parts.append("not published yet")
 	else:
 		parts.append("→ " + s["upstream"] + ("  ✓ up to date" if s["ahead"] == 0 and s["behind"] == 0 else ""))
+	if not _branch_button.visible and not detached:
+		parts.push_front(s["branch"]) # toolbar mode: the switcher that names it is hidden
 	_upstream_label.text = " · ".join(parts)
 	_upstream_label.tooltip_text = _upstream_label.text
+	if not detached and s["upstream"].is_empty():
+		_upstream_label.tooltip_text += "\n%s exists only here, no remote branch tracks it. Push publishes it and sets that up." % s["branch"]
 
 	_pull_button.text = "Pull ↓%d" % s["behind"] if s["behind"] > 0 else "Pull"
 	_pull_button.tooltip_text = "Fetch and integrate %s's upstream%s" % [s["branch"], " (%d new commit%s)" % [s["behind"], "" if s["behind"] == 1 else "s"] if s["behind"] > 0 else ""]
@@ -174,7 +194,7 @@ func _on_branch_menu_id_pressed(id: int) -> void:
 	if id == ID_NEW_BRANCH:
 		await new_branch_dialog("HEAD")
 		return
-	if id < 0 or id >= _menu_branches.size():
+	if id < 0 or id >= _menu_branches.size() or not await SaveGuard.ensure_saved(self, "Checkout"):
 		return
 	var result: Dictionary = _repo.checkout_branch(_menu_branches[id])
 	EditorOpen.refresh_all_external_changes()
@@ -241,9 +261,30 @@ func _on_push_menu_id_pressed(id: int) -> void:
 				await RemoteActions.push(self, _repo, operation_bar, { "force_with_lease": true })
 		PUSH_TO:
 			await push_branch_to(_repo.get_current_branch())
+		PUSH_PULL_REQUEST:
+			var upstream: String = _repo.get_upstream()
+			var remote := upstream.get_slice("/", 0)
+			OS.shell_open(WebLinks.new_pull_request_url(WebLinks.site(_repo, remote), upstream.substr(remote.length() + 1)))
+			return
 		_:
 			await RemoteActions.push(self, _repo, operation_bar)
 	_finish()
+
+
+## "Create Pull Request on GitHub" at the end of the push menu while the branch is pushed to one of the known sites.
+func _update_pull_request_item(popup: PopupMenu) -> void:
+	var index := popup.get_item_index(PUSH_PULL_REQUEST)
+	if index != -1:
+		popup.remove_item(index)
+		popup.remove_item(index - 1) # its separator
+	var upstream: String = _repo.get_upstream() if _repo != null else ""
+	if upstream.is_empty():
+		return
+	var site := WebLinks.site(_repo, upstream.get_slice("/", 0))
+	if site.is_empty():
+		return
+	popup.add_separator()
+	popup.add_item("Create %s on %s…" % ["Merge Request" if site["kind"] == "gitlab" else "Pull Request", site["name"]], PUSH_PULL_REQUEST)
 
 
 ## Asks for remote + remote branch name, then pushes (optionally setting upstream). Shared with the Branches panel.

@@ -2,6 +2,7 @@
 extends RefCounted
 
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 
@@ -21,7 +22,7 @@ static func fetch(parent: Control, repo: RefCounted, bar: Control, remote: Strin
 
 
 static func pull(parent: Control, repo: RefCounted, bar: Control, strategy: String = "", autostash: bool = false) -> bool:
-	if not _check_idle(parent, repo):
+	if not _check_idle(parent, repo) or not await SaveGuard.ensure_saved(parent, "Pull"):
 		return false
 	bar.busy("Pulling…", repo)
 	var r: Dictionary = await repo.pull(strategy, autostash)
