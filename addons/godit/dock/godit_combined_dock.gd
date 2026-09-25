@@ -24,7 +24,7 @@ var _panels: Dictionary = {}
 var _sync_bar: Control
 var _layout: VBoxContainer
 var _sidebar: VBoxContainer
-## Darker background with a line on the right, setting the sidebar apart from the view.
+## The docks' background with a line on the right, setting the sidebar apart from the view.
 var _sidebar_panel: PanelContainer
 var _buttons: BoxContainer
 var _views: TabContainer
@@ -140,9 +140,11 @@ func _notification(what: int) -> void:
 
 
 func _style_sidebar_panel() -> void:
+	# The side docks' own background (FileSystem, Scene…), so the sidebar reads as one of them.
+	var dock_panel := get_theme_stylebox(&"panel", &"TabContainer")
 	var style := StyleBoxFlat.new()
-	style.bg_color = get_theme_color(&"dark_color_2", &"Editor") if has_theme_color(&"dark_color_2", &"Editor") else Color(0, 0, 0, 0.2)
-	style.border_color = Color(get_theme_color(&"font_color", &"Label"), 0.12)
+	style.bg_color = (dock_panel as StyleBoxFlat).bg_color if dock_panel is StyleBoxFlat else get_theme_color(&"base_color", &"Editor")
+	style.border_color = Color(get_theme_color(&"font_color", &"Label"), 0.15)
 	style.border_width_right = int(maxf(1.0, UiScale.px(1)))
 	style.content_margin_top = UiScale.px(4)
 	style.content_margin_left = UiScale.px(4)
