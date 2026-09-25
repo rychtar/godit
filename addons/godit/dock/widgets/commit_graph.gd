@@ -3,6 +3,7 @@ extends Control
 
 signal commit_selected(oid: String)
 signal commit_context_requested(oid: String, screen_position: Vector2)
+signal commit_activated(oid: String)
 
 const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
@@ -359,8 +360,12 @@ func _draw() -> void:
 			draw_circle(dot, DOT_RADIUS, WORKTREE_COLOR, false, 1.5, true)
 			var worktree_baseline := _row_y(row) + font_size * 0.35
 			var bold := get_theme_font("bold", "EditorFonts")
-			draw_string(bold if bold != null else font, Vector2(text_x, worktree_baseline), _truncate_to_width(font, font_size, entry["summary"], message_max_width),
-					HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+			var title_font: Font = bold if bold != null else font
+			var title := _truncate_to_width(title_font, font_size, entry["summary"], message_max_width)
+			draw_string(title_font, Vector2(text_x, worktree_baseline), title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+			var note_x := text_x + title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + BADGE_GAP
+			draw_string(font, Vector2(note_x, worktree_baseline), _truncate_to_width(font, font_size, entry.get("note", ""), text_x + message_max_width - note_x),
+					HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, WORKTREE_COLOR)
 			continue
 		draw_circle(dot, DOT_RADIUS, _lane_color(entry["lane"]))
 		if entry["oid"] == _head_oid:
@@ -469,6 +474,8 @@ func _gui_input(event: InputEvent) -> void:
 					queue_redraw()
 				else:
 					_select_single(row)
+					if event.double_click:
+						commit_activated.emit(_commits[row]["oid"])
 		elif not _dragging_column.is_empty():
 			Settings.set_value("history_%s_col_width" % _dragging_column, _col_width[_dragging_column])
 			_dragging_column = ""

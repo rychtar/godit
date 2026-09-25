@@ -15,6 +15,9 @@ const CommitGraph := preload("res://addons/godit/dock/widgets/commit_graph.gd")
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
 const WORKTREE_OID := CommitGraph.WORKTREE_OID
 
+## Double-click on the "Uncommitted changes" row; plugin.gd brings the Changes tab to front.
+signal changes_requested
+
 const DETAILS_VISIBLE_SETTING_KEY := "history_details_visible"
 const SHOW_REMOTES_SETTING_KEY := "history_show_remotes"
 const SEARCH_LIMIT := 500
@@ -107,6 +110,10 @@ func _ready() -> void:
 	_details_toggle.button_pressed = Settings.get_value(DETAILS_VISIBLE_SETTING_KEY, true)
 	_build_toolbar()
 	_build_file_diff()
+	_graph.commit_activated.connect(func(oid: String) -> void:
+		if oid == WORKTREE_OID:
+			changes_requested.emit()
+	)
 
 	_file_menu = PopupMenu.new()
 	_file_menu.id_pressed.connect(_on_file_menu_id_pressed)
@@ -354,7 +361,12 @@ func _status_signature() -> String:
 
 
 func _worktree_entry() -> Dictionary:
+	var staged := _worktree_files.filter(func(e: Dictionary) -> bool: return GitStatusFlags.is_staged(e["status"])).size()
+	var note := "%d file%s" % [_worktree_files.size(), "" if _worktree_files.size() == 1 else "s"]
+	if staged > 0:
+		note += " · %d staged" % staged
 	return {
+		"note": note,
 		"oid": WORKTREE_OID, "parents": PackedStringArray([_repo.get_head_oid()]), "summary": "Uncommitted changes",
 		"message": "", "refs": PackedStringArray(), "tags": PackedStringArray(), "author_name": "", "author_email": "", "time": 0,
 	}
@@ -446,7 +458,7 @@ func _on_commit_graph_commit_selected(oid: String) -> void:
 
 	if oid == WORKTREE_OID:
 		var staged := _worktree_files.filter(func(e: Dictionary) -> bool: return GitStatusFlags.is_staged(e["status"])).size()
-		_detail_label.text = "[b]Uncommitted changes[/b]\n\n%d changed file%s, %d staged. Commit them in the Changes tab." % [
+		_detail_label.text = "[b]Uncommitted changes[/b]\n\n%d changed file%s, %d staged. Double-click the row to commit them in the Changes tab." % [
 			_worktree_files.size(), "" if _worktree_files.size() == 1 else "s", staged,
 		]
 		return

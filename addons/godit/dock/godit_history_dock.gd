@@ -11,6 +11,9 @@ const GitConsole := preload("res://addons/godit/dock/widgets/git_console.gd")
 var _repo: RefCounted
 var _tabs: TabContainer
 
+## Forwarded from the Log panel; plugin.gd brings the Changes tab to front.
+signal changes_requested
+
 
 func _ready() -> void:
 	var opened := RepoOpener.open_current_project_repo()
@@ -24,6 +27,7 @@ func _ready() -> void:
 	_message_label.visible = false
 	_history_panel.visible = true
 	_history_panel.set_repo(_repo)
+	_history_panel.changes_requested.connect(changes_requested.emit)
 	_add_console_tab()
 
 

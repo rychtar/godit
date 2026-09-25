@@ -72,6 +72,12 @@ func _on_auto_fetch_timeout() -> void:
 		_branches_panel.refresh()
 
 
+## Brings the Changes tab to front within this dock.
+func show_changes() -> void:
+	if _changes_panel.get_parent() == _tab_container:
+		_tab_container.current_tab = _changes_panel.get_index()
+
+
 ## Scrolls the Changes diff to path/line, e.g. from a click on the script editor's change gutter.
 func reveal_change(path: String, line: int) -> void:
 	if _changes_panel.get_parent() == _tab_container:

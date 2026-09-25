@@ -105,6 +105,7 @@ func _enter_tree() -> void:
 	script_menu.show_file_history = _show_file_history
 	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_SCRIPT_EDITOR_CODE, script_menu)
 	dock_instance.file_history_requested.connect(_show_file_history)
+	history_dock_instance.changes_requested.connect(_show_changes)
 
 
 func _exit_tree() -> void:
@@ -161,6 +162,21 @@ func _set_blame_enabled(enabled: bool) -> void:
 	Settings.set_value(BLAME_SETTING_KEY, enabled)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_BLAME), enabled)
 	blame_gutter.set_enabled(enabled)
+
+
+## Brings the Git dock's Changes tab to front wherever the dock lives (bottom panel or a side dock).
+func _show_changes() -> void:
+	if bottom_dock_container != null:
+		make_bottom_panel_item_visible(bottom_dock_container)
+		bottom_dock_container.current_tab = bottom_dock_container.get_node("Changes").get_index()
+	else:
+		var node: Node = dock_instance
+		while node != null and not node.is_class("EditorDock"):
+			node = node.get_parent()
+		if node != null:
+			node.call("open")
+			node.call("make_visible")
+	dock_instance.show_changes()
 
 
 func _on_gutter_change_clicked(rel_path: String, line: int) -> void:
