@@ -88,6 +88,13 @@ func _notify_incoming() -> void:
 		_announced_behind[sync["upstream"]] = behind
 		return
 	_announced_behind[sync["upstream"]] = behind
+	var overlap: Dictionary = _repo.incoming_overlap(_repo.get_recent_status(2000).map(func(e: Dictionary) -> String: return e["path"]))
+	if not overlap.is_empty():
+		var names := overlap.keys().slice(0, 3).map(func(p: String) -> String: return p.get_file())
+		EditorInterface.get_editor_toaster().push_toast("Godit: %d new commit%s on %s also change%s %s, which you changed too. Pull soon to merge while it's small." % [
+			behind, "" if behind == 1 else "s", sync["upstream"], "s" if behind == 1 else "", ", ".join(names) + (" and %d more" % (overlap.size() - 3) if overlap.size() > 3 else "")],
+			EditorToaster.SEVERITY_WARNING)
+		return
 	EditorInterface.get_editor_toaster().push_toast("Godit: %d new commit%s on %s. Pull them from the Git dock." % [
 		behind, "" if behind == 1 else "s", sync["upstream"]], EditorToaster.SEVERITY_INFO)
 

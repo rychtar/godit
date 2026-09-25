@@ -379,6 +379,8 @@ func refresh(status_entries: Variant = null) -> void:
 		# Changelist"); keep the active one visible even when empty.
 		group.set_visible(count > 0 or is_active)
 
+	var overlap := _mark_incoming_overlap(entries, file_items)
+
 	conflict_group.set_text(TEXT_COLUMN, "⚠ Conflicts  %d %s — resolve, then Continue" % [conflict_count, "file" if conflict_count == 1 else "files"])
 	conflict_group.set_visible(conflict_count > 0)
 
@@ -397,8 +399,23 @@ func refresh(status_entries: Variant = null) -> void:
 
 	if Time.get_ticks_msec() >= _note_until: # else a _notify() note is still up
 		_status_label.text = "No changes." if untracked_count == 0 and tracked_count == 0 else ""
+		if not overlap.is_empty():
+			_status_label.text = "⚠ %d file%s you changed %s also changed on %s — pull to merge now, while it's small." % [
+					overlap.size(), "" if overlap.size() == 1 else "s", "is" if overlap.size() == 1 else "are", _repo.get_upstream()]
 
 	_update_commit_buttons_enabled(any_staged)
+
+
+## Flags rows whose file the upstream changed too (pulling may conflict); returns incoming_overlap() for the status line.
+func _mark_incoming_overlap(entries: Array, file_items: Dictionary) -> Dictionary:
+	var overlap: Dictionary = _repo.incoming_overlap(entries.map(func(e: Dictionary) -> String: return e["path"]))
+	for path in overlap:
+		var item: TreeItem = file_items.get(path)
+		if item == null:
+			continue
+		item.set_text(TEXT_COLUMN, item.get_text(TEXT_COLUMN) + "  ⚠")
+		item.set_tooltip_text(TEXT_COLUMN, item.get_tooltip_text(TEXT_COLUMN) + "\n⚠ Also changed on %s: pulling may conflict. Pull soon, or commit and pull." % _repo.get_upstream())
+	return overlap
 
 
 ## True for a changed .uid/.import whose own file is changed too (it's listed under that file).

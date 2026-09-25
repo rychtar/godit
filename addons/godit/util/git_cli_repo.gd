@@ -572,6 +572,36 @@ func get_sync_status() -> Dictionary:
 	return info
 
 
+## "HEAD oid\nupstream oid" the incoming/outgoing file lists below were read for.
+var _overlap_key := ""
+var _incoming_files := {}
+var _outgoing_files: Array = []
+
+
+## Files the upstream changed since this branch forked off that are changed here too, so pulling may conflict:
+## {path: "uncommitted" (one of local_paths) | "committed" (in an unpushed commit)}; empty when there's nothing to pull.
+func incoming_overlap(local_paths: Array) -> Dictionary:
+	var r := GitCli.run(_repo_root, ["rev-parse", "HEAD", "@{upstream}"])
+	var oids := GitCli.lines(r["text"])
+	if r["exit_code"] != 0 or oids.size() != 2 or oids[0] == oids[1]:
+		return {}
+	var key := "\n".join(oids)
+	if key != _overlap_key:
+		_overlap_key = key
+		_incoming_files = {}
+		for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "HEAD...@{upstream}"])["text"]):
+			_incoming_files[path] = true
+		_outgoing_files = Array(GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "@{upstream}...HEAD"])["text"]))
+	var overlap := {}
+	for path in local_paths:
+		if _incoming_files.has(path):
+			overlap[path] = "uncommitted"
+	for path in _outgoing_files:
+		if _incoming_files.has(path) and not overlap.has(path):
+			overlap[path] = "committed"
+	return overlap
+
+
 ## Array[{"name", "fetch_url", "push_url"}].
 func list_remotes() -> Array:
 	var r := GitCli.run(_repo_root, ["remote", "-v"])
