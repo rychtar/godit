@@ -15,6 +15,8 @@ const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_resolver.gd")
+const SceneConflictResolver := preload("res://addons/godit/dock/widgets/scene_conflict_resolver.gd")
+const SceneText := preload("res://addons/godit/util/scene_text.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 ## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
@@ -1069,7 +1071,16 @@ func _on_changes_tree_item_activated() -> void:
 		_show_error("Can't open file", error)
 
 
-func _open_conflict_resolver(path: String) -> void:
+## Scenes and resources get the node-by-node merge; as_text (or a merge that can't read them) falls back to the line-based resolver.
+func _open_conflict_resolver(path: String, as_text := false) -> void:
+	if SceneText.is_scene_file(path) and not as_text:
+		var scene_resolver := SceneConflictResolver.new()
+		add_child(scene_resolver)
+		scene_resolver.saved.connect(func(_p: String, _marked: bool) -> void: refresh())
+		scene_resolver.text_mode_requested.connect(func(p: String) -> void: _open_conflict_resolver(p, true))
+		if scene_resolver.open(_repo, path)["ok"]:
+			return
+		scene_resolver.queue_free()
 	var resolver := ConflictResolver.new()
 	add_child(resolver)
 	resolver.saved.connect(func(_p: String, _marked: bool) -> void: refresh())

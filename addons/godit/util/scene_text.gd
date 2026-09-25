@@ -52,7 +52,8 @@ static func parse(text: String) -> Dictionary:
 	return result
 
 
-## Every [section] with its header attributes and property lines: [{"tag", "attrs": {key: raw value}, "props": {key: raw value}, "start", "end" (0-based line range, end exclusive)}].
+## Every [section] with its header attributes and property lines: [{"tag", "attrs": {key: value, plain strings unquoted}, "raw_attrs": {key: value as written},
+## "props": {key: value as written}, "header": the [..] line, "start", "end" (0-based line range, end exclusive)}].
 static func parse_sections(text: String) -> Array:
 	var sections: Array = []
 	var lines := text.split("\n")
@@ -64,10 +65,11 @@ static func parse_sections(text: String) -> Array:
 			if not current.is_empty():
 				current["end"] = i
 				sections.append(current)
-			current = { "tag": "", "attrs": {}, "props": {}, "start": i, "end": i + 1 }
+			current = { "tag": "", "attrs": {}, "raw_attrs": {}, "props": {}, "header": line.strip_edges(), "start": i, "end": i + 1 }
 			var header := line.strip_edges().trim_prefix("[").trim_suffix("]")
 			var space := header.find(" ")
 			current["tag"] = header if space == -1 else header.substr(0, space)
+			current["raw_attrs"] = _parse_attributes(header.substr(space + 1) if space != -1 else "", true)
 			current["attrs"] = _parse_attributes(header.substr(space + 1) if space != -1 else "")
 			i += 1
 			continue
@@ -160,7 +162,7 @@ static func _prop_changes(old_props: Dictionary, new_props: Dictionary) -> Array
 	return changes
 
 
-## ExtResource("1_ab") -> ExtResource("res://player.gd"), using this version's ids.
+## ExtResource("1_ab") -> ExtResource("res://player.gd"), using this version's ids (ext: {id: {"path"}}).
 static func _resolve(value: String, ext: Dictionary) -> String:
 	var from := value.find("ExtResource(\"")
 	while from != -1:
@@ -175,8 +177,8 @@ static func _resolve(value: String, ext: Dictionary) -> String:
 	return value
 
 
-## key=value pairs of a section header; values keep their raw text (quotes stripped from plain strings).
-static func _parse_attributes(text: String) -> Dictionary:
+## key=value pairs of a section header; plain strings lose their quotes unless keep_quotes.
+static func _parse_attributes(text: String, keep_quotes := false) -> Dictionary:
 	var attrs := {}
 	var i := 0
 	while i < text.length():
@@ -206,7 +208,7 @@ static func _parse_attributes(text: String) -> Dictionary:
 				break
 			j += 1
 		var value := text.substr(eq + 1, j - eq - 1)
-		if value.length() >= 2 and value.begins_with("\"") and value.ends_with("\"") and value.count("\"") == 2:
+		if not keep_quotes and value.length() >= 2 and value.begins_with("\"") and value.ends_with("\"") and value.count("\"") == 2:
 			value = value.substr(1, value.length() - 2)
 		attrs[key] = value
 		i = j + 1
