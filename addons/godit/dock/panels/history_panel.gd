@@ -15,8 +15,8 @@ const CommitGraph := preload("res://addons/godit/dock/widgets/commit_graph.gd")
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
 const WORKTREE_OID := CommitGraph.WORKTREE_OID
 
-## Double-click on the "Uncommitted changes" row; plugin.gd brings the Changes tab to front.
-signal changes_requested
+## From the "Uncommitted changes" row; plugin.gd brings the Changes tab to front and runs action there ("", "commit", "stash", "revert").
+signal changes_requested(action: String)
 
 const DETAILS_VISIBLE_SETTING_KEY := "history_details_visible"
 const SHOW_REMOTES_SETTING_KEY := "history_show_remotes"
@@ -34,6 +34,7 @@ enum {
 	ID_CREATE_TAG, ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT, ID_REVERT_COMMIT, ID_COMPARE_WORKTREE,
 	ID_COMPARE_SELECTED, ID_REWORD, ID_FIXUP, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES,
 }
+enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
 
 @onready var _search_edit: LineEdit = %SearchEdit
@@ -112,7 +113,7 @@ func _ready() -> void:
 	_build_file_diff()
 	_graph.commit_activated.connect(func(oid: String) -> void:
 		if oid == WORKTREE_OID:
-			changes_requested.emit()
+			changes_requested.emit("commit")
 	)
 
 	_file_menu = PopupMenu.new()
@@ -331,7 +332,8 @@ func refresh() -> void:
 
 	_last_refs_signature = _repo.get_refs_signature()
 	_last_status_signature = _status_signature()
-	_worktree_files = _repo.get_status().filter(func(e: Dictionary) -> bool: return not e["status"] & GitStatusFlags.IGNORED)
+	_worktree_files = _repo.get_status().filter(func(e: Dictionary) -> bool:
+		return not e["status"] & GitStatusFlags.IGNORED and (_path_filter.is_empty() or e["path"] == _path_filter or e["path"].begins_with(_path_filter.trim_suffix("/") + "/")))
 	_all_commits = _repo.get_commit_graph(_limit, _log_options())
 	_commits_by_oid.clear()
 	for c in _all_commits + (_search_results if _search_results != null else []):
@@ -372,11 +374,16 @@ func _worktree_entry() -> Dictionary:
 	}
 
 
-## commits with the "Uncommitted changes" row on top, when there are changes and HEAD is among them.
+## commits with the "Uncommitted changes" row on top, linked to HEAD — or, in a file's history (which may skip HEAD), to the file's latest commit.
 func _with_worktree(commits: Array, head: String) -> Array:
-	if _worktree_files.is_empty() or not _path_filter.is_empty() or not commits.any(func(c: Dictionary) -> bool: return c["oid"] == head):
+	if _worktree_files.is_empty() or commits.is_empty():
 		return commits
-	return [_commits_by_oid[WORKTREE_OID]] + commits
+	var entry: Dictionary = _commits_by_oid[WORKTREE_OID]
+	if not commits.any(func(c: Dictionary) -> bool: return c["oid"] == head):
+		if _path_filter.is_empty():
+			return commits
+		entry["parents"] = PackedStringArray([commits[0]["oid"]])
+	return [entry] + commits
 
 
 func _on_refresh_button_pressed() -> void:
@@ -520,6 +527,8 @@ func _build_files_tree(oid: String, select_path := "") -> void:
 		item.set_custom_color(0, GitIcons.delta_color(status))
 		item.set_metadata(0, { "path": path, "old_path": f.get("old_path", path), "status": status })
 		item.set_tooltip_text(0, "%s\nClick for its diff, double-click to open, right-click for more" % path)
+		if f.has("staged"):
+			item.set_suffix(0, f["staged"])
 		if path == (select_path if not select_path.is_empty() else _path_filter) and not path.is_empty():
 			item.select(0)
 
@@ -542,6 +551,8 @@ func _worktree_delta_files() -> Array:
 		elif status & (GitStatusFlags.WT_RENAMED | GitStatusFlags.INDEX_RENAMED):
 			delta = GitIcons.DELTA_RENAMED
 		var f := { "path": e["path"], "status": delta }
+		if GitStatusFlags.is_staged(status):
+			f["staged"] = "partly staged" if GitStatusFlags.is_unstaged(status) else "staged"
 		if not String(e.get("renamed_from", "")).is_empty():
 			f["old_path"] = e["renamed_from"]
 		files.append(f)
@@ -641,6 +652,9 @@ func _on_file_menu_id_pressed(id: int) -> void:
 
 
 func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vector2) -> void:
+	if oid == WORKTREE_OID:
+		_show_worktree_menu(screen_position)
+		return
 	_context_oid = oid
 	_context_oids = _graph.get_selected_oids()
 	if not _context_oids.has(oid):
@@ -700,8 +714,26 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 	m.popup()
 
 
+func _show_worktree_menu(screen_position: Vector2) -> void:
+	var m := _context_menu
+	m.clear()
+	m.add_item("Commit…", ID_WORKTREE_COMMIT)
+	m.add_item("Stash Changes…", ID_WORKTREE_STASH)
+	m.add_separator()
+	m.add_item("Revert All Changes…", ID_WORKTREE_REVERT)
+	m.position = screen_position
+	m.reset_size()
+	m.popup()
+
+
 func _on_context_menu_id_pressed(id: int) -> void:
 	match id:
+		ID_WORKTREE_COMMIT:
+			changes_requested.emit("commit")
+		ID_WORKTREE_STASH:
+			changes_requested.emit("stash")
+		ID_WORKTREE_REVERT:
+			changes_requested.emit("revert")
 		ID_COPY_HASH:
 			DisplayServer.clipboard_set("\n".join(_context_oids) if _context_oids.size() > 1 else _context_oid)
 		ID_COPY_MESSAGE:

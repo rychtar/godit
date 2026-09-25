@@ -165,7 +165,7 @@ func _set_blame_enabled(enabled: bool) -> void:
 
 
 ## Brings the Git dock's Changes tab to front wherever the dock lives (bottom panel or a side dock).
-func _show_changes() -> void:
+func _show_changes(action: String) -> void:
 	if bottom_dock_container != null:
 		make_bottom_panel_item_visible(bottom_dock_container)
 		bottom_dock_container.current_tab = bottom_dock_container.get_node("Changes").get_index()
@@ -176,7 +176,7 @@ func _show_changes() -> void:
 		if node != null:
 			node.call("open")
 			node.call("make_visible")
-	dock_instance.show_changes()
+	dock_instance.show_changes(action)
 
 
 func _on_gutter_change_clicked(rel_path: String, line: int) -> void:

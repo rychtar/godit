@@ -1298,19 +1298,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				Dialogs.error(self, "Resolve failed", result["error"])
 			refresh()
 		ID_REVERT_ALL:
-			var paths: Array = _context_target["paths"]
-			if await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
-				var errors: Array = []
-				for path in paths:
-					var result: Dictionary = _repo.revert_file(path)
-					if not result["ok"]:
-						errors.append("%s: %s" % [path, result["error"]])
-					_changelist_state["assignments"].erase(path)
-				_save_changelist_state()
-				EditorOpen.refresh_all_external_changes()
-				if not errors.is_empty():
-					Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
-				refresh()
+			await _revert_paths(_context_target["paths"])
 		ID_STASH_GROUP:
 			var group_name: String = _context_target.get("name", "")
 			await _stash_dialog(PackedStringArray(_context_target["paths"]), group_name)
@@ -1335,6 +1323,36 @@ static func _path_list(paths: Array) -> String:
 	if paths.size() > shown.size():
 		text += "\n… and %d more" % (paths.size() - shown.size())
 	return text
+
+
+## Asks, then discards every change to paths (new files are deleted).
+func _revert_paths(paths: Array) -> void:
+	if not await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
+		return
+	var errors: Array = []
+	for path in paths:
+		var result: Dictionary = _repo.revert_file(path)
+		if not result["ok"]:
+			errors.append("%s: %s" % [path, result["error"]])
+		_changelist_state["assignments"].erase(path)
+	_save_changelist_state()
+	EditorOpen.refresh_all_external_changes()
+	if not errors.is_empty():
+		Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
+	refresh()
+
+
+## Requested from the Git Log's "Uncommitted changes" row: "commit" focuses the message, "stash"/"revert" act on every change.
+func run_action(action: String) -> void:
+	match action:
+		"commit":
+			_commit_message.grab_focus()
+		"stash":
+			await _stash_dialog(PackedStringArray(), "")
+		"revert":
+			var paths: Array = _repo.get_status().filter(func(e: Dictionary) -> bool: return not e["status"] & GitStatusFlags.IGNORED).map(func(e: Dictionary) -> String: return e["path"])
+			if not paths.is_empty():
+				await _revert_paths(paths)
 
 
 func _on_stash_button_pressed() -> void:

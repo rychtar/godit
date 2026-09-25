@@ -483,7 +483,7 @@ func _gui_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		var row := int(event.position.y / ROW_HEIGHT)
-		if row < 0 or row >= _commits.size() or _commits[row]["oid"] == WORKTREE_OID:
+		if row < 0 or row >= _commits.size():
 			return
 		# Right-click inside a multi-selection keeps it (the menu acts on all of them).
 		if not _selected_rows.has(row):

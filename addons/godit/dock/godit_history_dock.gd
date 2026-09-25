@@ -12,7 +12,7 @@ var _repo: RefCounted
 var _tabs: TabContainer
 
 ## Forwarded from the Log panel; plugin.gd brings the Changes tab to front.
-signal changes_requested
+signal changes_requested(action: String)
 
 
 func _ready() -> void:
