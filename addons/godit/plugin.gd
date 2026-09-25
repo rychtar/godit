@@ -90,9 +90,9 @@ func _enter_tree() -> void:
 	tools_menu.add_check_item("Confirm Ctrl/Cmd+Enter commits", ID_CONFIRM_SHORTCUT_COMMIT)
 	tools_menu.add_check_item("Save open files before git operations without asking", ID_SAVE_BEFORE_GIT)
 	tools_menu.add_separator("Layout")
+	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (default; can float on a second monitor)", ID_LAYOUT_COMBINED)
 	tools_menu.add_radio_check_item("Git dock + Git Log at bottom", ID_LAYOUT_SEPARATE)
 	tools_menu.add_radio_check_item("Changes/Branches and Git Log at bottom", ID_LAYOUT_BOTTOM)
-	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (make it floating for a second monitor)", ID_LAYOUT_COMBINED)
 	_update_layout_items()
 	# Dialog buttons ("Don't ask again", "Always Save First") change these settings too, so re-read them on every open.
 	tools_menu.about_to_popup.connect(func() -> void:
@@ -313,8 +313,11 @@ func _apply_auto_save_setting() -> void:
 	EditorInterface.get_editor_settings().set_setting(AUTO_SAVE_EDITOR_SETTING, interval)
 
 
+## Combined on a fresh install; whoever toggled the old "at bottom" checkbox keeps what they had.
 func _dock_layout() -> String:
-	return Settings.get_value(DOCK_LAYOUT_SETTING_KEY, LAYOUT_BOTTOM if Settings.get_value(CHANGES_BOTTOM_DOCK_SETTING_KEY, false) else LAYOUT_SEPARATE)
+	var old_bottom: Variant = Settings.get_value(CHANGES_BOTTOM_DOCK_SETTING_KEY, null)
+	var fallback := LAYOUT_COMBINED if old_bottom == null else (LAYOUT_BOTTOM if old_bottom else LAYOUT_SEPARATE)
+	return Settings.get_value(DOCK_LAYOUT_SETTING_KEY, fallback)
 
 
 func _update_layout_items() -> void:
