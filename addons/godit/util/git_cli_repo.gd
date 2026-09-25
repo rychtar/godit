@@ -1167,6 +1167,54 @@ func _parent_count(oid: String) -> int:
 
 
 ## Moves the branch back one commit, keeping that commit's changes staged.
+## The latest thing that moved HEAD (per its reflog) and how to take it back: {"label": "Undo commit “Fix jump”", "mode": "soft"|"keep"|"checkout", "target": rev to go back to}, or {} when there's nothing to undo.
+## Entries that didn't move HEAD (a stash's "reset: moving to HEAD") are skipped; a finished rebase goes back to before its start.
+func last_head_operation() -> Dictionary:
+	var entries: Array = []
+	for line in GitCli.lines(GitCli.run(_repo_root, ["reflog", "-n", "200", "--format=%H" + US + "%gs"])["text"]):
+		var f := line.split(US)
+		if f.size() >= 2:
+			entries.append({ "oid": f[0], "subject": f[1] })
+	for i in entries.size() - 1:
+		var subject: String = entries[i]["subject"]
+		var action := subject.get_slice(": ", 0)
+		var detail := subject.substr(action.length() + 2).strip_edges()
+		var target: String = entries[i + 1]["oid"]
+		# A rebase's finish and a checkout -b to a new branch switch branches without moving HEAD's commit.
+		var switched := action.ends_with("(finish)") or action == "checkout" and detail.get_slice(" to ", 0) != "moving from " + detail.get_slice(" to ", 1)
+		if entries[i]["oid"] == target and not switched:
+			continue
+		if action.ends_with("(finish)"):
+			var start := action.replace("(finish)", "(start)")
+			for j in range(i + 1, entries.size() - 1):
+				if String(entries[j]["subject"]).begins_with(start):
+					target = entries[j + 1]["oid"]
+					break
+			return { "label": "Undo %s" % action.trim_suffix(" (finish)"), "mode": "keep", "target": target }
+		if action == "commit (initial)" or action.contains("(start)") or action.contains("(pick)") or action.contains("(continue)"):
+			return {} # nothing before the first commit; a rebase still in progress is aborted instead
+		if action == "commit (amend)":
+			return { "label": "Undo amend of “%s”" % detail, "mode": "soft", "target": target }
+		if action.begins_with("commit"):
+			return { "label": "Undo commit “%s”" % detail, "mode": "soft", "target": target }
+		if action == "checkout":
+			var from := detail.trim_prefix("moving from ").get_slice(" to ", 0)
+			return { "label": "Undo checkout of %s (back to %s)" % [detail.get_slice(" to ", 1), from], "mode": "checkout", "target": from }
+		if action == "cherry-pick" or action == "revert":
+			return { "label": "Undo %s “%s”" % [action, detail], "mode": "keep", "target": target }
+		return { "label": "Undo %s" % action, "mode": "keep", "target": target }
+	return {}
+
+
+## Takes back last_head_operation(): "soft" keeps the undone commit's changes staged, "keep" moves the branch back but refuses to overwrite local changes.
+func undo_head_operation(op: Dictionary) -> Dictionary:
+	match op.get("mode", ""):
+		"soft": return _simple(["reset", "--soft", op["target"]])
+		"keep": return _simple(["reset", "--keep", op["target"]])
+		"checkout": return _checkout(op["target"])
+	return { "ok": false, "error": "Nothing to undo.", "output": "" }
+
+
 func undo_last_commit() -> Dictionary:
 	if not has_parent("HEAD"):
 		return { "ok": false, "error": "This is the first commit — there's nothing before it to go back to.", "output": "" }

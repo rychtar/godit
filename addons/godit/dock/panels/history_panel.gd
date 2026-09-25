@@ -103,6 +103,9 @@ var _path_chip: HBoxContainer
 var _path_label: Label
 var _path_filter := ""
 var _count_label: Label
+var _undo_button: Button
+## last_head_operation() at the last refresh.
+var _undo_op: Dictionary = {}
 
 var _file_diff_box: VBoxContainer
 var _file_diff_label: Label
@@ -217,6 +220,12 @@ func _build_toolbar() -> void:
 	_count_label.modulate.a = 0.6
 	toolbar.add_child(_count_label)
 	toolbar.move_child(_count_label, toolbar.get_child_count() - 2)
+
+	_undo_button = Button.new()
+	_undo_button.text = "Undo"
+	_undo_button.pressed.connect(_on_undo_pressed)
+	toolbar.add_child(_undo_button)
+	toolbar.move_child(_undo_button, 1)
 
 	var columns_button := MenuButton.new()
 	columns_button.text = "Columns"
@@ -366,6 +375,7 @@ func refresh(status_entries: Variant = null) -> void:
 
 	var status: Array = status_entries if status_entries != null else _repo.get_status()
 	_graph.current_branch = _repo.get_current_branch()
+	_update_undo_button()
 	_last_refs_signature = _refs_signature()
 	_last_status_signature = _status_signature(status)
 	_stashes = _repo.list_stash_commits() if _path_filter.is_empty() and _stashes_check.button_pressed else []
@@ -398,6 +408,28 @@ func refresh(status_entries: Variant = null) -> void:
 ## Refs plus the stash reflog, which changes on drops that leave refs/stash alone.
 func _refs_signature() -> String:
 	return _repo.get_refs_signature() + FileAccess.get_file_as_string(_repo.get_common_dir().path_join("logs/refs/stash"))
+
+
+func _update_undo_button() -> void:
+	_undo_op = _repo.last_head_operation() if _repo.get_operation_state()["kind"].is_empty() else {}
+	_undo_button.disabled = _undo_op.is_empty()
+	_undo_button.tooltip_text = _undo_op.get("label", "Nothing to undo") + ("\n(the last git operation that moved HEAD: commit, checkout, merge, pull, rebase, reset…)" if not _undo_op.is_empty() else "")
+
+
+func _on_undo_pressed() -> void:
+	var op := _undo_op
+	if op.is_empty():
+		return
+	var what: String = {
+		"soft": "The commit goes away; its changes stay staged, so you can fix them and commit again.",
+		"keep": "The branch moves back to where it was before. Uncommitted changes are kept (git refuses if they'd be overwritten).",
+		"checkout": "Switches back to %s." % op["target"],
+	}[op["mode"]]
+	var warning := _pushed_warning(_repo.get_head_oid(), true) if op["mode"] != "checkout" else ""
+	if not await Dialogs.confirm(self, "Undo", "%s?\n\n%s%s" % [op["label"], what, warning], "Undo") \
+			or not await SaveGuard.ensure_saved(self, "Undo"):
+		return
+	_after_operation(_repo.undo_head_operation(op), "Undo")
 
 
 func _status_signature(status: Array) -> String:
