@@ -15,6 +15,7 @@ const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const FilesystemColorsScript := preload("res://addons/godit/dock/filesystem/filesystem_colors.gd")
 const FilesystemMenuScript := preload("res://addons/godit/dock/filesystem/filesystem_menu.gd")
 const CombinedDockScript := preload("res://addons/godit/dock/godit_combined_dock.gd")
+const RepoWatcherScript := preload("res://addons/godit/util/repo_watcher.gd")
 ##
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
@@ -40,6 +41,8 @@ var script_menu: EditorContextMenuPlugin
 var filesystem_colors: Node
 ## "Git" items in the FileSystem dock's right-click menu.
 var filesystem_menu: EditorContextMenuPlugin
+## Polls the repo for every panel; created before them, since they subscribe as they get their repo.
+var watcher: Node
 ## Project > Tools > Godit submenu, holding the auto-reload toggle.
 var tools_menu: PopupMenu
 
@@ -77,6 +80,8 @@ const ID_SAVE_BEFORE_GIT := 6
 
 func _enter_tree() -> void:
 	GitCli.prepare_environment()
+	watcher = RepoWatcherScript.new()
+	add_child(watcher)
 
 	tools_menu = PopupMenu.new()
 	tools_menu.add_check_item("Auto-reload files changed externally (no confirmation)", ID_AUTO_RELOAD)
@@ -161,13 +166,8 @@ func _queue_poll() -> void:
 	_poll_queued = true
 	(func() -> void:
 		_poll_queued = false
-		# Changes first: its fresh `git status` is then reused by the log.
-		if is_instance_valid(dock_instance):
-			dock_instance.poll_now()
-		if is_instance_valid(history_dock_instance):
-			history_dock_instance.poll_now()
-		if is_instance_valid(filesystem_colors):
-			filesystem_colors.refresh()
+		if is_instance_valid(watcher):
+			watcher.poll_now()
 	).call_deferred()
 
 
@@ -202,6 +202,7 @@ func _exit_tree() -> void:
 	filesystem_colors.free() # restores the dock's own colors on the way out
 	blame_gutter.disable()
 	blame_gutter.free()
+	watcher.free() # after the panels, which are subscribed to it
 
 	GitCli.restore_environment()
 

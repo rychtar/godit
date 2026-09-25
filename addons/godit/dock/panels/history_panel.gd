@@ -3,7 +3,7 @@ extends Control
 
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
-const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
@@ -33,7 +33,6 @@ const MERGE_MODES := {
 
 const DETAIL_PANE_RATIO := 1.0 / 3.0
 
-const AUTO_REFRESH_INTERVAL := 3.0
 
 ## Commits loaded at first, and added each time the list is scrolled to its end.
 const PAGE_SIZE := 300
@@ -85,10 +84,7 @@ var _context_oids := PackedStringArray()
 var _detail_oid := ""
 var _file_context_path := ""
 
-## Pauses while the panel is hidden or the editor is in the background.
-var _auto_refresh_timer: PollTimer
-
-## Refs + HEAD at the last refresh, so the auto-refresh timer only reloads the graph when history moved.
+## Refs + HEAD at the last refresh, so a poll only reloads the graph when history moved.
 var _last_refs_signature := ""
 ## `git status` output at the last refresh, so the "Uncommitted changes" row follows edits too.
 var _last_status_signature := ""
@@ -146,10 +142,6 @@ func _ready() -> void:
 			_limit += PAGE_SIZE
 			refresh.call_deferred()
 	)
-
-	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
-	_auto_refresh_timer.poll.connect(_maybe_refresh)
-	add_child(_auto_refresh_timer)
 
 
 func _build_toolbar() -> void:
@@ -304,8 +296,7 @@ func set_repo(repo: RefCounted) -> void:
 	_repo = repo
 	_update_branch_option()
 	refresh()
-	if _auto_refresh_timer != null:
-		_auto_refresh_timer.active = true
+	RepoWatcher.watch(self, _on_polled)
 
 
 ## Limits the log to commits touching path ("" = no filter) — the Changes panel's "Show History".
@@ -351,19 +342,12 @@ func _update_branch_option() -> void:
 		_branch_option.select(0)
 
 
-## Checks right away instead of on the next tick, e.g. after a save in the editor.
-func poll_now() -> void:
-	_maybe_refresh(true)
-
-
-## Reloads the graph only when a ref or HEAD moved — one cheap for-each-ref instead of a full log per tick.
-func _maybe_refresh(fresh_status := false) -> void:
-	if _repo == null or _repo.is_busy():
+## Reloads the graph only when a ref, HEAD or the uncommitted files changed; hidden, it waits for the poll that comes with being shown.
+func _on_polled(snapshot: Dictionary) -> void:
+	if _repo == null or _repo.is_busy() or not is_visible_in_tree():
 		return
-	# The Changes panel polls `git status` on the same interval; reuse its result when it's that fresh.
-	# fresh_status still takes a status the Changes panel fetched a moment ago for the same save.
-	var status: Array = _repo.get_recent_status(250 if fresh_status else int(AUTO_REFRESH_INTERVAL * 1000.0) + 500)
-	if _refs_signature(int(AUTO_REFRESH_INTERVAL * 1000.0) - 500) == _last_refs_signature and _status_signature(status) == _last_status_signature:
+	var status: Array = _repo.parse_status(snapshot["status"])
+	if _refs_signature(snapshot) == _last_refs_signature and _status_signature(status) == _last_status_signature:
 		return
 	_update_branch_option()
 	refresh(status)
@@ -377,7 +361,7 @@ func refresh(status_entries: Variant = null) -> void:
 	var status: Array = status_entries if status_entries != null else _repo.get_status()
 	_graph.current_branch = _repo.get_current_branch()
 	_update_undo_button()
-	_last_refs_signature = _refs_signature()
+	_last_refs_signature = _refs_signature(_repo.read_snapshot())
 	_last_status_signature = _status_signature(status)
 	_stashes = _repo.list_stash_commits() if _path_filter.is_empty() and _stashes_check.button_pressed else []
 	_worktree_files = status.filter(func(e: Dictionary) -> bool:
@@ -407,8 +391,8 @@ func refresh(status_entries: Variant = null) -> void:
 
 
 ## Refs plus the stash reflog, which changes on drops that leave refs/stash alone.
-func _refs_signature(max_age_msec := 0) -> String:
-	return _repo.get_refs_signature(max_age_msec) + FileAccess.get_file_as_string(_repo.get_common_dir().path_join("logs/refs/stash"))
+func _refs_signature(snapshot: Dictionary) -> String:
+	return snapshot["refs"] + snapshot["stash_log"]
 
 
 func _update_undo_button() -> void:

@@ -64,12 +64,6 @@ func reattach_panels() -> void:
 		_tabs.add_child(_console)
 
 
-## Called by plugin.gd after a save in the editor.
-func poll_now() -> void:
-	if _repo != null and _history_panel.is_visible_in_tree():
-		_history_panel.poll_now()
-
-
 ## Brings the Log tab to front with oid selected.
 func show_commit(oid: String) -> void:
 	if _repo == null:

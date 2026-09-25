@@ -3,7 +3,7 @@ extends Control
 
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
-const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
@@ -64,7 +64,6 @@ signal file_history_requested(path: String)
 ## After every refresh: how many changed and new files there are (the combined dock's File Status badge).
 signal changes_counted(count: int)
 
-const AUTO_REFRESH_INTERVAL := 3.0
 
 ## ChangesTree has two columns: the checkbox needs its own narrow column,
 ## since Godot toggles a CELL_MODE_CHECK cell on any click anywhere inside
@@ -119,8 +118,6 @@ var _name_dialog_rename_target := ""
 ## Which action _revert_confirm_dialog is currently being used for: "revert" or "remove".
 var _confirm_dialog_action := "revert"
 
-## Pauses while the panel is hidden or the editor is in the background.
-var _auto_refresh_timer: PollTimer
 ## Changed + new files at the last refresh (see changes_counted).
 var change_count := 0
 var _operation_bar: HBoxContainer
@@ -141,9 +138,7 @@ var _diff_side_by_path := {}
 ## Which side the diff view is showing right now ("unstaged"/"staged"), so Revert knows where the hunk lives.
 var _diff_side := "unstaged"
 
-## Signature of the last-seen `git status` (see _status_signature()) — lets
-## the auto-refresh timer skip rebuilding the tree when nothing changed,
-## which would otherwise reset scroll position and selection every tick.
+## Signature of the last-seen `git status`, so a poll only rebuilds the tree (losing scroll and selection) when something changed.
 var _last_status_signature := ""
 ## Changed files' mtimes at the last check: a re-saved file keeps its status, so only this reveals that its diff is stale.
 var _last_content_signature := ""
@@ -204,10 +199,6 @@ func _ready() -> void:
 	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push\nUp/Down in an empty box: your previous messages"
 	_build_recent_messages_button()
 
-	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
-	_auto_refresh_timer.poll.connect(_maybe_refresh)
-	add_child(_auto_refresh_timer)
-
 
 func _exit_tree() -> void:
 	if _repo == null or _changelist_state.is_empty() or _amend_check.button_pressed:
@@ -228,8 +219,7 @@ func set_repo(repo: RefCounted) -> void:
 	_commit_message.text = _changelist_state["messages"].get(_changelist_state["active"], "")
 	_sync_staging_to_active_changelist()
 	refresh()
-	if _auto_refresh_timer != null:
-		_auto_refresh_timer.active = true
+	RepoWatcher.watch(self, _on_polled)
 
 
 ## Hands the branch/Fetch/Pull/Push header to the combined dock, which shows it above every view.
@@ -246,16 +236,15 @@ func reattach_sync_bar() -> void:
 	$Layout.move_child(_sync_bar, 0)
 
 
-## Re-fetches status and only calls refresh() — which rebuilds the tree from
-## scratch — if something actually changed since the last check.
-func _maybe_refresh() -> void:
-	if _repo == null:
-		return
-	if _repo.is_busy():
+## Rebuilds the tree only when the status changed, hidden too (the change count, toolbar and auto-staging stay current); re-shows the diff when a changed file was saved again.
+func _on_polled(snapshot: Dictionary) -> void:
+	if _repo == null or _repo.is_busy():
 		return # a pull/push is rewriting things right now — catch up once it's done
-	var entries: Array = _repo.get_status()
+	var entries: Array = _repo.parse_status(snapshot["status"])
 	if _status_signature(entries) != _last_status_signature:
 		refresh(entries)
+		return
+	if not is_visible_in_tree():
 		return
 	var content := _content_signature(entries)
 	if content != _last_content_signature:
@@ -280,8 +269,7 @@ func _status_signature(entries: Array) -> String:
 	return "|".join(parts)
 
 
-## status_entries lets callers that already fetched `git status` (e.g.
-## _maybe_refresh()) pass it along instead of fetching it twice.
+## status_entries: a get_status() result the caller already has, to skip fetching it again.
 func refresh(status_entries: Variant = null) -> void:
 	if _repo == null:
 		return

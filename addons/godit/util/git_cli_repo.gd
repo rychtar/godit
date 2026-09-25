@@ -15,6 +15,10 @@ const US := GitCli.US
 ## Porcelain XY codes for unmerged paths (both sides touched the file, or one deleted what the other changed).
 const CONFLICT_CODES := ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]
 
+## No optional locks: a poll mustn't hold index.lock while the user runs git in a terminal.
+const STATUS_ARGS := ["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=all"]
+const REFS_ARGS := ["for-each-ref", "--format=%(refname) %(objectname)"]
+
 var _repo_root: String = ""
 ## "## branch...upstream [ahead n, behind m]" line from the last get_status().
 var status_header := ""
@@ -40,11 +44,14 @@ func get_repo_root() -> String:
 
 
 func get_status() -> Array:
-	# No optional locks: a poll mustn't hold index.lock while the user runs git in a terminal.
-	var result := GitCli.run(_repo_root, ["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=all"])
+	return parse_status(GitCli.run(_repo_root, STATUS_ARGS)["text"])
+
+
+## Entries from STATUS_ARGS output (e.g. a RepoWatcher snapshot's "status"); also sets status_header.
+func parse_status(text: String) -> Array:
 	var entries: Array = []
 	status_header = ""
-	for line in GitCli.lines(result["text"]):
+	for line in GitCli.lines(text):
 		if line.begins_with("## "):
 			status_header = line
 			continue
@@ -63,21 +70,7 @@ func get_status() -> Array:
 			"status": _status_bits(xy),
 			"renamed_from": renamed_from,
 		})
-	_status_cache[_repo_root] = { "msec": Time.get_ticks_msec(), "entries": entries.duplicate(true), "header": status_header }
 	return entries
-
-
-## Last get_status() result of any repo instance on this root (the two docks each open their own) if at most max_age_msec old, else a fresh one — lets pollers share one `git status`.
-func get_recent_status(max_age_msec: int) -> Array:
-	var cached: Dictionary = _status_cache.get(_repo_root, {})
-	if cached.is_empty() or Time.get_ticks_msec() - int(cached["msec"]) > max_age_msec:
-		return get_status()
-	status_header = cached["header"]
-	return cached["entries"].duplicate(true)
-
-
-## repo root -> {"msec", "entries", "header"} of the latest get_status(), for get_recent_status().
-static var _status_cache := {}
 
 
 ## Maps porcelain v1's two-letter XY status into GitStatusFlags' bitmask.
@@ -1085,18 +1078,28 @@ func read_head_oid() -> String:
 	return head if head.length() >= 40 and not head.contains(" ") else get_head_oid()
 
 
-## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved; shared by all instances on this root while at most max_age_msec old.
-func get_refs_signature(max_age_msec := 0) -> String:
-	var cached: Dictionary = _refs_cache.get(_repo_root, {})
-	if not cached.is_empty() and Time.get_ticks_msec() - int(cached["msec"]) <= max_age_msec:
-		return cached["text"]
-	var text: String = GitCli.run(_repo_root, ["for-each-ref", "--format=%(refname) %(objectname)"])["text"] + _read_small(get_git_dir().path_join("HEAD")) + read_head_oid()
-	_refs_cache[_repo_root] = { "msec": Time.get_ticks_msec(), "text": text }
-	return text
+## The refs, config and stash reflog parts of a RepoWatcher snapshot, read now; with_status adds `git status` too.
+func read_snapshot(with_status := false) -> Dictionary:
+	return snapshot_of(_repo_root, get_git_dir(), get_common_dir(), with_status)
 
 
-## repo root -> {"msec", "text"} of the latest get_refs_signature().
-static var _refs_cache := {}
+## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved. Static and free of static vars, so RepoWatcher can run it on a worker thread.
+static func refs_signature_of(root: String, git_dir: String) -> String:
+	return GitCli.execute("git", GitCli.argv(root, REFS_ARGS))["out"].get_string_from_utf8() + read_text(git_dir.path_join("HEAD"))
+
+
+## {"status" (raw STATUS_ARGS output, "" without with_status), "refs", "config", "stash_log"}; worker-thread safe like refs_signature_of().
+static func snapshot_of(root: String, git_dir: String, common_dir: String, with_status: bool) -> Dictionary:
+	return {
+		"status": GitCli.execute("git", GitCli.argv(root, STATUS_ARGS))["out"].get_string_from_utf8() if with_status else "",
+		"refs": refs_signature_of(root, git_dir),
+		"config": read_text(common_dir.path_join("config")),
+		"stash_log": read_text(common_dir.path_join("logs/refs/stash")),
+	}
+
+
+static func read_text(path: String) -> String:
+	return FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 
 
 func is_ancestor_of_head(oid: String) -> bool:
