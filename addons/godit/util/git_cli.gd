@@ -1,12 +1,9 @@
-## Thin wrapper around OS.execute() for running `git` in a given repo root.
+## Thin wrapper around OS.execute_with_pipe() for running `git` in a given repo root.
 ## No class_name: internal helper, addressed via preload (see
 ## git_status_flags.gd for why).
 extends RefCounted
 
-## Record/unit separators for parsing multi-field git log output (see
-## git_cli_repo.gd). Git's usual -z (NUL) delimiter doesn't survive
-## OS.execute's output capture — the string truncates at the first NUL
-## byte — so these control characters are used instead.
+## Record/unit separators for multi-field git log output, instead of -z's NUL, which the String output would truncate at.
 const RS := "\u001e"
 const US := "\u001f"
 
@@ -30,26 +27,15 @@ static var _saved_env: Dictionary = {}
 static var _active_jobs: Array = []
 
 
-## Runs `git <args>` in repo_root, returning {"exit_code": int, "text":
-## String}. OS.execute passes args directly as argv (no shell), so nothing
-## needs escaping.
-##
-## include_stderr=true merges stderr into "text" — use it for mutating
-## commands where a failure's error text matters (commit, checkout,
-## branch, reset, push). Leave it false for read-only commands whose
-## stdout gets parsed, since git sometimes writes chatter to stderr even
-## on success. Mutating (include_stderr) calls are also recorded in command_log.
+## Runs `git <args>` in repo_root: {"exit_code", "text"}. include_stderr appends stderr (and logs to command_log) — for mutating commands whose error text matters; parsed read-only output leaves it off.
 static func run(repo_root: String, args: Array, include_stderr: bool = false) -> Dictionary:
-	var full_args: PackedStringArray = PackedStringArray(["-C", repo_root])
-	for a in args:
-		full_args.append(a)
-
-	var output: Array = []
-	var exit_code := OS.execute("git", full_args, output, include_stderr, false)
-	var text: String = output[0] if not output.is_empty() else ""
+	var result := execute("git", argv(repo_root, args))
+	var text: String = result["out"].get_string_from_utf8()
 	if include_stderr:
-		record(args, exit_code, text)
-	return { "exit_code": exit_code, "text": text }
+		var err: String = result["err"].get_string_from_utf8()
+		text += ("\n" if not text.is_empty() and not text.ends_with("\n") and not err.is_empty() else "") + err
+		record(args, result["exit_code"], text)
+	return { "exit_code": result["exit_code"], "text": text }
 
 
 ## Starts `git <args>` on a worker thread and returns a Job; `await job.finished` yields the same {"exit_code", "text", "cancelled"} shape as run() (stderr always included). For network operations, which would otherwise freeze the editor.
@@ -61,7 +47,7 @@ static func start(repo_root: String, args: Array, log_to_console := true) -> Job
 			record(args, result["exit_code"], result["text"])
 	)
 	_active_jobs.append(job)
-	job.start(repo_root, args)
+	job.start(argv(repo_root, args))
 	return job
 
 
@@ -72,25 +58,52 @@ static func shutdown() -> void:
 	_active_jobs.clear()
 
 
-## Like run(), but returns stdout as raw bytes (binary-safe — OS.execute's output is a String), e.g. for image blobs.
+## Like run(), but returns stdout as raw bytes, e.g. for image blobs.
 static func run_bytes(repo_root: String, args: Array) -> PackedByteArray:
-	var full_args := PackedStringArray(["-C", repo_root])
-	full_args.append_array(PackedStringArray(args))
-	var info := OS.execute_with_pipe("git", full_args, true)
+	return execute("git", argv(repo_root, args))["out"]
+
+
+## Runs program with argv passed straight through: {"exit_code", "out", "err"} as bytes. OS.execute() with output goes through `sh -c` on macOS/Linux with args only wrapped in "…", so quotes break it and $() or backticks in a message or file name would run.
+static func execute(program: String, args: PackedStringArray) -> Dictionary:
+	var info := OS.execute_with_pipe(program, args, true)
 	if info.is_empty():
-		return PackedByteArray()
-	var stdio: FileAccess = info["stdio"]
+		return { "exit_code": -1, "out": PackedByteArray(), "err": PackedByteArray() }
+	var stderr: FileAccess = info["stderr"]
+	# Both pipes drained at once, so a chatty stderr can't fill up and stall the process.
+	var err_thread := Thread.new()
+	err_thread.start(func() -> PackedByteArray: return _read_all(stderr))
+	var out := _read_all(info["stdio"])
+	var err: PackedByteArray = err_thread.wait_to_finish()
+	var pid: int = info["pid"]
+	while OS.is_process_running(pid):
+		OS.delay_usec(100)
+	return { "exit_code": OS.get_process_exit_code(pid), "out": out, "err": err }
+
+
+## Reads a blocking pipe until the process closes it.
+static func _read_all(pipe: FileAccess) -> PackedByteArray:
 	var bytes := PackedByteArray()
-	while stdio.is_open():
-		var chunk := stdio.get_buffer(65536)
+	while pipe.is_open():
+		var chunk := pipe.get_buffer(65536)
 		if chunk.is_empty():
 			break
 		bytes.append_array(chunk)
-	stdio.close()
-	(info["stderr"] as FileAccess).close()
-	while OS.is_process_running(info["pid"]):
-		OS.delay_msec(1)
+	pipe.close()
 	return bytes
+
+
+## Full argv for `git <args>` in repo_root; quotePath off so non-ASCII paths come out as UTF-8, not "\304\215" escapes.
+static func argv(repo_root: String, args: Array) -> PackedStringArray:
+	var full_args := PackedStringArray(["-C", repo_root, "-c", "core.quotePath=false"])
+	full_args.append_array(PackedStringArray(args))
+	return full_args
+
+
+## Undoes git's C-style quoting of a path ("a b.txt" in status, "q\"x.txt" everywhere); unquoted paths pass through.
+static func unquote(path: String) -> String:
+	if path.length() >= 2 and path.begins_with("\"") and path.ends_with("\""):
+		return path.substr(1, path.length() - 2).c_unescape()
+	return path
 
 
 static func record(args: Array, exit_code: int, text: String) -> void:
@@ -111,6 +124,14 @@ static func lines(text: String) -> PackedStringArray:
 	for line in text.split("\n"):
 		if not line.is_empty():
 			result.append(line)
+	return result
+
+
+## Lines of --name-only style output, unquoted.
+static func paths(text: String) -> PackedStringArray:
+	var result := lines(text)
+	for i in result.size():
+		result[i] = unquote(result[i])
 	return result
 
 
@@ -147,7 +168,7 @@ class Job:
 	## Latest progress line from git's stderr ("Receiving objects:  45% (9/20)"), for commands run with --progress.
 	signal progress(text: String)
 
-	var args: PackedStringArray
+	var _argv: PackedStringArray
 	var is_running := false
 	var _thread: Thread
 	var _pid := -1
@@ -157,11 +178,11 @@ class Job:
 	var _mutex := Mutex.new()
 
 
-	func start(repo_root: String, command_args: Array) -> void:
-		args = PackedStringArray(command_args)
+	func start(full_argv: PackedStringArray) -> void:
+		_argv = full_argv
 		is_running = true
 		_thread = Thread.new()
-		_thread.start(_run.bind(repo_root))
+		_thread.start(_run)
 
 
 	func cancel() -> void:
@@ -200,10 +221,8 @@ class Job:
 		is_running = false
 
 
-	func _run(repo_root: String) -> void:
-		var full_args := PackedStringArray(["-C", repo_root])
-		full_args.append_array(args)
-		var info := OS.execute_with_pipe("git", full_args, true)
+	func _run() -> void:
+		var info := OS.execute_with_pipe("git", _argv, true)
 		if info.is_empty():
 			_finish.call_deferred({ "exit_code": -1, "text": "Couldn't start `git` — is it on PATH?", "cancelled": false })
 			return

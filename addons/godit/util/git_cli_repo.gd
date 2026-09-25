@@ -51,12 +51,12 @@ func get_status() -> Array:
 			continue
 		var xy := line.substr(0, 2)
 		var rest := line.substr(3)
-		var path := rest
+		var path := GitCli.unquote(rest)
 		var renamed_from := ""
 		var arrow := rest.find(" -> ")
 		if arrow != -1:
-			renamed_from = rest.substr(0, arrow)
-			path = rest.substr(arrow + 4)
+			renamed_from = GitCli.unquote(rest.substr(0, arrow))
+			path = GitCli.unquote(rest.substr(arrow + 4))
 		entries.append({
 			"path": path,
 			"status": _status_bits(xy),
@@ -589,9 +589,9 @@ func incoming_overlap(local_paths: Array) -> Dictionary:
 	if key != _overlap_key:
 		_overlap_key = key
 		_incoming_files = {}
-		for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "HEAD...@{upstream}"])["text"]):
+		for path in GitCli.paths(GitCli.run(_repo_root, ["diff", "--name-only", "HEAD...@{upstream}"])["text"]):
 			_incoming_files[path] = true
-		_outgoing_files = Array(GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "@{upstream}...HEAD"])["text"]))
+		_outgoing_files = Array(GitCli.paths(GitCli.run(_repo_root, ["diff", "--name-only", "@{upstream}...HEAD"])["text"]))
 	var overlap := {}
 	for path in local_paths:
 		if _incoming_files.has(path):
@@ -806,7 +806,7 @@ func get_merge_message() -> String:
 ## Repo-relative paths git still considers unmerged.
 func list_conflicts() -> PackedStringArray:
 	var r := GitCli.run(_repo_root, ["diff", "--name-only", "--diff-filter=U"])
-	return GitCli.lines(r["text"])
+	return GitCli.paths(r["text"])
 
 
 ## Finishes the in-progress operation once all conflicts are resolved (a merge is concluded with its prepared message).
@@ -1120,10 +1120,9 @@ func stash_untracked_rev(ref: String) -> String:
 func current_path(oid: String, path: String) -> String:
 	if FileAccess.file_exists(_repo_root.path_join(path)):
 		return path
-	for line in GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-status", "-M", oid])["text"]):
-		var fields := line.split("\t")
-		if fields.size() >= 3 and fields[0].begins_with("R") and fields[1] == path:
-			return fields[2]
+	for entry in _parse_name_status(GitCli.run(_repo_root, ["diff", "--name-status", "-M", oid])["text"]):
+		if entry.get("old_path", "") == path and entry["status"] == GitIcons.DELTA_RENAMED:
+			return entry["path"]
 	return ""
 
 
@@ -1144,7 +1143,7 @@ func has_staged_changes() -> bool:
 ## Staged added/modified files bigger than limit_bytes that Git LFS doesn't already take care of: [{"path", "size"}].
 func large_staged_files(limit_bytes: int) -> Array:
 	var large: Array = []
-	for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=AM"])["text"]):
+	for path in GitCli.paths(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=AM"])["text"]):
 		var f := FileAccess.open(_repo_root.path_join(path), FileAccess.READ)
 		if f != null and f.get_length() > limit_bytes:
 			large.append({ "path": path, "size": f.get_length() })
@@ -1154,7 +1153,7 @@ func large_staged_files(limit_bytes: int) -> Array:
 	var attrs: String = GitCli.run(_repo_root, ["check-attr", "filter", "--"] + large.map(func(e: Dictionary) -> String: return e["path"]))["text"]
 	for line in GitCli.lines(attrs):
 		if line.ends_with(": filter: lfs"):
-			lfs[line.trim_suffix(": filter: lfs")] = true
+			lfs[GitCli.unquote(line.trim_suffix(": filter: lfs"))] = true
 	return large.filter(func(e: Dictionary) -> bool: return not lfs.has(e["path"]))
 
 
@@ -1345,10 +1344,10 @@ func get_commit_files(oid: String) -> Array:
 func _parse_name_status(text: String) -> Array:
 	var entries: Array = []
 	for line in GitCli.lines(text):
-		var fields := line.split("\t")
+		var fields := Array(line.split("\t")).map(func(f: String) -> String: return GitCli.unquote(f))
 		if fields.size() < 2:
 			continue
-		var letter := fields[0].substr(0, 1) # strip the similarity score off R100/C100
+		var letter: String = fields[0].substr(0, 1) # strip the similarity score off R100/C100
 		var path: String = fields[2] if (letter == "R" or letter == "C") and fields.size() > 2 else fields[1]
 		var entry := { "path": path, "status": _delta_status(letter) }
 		if letter == "R" or letter == "C":

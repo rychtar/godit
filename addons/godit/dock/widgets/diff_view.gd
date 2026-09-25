@@ -3,6 +3,7 @@ extends VBoxContainer
 
 const HUNK_HEADER_PATTERN := "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@(.*)$"
 const DiffHunks := preload("res://addons/godit/util/diff_hunks.gd")
+const GitCli := preload("res://addons/godit/util/git_cli.gd")
 const SyntaxColors := preload("res://addons/godit/util/syntax_colors.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
@@ -571,6 +572,7 @@ static func _line_row(type: String, old_no: int, new_no: int, text: String, hl: 
 
 
 static func _strip_ab_prefix(path: String) -> String:
+	path = GitCli.unquote(path)
 	if path.begins_with("a/") or path.begins_with("b/"):
 		return path.substr(2)
 	return path

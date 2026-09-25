@@ -112,9 +112,8 @@ class _ProgramRun:
 
 	func start(program: String, args: Array) -> void:
 		_thread.start(func() -> void:
-			var output: Array = []
-			var code := OS.execute(program, PackedStringArray(args), output, true, false)
-			_done.call_deferred(code, output[0] if not output.is_empty() else "")
+			var r := GitCli.execute(program, PackedStringArray(args))
+			_done.call_deferred(r["exit_code"], (r["out"] + r["err"]).get_string_from_utf8())
 		)
 
 
