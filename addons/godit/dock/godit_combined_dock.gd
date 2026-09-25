@@ -26,6 +26,8 @@ var _layout: VBoxContainer
 var _sidebar: VBoxContainer
 ## A darker background with a line on the right, setting the sidebar apart from the view.
 var _sidebar_panel: PanelContainer
+## The branch/Fetch/Pull/Push bar across the top, padded like the sidebar and underlined like its edge.
+var _toolbar: PanelContainer
 var _buttons: BoxContainer
 var _views: TabContainer
 var _view_buttons := {}
@@ -51,7 +53,10 @@ func _init(panels: Dictionary) -> void:
 	add_child(_layout)
 	_sync_bar = panels["changes"].detach_sync_bar()
 	_sync_bar.set_actions_first(true)
-	_layout.add_child(_sync_bar)
+	_layout.add_theme_constant_override("separation", 0) # toolbar line, sidebar edge and views meet
+	_toolbar = PanelContainer.new()
+	_toolbar.add_child(_sync_bar)
+	_layout.add_child(_toolbar)
 	panels["branches"].set_sidebar_mode(true)
 	panels["branches"].ref_selected.connect(_on_ref_selected)
 
@@ -133,19 +138,31 @@ func _notification(what: int) -> void:
 		if has_theme_icon(VIEW_ICONS[view], &"EditorIcons"):
 			_view_buttons[view].icon = get_theme_icon(VIEW_ICONS[view], &"EditorIcons")
 		_style_view_button(_view_buttons[view])
-	_style_sidebar_panel()
+	_style_panels()
 	var small := int(get_theme_font_size(&"font_size", &"Label") * 0.85)
 	for header in _headers:
 		header.add_theme_font_size_override("font_size", small)
 
 
-func _style_sidebar_panel() -> void:
+func _style_panels() -> void:
+	var line_color := Color(get_theme_color(&"font_color", &"Label"), 0.15)
+	var line_width := int(maxf(1.0, UiScale.px(1)))
+	var bar := StyleBoxFlat.new()
+	bar.bg_color = Color(0, 0, 0, 0)
+	bar.border_color = line_color
+	bar.border_width_bottom = line_width
+	bar.content_margin_left = UiScale.px(4)
+	bar.content_margin_right = UiScale.px(4)
+	bar.content_margin_top = UiScale.px(4)
+	bar.content_margin_bottom = UiScale.px(4)
+	_toolbar.add_theme_stylebox_override("panel", bar)
+
 	# The darker background of the script editor's file and method lists, taken from the current editor theme.
 	var list_panel: StyleBox = get_theme_stylebox(&"panel", &"ItemListSecondary") if has_theme_stylebox(&"panel", &"ItemListSecondary") else null
 	var style := StyleBoxFlat.new()
 	style.bg_color = (list_panel as StyleBoxFlat).bg_color if list_panel is StyleBoxFlat else get_theme_color(&"dark_color_3", &"Editor")
-	style.border_color = Color(get_theme_color(&"font_color", &"Label"), 0.15)
-	style.border_width_right = int(maxf(1.0, UiScale.px(1)))
+	style.border_color = line_color
+	style.border_width_right = line_width
 	style.content_margin_top = UiScale.px(4)
 	style.content_margin_left = UiScale.px(4)
 	style.content_margin_right = UiScale.px(4)
@@ -203,7 +220,7 @@ func _set_wide(wide: bool) -> void:
 		branches.visible = true # a TabContainer hid it as a background tab
 	else:
 		_layout.add_child(_buttons)
-		_layout.move_child(_buttons, 1)
+		_layout.move_child(_buttons, _toolbar.get_index() + 1)
 		_views.add_child(branches)
 	_sidebar_panel.visible = wide
 	show_view("changes" if wide and _view == "branches" else _view)
