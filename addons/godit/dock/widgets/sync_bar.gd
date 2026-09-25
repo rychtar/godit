@@ -130,6 +130,7 @@ func set_toolbar_mode(on: bool) -> void:
 	var row := get_child(0)
 	_branch_button.visible = not on
 	row.move_child(_upstream_label, row.get_child_count() - 1 if on else 1)
+	refresh()
 
 
 ## Hides the branch/Fetch/Pull/Push row but keeps the progress strip, for the Branches sidebar under the combined dock's shared row.
@@ -156,8 +157,12 @@ func refresh() -> void:
 		parts.append("not published yet")
 	else:
 		parts.append("→ " + s["upstream"] + ("  ✓ up to date" if s["ahead"] == 0 and s["behind"] == 0 else ""))
+	if not _branch_button.visible and not detached:
+		parts.push_front(s["branch"]) # toolbar mode: the switcher that names it is hidden
 	_upstream_label.text = " · ".join(parts)
 	_upstream_label.tooltip_text = _upstream_label.text
+	if not detached and s["upstream"].is_empty():
+		_upstream_label.tooltip_text += "\n%s exists only here, no remote branch tracks it. Push publishes it and sets that up." % s["branch"]
 
 	_pull_button.text = "Pull ↓%d" % s["behind"] if s["behind"] > 0 else "Pull"
 	_pull_button.tooltip_text = "Fetch and integrate %s's upstream%s" % [s["branch"], " (%d new commit%s)" % [s["behind"], "" if s["behind"] == 1 else "s"] if s["behind"] > 0 else ""]
