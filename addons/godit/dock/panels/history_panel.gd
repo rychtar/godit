@@ -8,6 +8,7 @@ const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
@@ -40,11 +41,11 @@ const PAGE_SIZE := 300
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT, ID_RESET_TO_HERE,
 	ID_CREATE_TAG, ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT, ID_REVERT_COMMIT, ID_COMPARE_WORKTREE,
-	ID_COMPARE_SELECTED, ID_REWORD, ID_FIXUP, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES,
+	ID_COMPARE_SELECTED, ID_REWORD, ID_FIXUP, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES, ID_OPEN_ON_WEB,
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
-enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH }
+enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB }
 
 @onready var _search_edit: LineEdit = %SearchEdit
 var _search_mode: OptionButton
@@ -730,6 +731,7 @@ func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_in
 		_file_menu.reset_size()
 		_file_menu.popup()
 		return
+	_add_web_item(_file_menu, ID_FILE_OPEN_ON_WEB, _detail_oid)
 	_file_menu.add_separator()
 	_file_menu.add_item("Restore File to This Commit's Version…", ID_FILE_RESTORE_THIS)
 	_file_menu.add_item("Restore File to Before This Commit…", ID_FILE_RESTORE_BEFORE)
@@ -748,6 +750,8 @@ func _on_file_menu_id_pressed(id: int) -> void:
 			set_path_filter(path)
 		ID_FILE_COPY_PATH:
 			DisplayServer.clipboard_set(path)
+		ID_FILE_OPEN_ON_WEB:
+			OS.shell_open(WebLinks.file_url(WebLinks.site(_repo), _detail_oid, path))
 		ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE:
 			var rev := _detail_oid if id == ID_FILE_RESTORE_THIS else _detail_oid + "^"
 			var label := "as of %s" % _detail_oid.substr(0, 7) if id == ID_FILE_RESTORE_THIS else "as it was before %s" % _detail_oid.substr(0, 7)
@@ -786,6 +790,8 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 	m.clear()
 	m.add_item("Copy Commit Hash%s" % ("es" if many else ""), ID_COPY_HASH)
 	m.add_item("Copy Commit Message", ID_COPY_MESSAGE)
+	if not many:
+		_add_web_item(m, ID_OPEN_ON_WEB, oid)
 	m.add_separator()
 	if not many:
 		m.add_item("Show Changes…", ID_SHOW_CHANGES)
@@ -825,6 +831,17 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 	m.position = screen_position
 	m.reset_size()
 	m.popup()
+
+
+## "Open on GitHub" (or GitLab/Bitbucket) for oid, disabled until it's pushed; nothing for other hosts.
+func _add_web_item(menu: PopupMenu, id: int, oid: String) -> void:
+	var site := WebLinks.site(_repo)
+	if site.is_empty():
+		return
+	menu.add_item("Open on %s" % site["name"], id)
+	if not WebLinks.is_pushed(_repo, oid):
+		menu.set_item_disabled(menu.get_item_index(id), true)
+		menu.set_item_tooltip(menu.get_item_index(id), "Not pushed yet")
 
 
 func _show_worktree_menu(screen_position: Vector2) -> void:
@@ -881,6 +898,8 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			changes_requested.emit("revert")
 		ID_COPY_HASH:
 			DisplayServer.clipboard_set("\n".join(_context_oids) if _context_oids.size() > 1 else _context_oid)
+		ID_OPEN_ON_WEB:
+			OS.shell_open(WebLinks.commit_url(WebLinks.site(_repo), _context_oid))
 		ID_COPY_MESSAGE:
 			if _commits_by_oid.has(_context_oid):
 				var c: Dictionary = _commits_by_oid[_context_oid]

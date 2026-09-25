@@ -13,6 +13,7 @@ A git client inside the Godot editor. Stage, commit, switch branches and browse 
 - **Git Log**: commit graph with search, cherry-pick and history editing.
 - **Conflict resolver**: pick Ours, Theirs or both, side by side.
 - **Script editor**: changed lines in the gutter with one-click rollback, plus optional blame.
+- **GitHub, GitLab, Bitbucket**: open a commit, file line or branch in the browser, or start a pull request.
 - **FileSystem dock**: changed, new and conflicted files are colored; right-click for history, revert, add or ignore.
 
 ## Install

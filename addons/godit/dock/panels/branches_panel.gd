@@ -9,6 +9,7 @@ const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
+const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 
 const AUTO_REFRESH_INTERVAL := 3.0
@@ -19,6 +20,7 @@ enum {
 	ID_PUSH_TAG, ID_DELETE_TAG, ID_DELETE_REMOTE_TAG, ID_FETCH_REMOTE, ID_EDIT_REMOTE_URL,
 	ID_RENAME_REMOTE, ID_REMOVE_REMOTE, ID_ADD_REMOTE, ID_FETCH_PRUNE, ID_NEW_TAG,
 	ID_COMPARE, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_SHOW, ID_STASH_BRANCH,
+	ID_OPEN_ON_WEB, ID_PULL_REQUEST,
 }
 
 ## Opens the changeset dialog, wired up by godit_dock.gd: (title, base_ref, target_ref). target "" means the working tree.
@@ -362,6 +364,10 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("Set Upstream…", ID_SET_UPSTREAM)
 			if not meta["upstream"].is_empty():
 				m.add_item("Unset Upstream", ID_UNSET_UPSTREAM)
+				var site := WebLinks.site(_repo, String(meta["upstream"]).get_slice("/", 0))
+				if not site.is_empty():
+					m.add_item("Open on %s" % site["name"], ID_OPEN_ON_WEB)
+					m.add_item("Create %s on %s…" % ["Merge Request" if site["kind"] == "gitlab" else "Pull Request", site["name"]], ID_PULL_REQUEST)
 			m.add_separator()
 			m.add_item("Rename…", ID_RENAME)
 			m.add_item("Delete…", ID_DELETE)
@@ -375,6 +381,9 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 			m.add_item("Merge into %s…" % current_label, ID_MERGE)
 			m.add_item("Rebase %s onto This…" % current_label, ID_REBASE)
 			m.set_item_disabled(m.get_item_index(ID_REBASE), current.is_empty())
+			var remote_site := WebLinks.site(_repo, String(meta.get("remote", "")))
+			if not remote_site.is_empty():
+				m.add_item("Open on %s" % remote_site["name"], ID_OPEN_ON_WEB)
 			m.add_separator()
 			m.add_item("Delete from Remote…", ID_DELETE_REMOTE_BRANCH)
 			m.add_item("Copy Name", ID_COPY_NAME)
@@ -462,6 +471,13 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				await _push_refspec(remote, ":refs/heads/" + branch, "Deleted %s." % name)
 		ID_COPY_NAME:
 			DisplayServer.clipboard_set(name)
+		ID_OPEN_ON_WEB, ID_PULL_REQUEST:
+			# A local branch opens as its upstream; a remote one as itself.
+			var remote_ref: String = _context.get("upstream", "") if kind == "local" else name
+			var remote_name := remote_ref.get_slice("/", 0)
+			var site := WebLinks.site(_repo, remote_name)
+			var branch := remote_ref.substr(remote_name.length() + 1)
+			OS.shell_open(WebLinks.branch_url(site, branch) if id == ID_OPEN_ON_WEB else WebLinks.new_pull_request_url(site, branch))
 		ID_PUSH_TAG:
 			var remote := RemoteActions.default_remote(_repo)
 			if remote.is_empty():
