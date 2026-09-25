@@ -17,6 +17,7 @@ const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_resolver.gd")
 const SceneConflictResolver := preload("res://addons/godit/dock/widgets/scene_conflict_resolver.gd")
 const SceneText := preload("res://addons/godit/util/scene_text.gd")
+const CompanionFiles := preload("res://addons/godit/util/companion_files.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 ## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
@@ -331,7 +332,11 @@ func refresh(status_entries: Variant = null) -> void:
 	_prune_assignments(entries)
 	var current_branch: String = _repo.get_current_branch()
 
-	for entry in entries:
+	# Sidecars (.uid/.import) of a changed file go last, nested under that file's row.
+	var file_items := {}
+	var ordered_entries: Array = entries.filter(func(e: Dictionary) -> bool: return not _nests_under_owner(e["path"]))
+	ordered_entries.append_array(entries.filter(func(e: Dictionary) -> bool: return _nests_under_owner(e["path"])))
+	for entry in ordered_entries:
 		var path: String = entry["path"]
 		var status: int = entry["status"]
 		if status & GitStatusFlags.CONFLICTED:
@@ -346,11 +351,15 @@ func refresh(status_entries: Variant = null) -> void:
 		# it as untracked again, but it shouldn't vanish into New Files.
 		var assignments: Dictionary = _changelist_state["assignments"]
 		var is_new: bool = GitStatusFlags.is_untracked(status) and not assignments.has(path)
-		if is_new:
-			_add_file_item(untracked_group, untracked_folders, path, status, staged, false)
+		var owner_item: TreeItem = file_items.get(CompanionFiles.owner_of(path))
+		if owner_item != null:
+			file_items[path] = _add_file_item(null, {}, path, status, staged, not is_new, owner_item)
+			owner_item.set_text(TEXT_COLUMN, owner_item.get_text(TEXT_COLUMN) + "  +" + path.get_extension())
+		elif is_new:
+			file_items[path] = _add_file_item(untracked_group, untracked_folders, path, status, staged, false)
 		else:
 			var list_name := _changelist_for_path(path)
-			_add_file_item(changelist_groups[list_name], changelist_folders[list_name], path, status, staged, true)
+			file_items[path] = _add_file_item(changelist_groups[list_name], changelist_folders[list_name], path, status, staged, true)
 
 	var tracked_count := 0
 	var counts := {}
@@ -389,6 +398,31 @@ func refresh(status_entries: Variant = null) -> void:
 		_status_label.text = "No changes." if untracked_count == 0 and tracked_count == 0 else ""
 
 	_update_commit_buttons_enabled(any_staged)
+
+
+## True for a changed .uid/.import whose own file is changed too (it's listed under that file).
+func _nests_under_owner(path: String) -> bool:
+	var owner := CompanionFiles.owner_of(path)
+	return not owner.is_empty() and _known_status.has(owner) and not _known_status[owner] & GitStatusFlags.CONFLICTED
+
+
+## paths plus their changed .uid/.import sidecars, which go wherever their file goes.
+func _with_companions(paths: Array) -> Array:
+	return CompanionFiles.with_companions(paths, _known_status)
+
+
+## Stages (or unstages) paths with their sidecars; new sidecars are added to the file's changelist.
+func _set_staged(paths: Array, stage: bool) -> void:
+	var new_files: Array = []
+	for path in _with_companions(paths):
+		if not stage:
+			_repo.unstage_file(path)
+		elif GitStatusFlags.is_untracked(_known_status.get(path, 0)) and not _changelist_state["assignments"].has(path):
+			new_files.append(path)
+		else:
+			_repo.stage_file(path)
+	if not new_files.is_empty():
+		_add_to_vcs(new_files, _changelist_for_path(paths[0]))
 
 
 ## Stages changes that appeared since the last refresh in the active changelist and adds new files not matching the auto-add masks; returns fresh status if it touched anything.
@@ -594,7 +628,7 @@ func _drop_tree_data(at_position: Vector2, data: Variant) -> void:
 	if not data["paths"].is_empty():
 		_move_files_to_changelist(data["paths"], name)
 	if not data["new_paths"].is_empty():
-		_add_to_vcs(data["new_paths"], name)
+		_add_to_vcs(_with_companions(data["new_paths"]), name)
 		refresh.call_deferred()
 
 
@@ -872,15 +906,16 @@ func _update_changelist_option(counts: Dictionary = {}) -> void:
 func _aggregate_files(item: TreeItem) -> Dictionary:
 	var meta: Dictionary = item.get_metadata(0)
 	var kind: String = meta.get("kind", "") if not meta.is_empty() else ""
-	if kind == "file":
-		return { "count": 1, "staged": 1 if item.is_checked(CHECKBOX_COLUMN) else 0, "touched": 1 if meta["staged"] else 0 }
-	if kind == "untracked_file":
-		return { "count": 1, "staged": 0, "touched": 0 }
-
 	var total := 0
 	var staged := 0
 	var touched := 0
-	var child := item.get_first_child()
+	if kind == "file":
+		total = 1
+		staged = 1 if item.is_checked(CHECKBOX_COLUMN) else 0
+		touched = 1 if meta["staged"] else 0
+	elif kind == "untracked_file":
+		total = 1
+	var child := item.get_first_child() # folders' files, or a file's nested .uid/.import
 	while child:
 		var r := _aggregate_files(child)
 		total += r["count"]
@@ -916,8 +951,9 @@ func _collect_file_paths(item: TreeItem, out: Array, kind := "file") -> void:
 		child = child.get_next()
 
 
-func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String, status: int, staged: bool, in_changelist: bool) -> void:
-	var parent := TreeFolders.get_or_create_folder(_tree, group_root, folder_cache, path.get_base_dir(), TEXT_COLUMN, CHECKBOX_COLUMN)
+## Adds a file row in its folder under group_root, or directly under parent_item (a sidecar under its file's row).
+func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String, status: int, staged: bool, in_changelist: bool, parent_item: TreeItem = null) -> TreeItem:
+	var parent := parent_item if parent_item != null else TreeFolders.get_or_create_folder(_tree, group_root, folder_cache, path.get_base_dir(), TEXT_COLUMN, CHECKBOX_COLUMN)
 
 	var item := _tree.create_item(parent)
 	# New files get a checkbox too: checking one adds it to Git in the active changelist (same gesture as staging).
@@ -933,6 +969,9 @@ func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String
 	item.set_metadata(0, meta)
 	var hint := "Check to stage, uncheck to unstage. Double-click to open." if in_changelist else "Check to add to Git. Right-click to ignore. Double-click to open."
 	item.set_tooltip_text(TEXT_COLUMN, "%s — %s\n%s" % [path, GitStatusFlags.short_label(status), hint])
+	if parent_item != null:
+		parent_item.collapsed = true
+	return item
 
 
 func _on_changes_tree_item_edited() -> void:
@@ -948,13 +987,10 @@ func _on_changes_tree_item_edited() -> void:
 
 	var kind: String = meta.get("kind", "")
 	if kind == "file":
-		if item.is_checked(CHECKBOX_COLUMN):
-			_repo.stage_file(meta["path"])
-		else:
-			_repo.unstage_file(meta["path"])
+		_set_staged([meta["path"]], item.is_checked(CHECKBOX_COLUMN))
 	elif kind == "untracked_file":
 		if item.is_checked(CHECKBOX_COLUMN):
-			_add_to_vcs([meta["path"]])
+			_add_to_vcs(_with_companions([meta["path"]]))
 	else:
 		# "folder" or "changelist_group": cascade the new checked state to
 		# every file underneath. emit_signal off since we stage/unstage
@@ -1237,7 +1273,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			if not error.is_empty():
 				_show_error("Can't open file", error)
 		ID_ADD_TO_VCS:
-			_add_to_vcs([_context_target["path"]])
+			_add_to_vcs(_with_companions([_context_target["path"]]))
 			refresh.call_deferred()
 		ID_ADD_ALL_TO_VCS:
 			var new_paths: Array = []
@@ -1266,11 +1302,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 		ID_NEW_CHANGELIST:
 			_open_new_changelist_dialog()
 		ID_TOGGLE_STAGE:
-			for path in _context_paths():
-				if _context_target["staged"]:
-					_repo.unstage_file(path)
-				else:
-					_repo.stage_file(path)
+			_set_staged(_context_paths(), not _context_target["staged"])
 			refresh.call_deferred()
 		ID_DONT_AUTO_ADD_EXT:
 			_add_auto_add_mask("*." + String(_context_target["path"]).get_extension())
@@ -1279,17 +1311,19 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_confirm_dialog_action = "revert"
 			_revert_confirm_dialog.title = "Revert"
 			_revert_confirm_dialog.ok_button_text = "Revert"
-			_revert_confirm_dialog.dialog_text = "Discard all changes to \"%s\"? This can't be undone." % path.get_file()
+			_revert_confirm_dialog.dialog_text = "Discard all changes to \"%s\"%s? This can't be undone." % [path.get_file(), _companions_note(path)]
 			_revert_confirm_dialog.popup_centered()
 		ID_REMOVE:
 			var path: String = _context_target["path"]
 			_confirm_dialog_action = "remove"
 			_revert_confirm_dialog.title = "Remove File"
 			_revert_confirm_dialog.ok_button_text = "Remove"
-			_revert_confirm_dialog.dialog_text = "Remove \"%s\" from Git and delete it from disk? This can't be undone." % path.get_file()
+			_revert_confirm_dialog.dialog_text = "Remove \"%s\"%s from Git and delete it from disk? This can't be undone." % [path.get_file(), _companions_note(path)]
 			_revert_confirm_dialog.popup_centered()
 		ID_IGNORE:
 			_ignore_path(_context_target["path"])
+			for path in _with_companions([_context_target["path"]]).slice(1):
+				_ignore_path(path)
 		ID_COPY_PATH:
 			DisplayServer.clipboard_set(_context_target["path"])
 		ID_RESOLVE:
@@ -1322,15 +1356,23 @@ func _on_context_menu_id_pressed(id: int) -> void:
 
 ## Reverts or removes the file, per _confirm_dialog_action (set by whichever menu item opened this dialog).
 func _on_revert_confirm_dialog_confirmed() -> void:
-	var path: String = _context_target["path"]
-	var result: Dictionary = _repo.remove_file(path) if _confirm_dialog_action == "remove" else _repo.revert_file(path)
-	if not result["ok"]:
-		_show_error("Remove failed" if _confirm_dialog_action == "remove" else "Revert failed", result["error"])
-		return
-	_changelist_state["assignments"].erase(path)
+	for path in _with_companions([_context_target["path"]]):
+		# A new sidecar isn't in Git to remove: deleting it is what revert does.
+		var remove: bool = _confirm_dialog_action == "remove" and not GitStatusFlags.is_untracked(_known_status.get(path, 0))
+		var result: Dictionary = _repo.remove_file(path) if remove else _repo.revert_file(path)
+		if not result["ok"]:
+			_show_error("Remove failed" if _confirm_dialog_action == "remove" else "Revert failed", result["error"])
+			break
+		_changelist_state["assignments"].erase(path)
+		EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
 	_save_changelist_state()
-	EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
 	refresh()
+
+
+## " (and its .uid)" when path has changed sidecars that go along with it, else "".
+func _companions_note(path: String) -> String:
+	var companions := _with_companions([path]).slice(1)
+	return "" if companions.is_empty() else " (and its %s)" % ", ".join(companions.map(func(p: String) -> String: return "." + p.get_extension()))
 
 
 static func _path_list(paths: Array) -> String:
@@ -1343,6 +1385,7 @@ static func _path_list(paths: Array) -> String:
 
 ## Asks, then discards every change to paths (new files are deleted).
 func _revert_paths(paths: Array) -> void:
+	paths = _with_companions(paths)
 	if not await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
 		return
 	var errors: Array = []
@@ -1377,9 +1420,12 @@ func _on_stash_button_pressed() -> void:
 
 ## paths empty = stash everything.
 func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
+	paths = PackedStringArray(_with_companions(Array(paths)))
+	# A new .uid of a stashed script is stashed with it, so untracked files default on when the paths include one.
+	var any_new := Array(paths).any(func(p: String) -> bool: return GitStatusFlags.is_untracked(_known_status.get(p, 0)))
 	var fields: Array = [
 		{ "key": "message", "label": "Message", "default": suggested_message, "placeholder": "WIP: what these changes are" },
-		{ "key": "untracked", "label": "Include untracked (new) files", "type": "check", "default": paths.is_empty() },
+		{ "key": "untracked", "label": "Include untracked (new) files", "type": "check", "default": paths.is_empty() or any_new },
 	]
 	if paths.is_empty():
 		fields.append({ "key": "keep_index", "label": "Keep staged changes in the working tree too", "type": "check", "default": false })
@@ -1632,6 +1678,7 @@ func _set_active_changelist(name: String) -> void:
 
 ## Moving into the active changelist stages the files, moving out of it unstages them, so checkboxes keep meaning "goes into the next commit".
 func _move_files_to_changelist(paths: Array, name: String) -> void:
+	paths = _with_companions(paths)
 	var active: String = _changelist_state["active"]
 	for path in paths:
 		var was_active := _changelist_for_path(path) == active
