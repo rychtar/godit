@@ -72,6 +72,23 @@ func _on_auto_fetch_timeout() -> void:
 	if r.get("ok", false) and is_instance_valid(_changes_panel):
 		_changes_panel.refresh()
 		_branches_panel.refresh()
+		_notify_incoming()
+
+
+## upstream -> how many incoming commits were last announced, so each batch gets one toast.
+var _announced_behind := {}
+
+
+## Editor toast when the background fetch brought commits the current branch doesn't have yet.
+func _notify_incoming() -> void:
+	var sync: Dictionary = _repo.get_sync_status()
+	var behind: int = sync["behind"]
+	if sync["upstream"].is_empty() or behind <= _announced_behind.get(sync["upstream"], 0):
+		_announced_behind[sync["upstream"]] = behind
+		return
+	_announced_behind[sync["upstream"]] = behind
+	EditorInterface.get_editor_toaster().push_toast("Godit: %d new commit%s on %s. Pull them from the Git dock." % [
+		behind, "" if behind == 1 else "s", sync["upstream"]], EditorToaster.SEVERITY_INFO)
 
 
 ## Called by plugin.gd after a save in the editor.
