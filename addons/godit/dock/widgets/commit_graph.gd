@@ -605,3 +605,6 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_DRAG_END and _drop_row >= 0:
 		_drop_row = -1
 		queue_redraw()
+	# _draw() only covers the rows the scroll viewport showed then; a taller viewport (bigger panel, floating window) must redraw, though this control's own size stays the same.
+	elif what == NOTIFICATION_READY and get_parent() is ScrollContainer:
+		get_parent().resized.connect(queue_redraw)
