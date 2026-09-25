@@ -27,6 +27,8 @@ static func merge(base_text: String, ours_text: String, theirs_text: String) -> 
 	for key in base["order"]:
 		if not keys.has(key):
 			keys.append(key)
+	# Node key -> [kept section, side that kept it], for deletions that might strand the other side's new children.
+	var deleted := {}
 	for key in keys:
 		var b: Variant = base["by_key"].get(key)
 		var o: Variant = ours["by_key"].get(key)
@@ -41,7 +43,10 @@ static func merge(base_text: String, ours_text: String, theirs_text: String) -> 
 				merged[key] = present.duplicate(true)
 				auto.append("%s added %s" % [side.capitalize(), label])
 			elif _props(present) == _props(b):
-				auto.append("%s deleted %s" % ["Theirs" if side == "ours" else "Ours", label])
+				if key.begins_with("node:"):
+					deleted[key] = [present, side]
+				else:
+					auto.append("%s deleted %s" % ["Theirs" if side == "ours" else "Ours", label])
 			else:
 				merged[key] = present.duplicate(true)
 				conflicts.append({ "id": conflicts.size(), "section": key, "label": label, "prop": "",
@@ -77,6 +82,20 @@ static func merge(base_text: String, ours_text: String, theirs_text: String) -> 
 			if value != null:
 				section["props"][k] = value
 		merged[key] = section
+	# Deepest first, so a restored node counts as a child when looking at its parent.
+	var deleted_keys := deleted.keys()
+	deleted_keys.sort_custom(func(a: String, b: String) -> bool: return a.length() > b.length())
+	for key in deleted_keys:
+		var side: String = deleted[key][1]
+		var label := _label(key)
+		if merged.keys().any(func(k: String) -> bool: return k.begins_with(key + "/")):
+			# Deleting it would leave the other side's new nodes without a parent: let the user choose, and a delete takes them along.
+			merged[key] = deleted[key][0].duplicate(true)
+			var kept := "(kept, has new child nodes)"
+			conflicts.append({ "id": conflicts.size(), "section": key, "label": label, "prop": "",
+					"ours": kept if side == "ours" else null, "theirs": kept if side == "theirs" else null })
+		else:
+			auto.append("%s deleted %s" % ["Theirs" if side == "ours" else "Ours", label])
 	return { "ok": true, "conflicts": conflicts, "auto": auto,
 			"merge": { "merged": merged, "ours": ours, "theirs": theirs, "ours_order": ours["order"], "theirs_order": theirs["order"] } }
 
@@ -93,6 +112,9 @@ static func result_text(result: Dictionary, choices: Dictionary) -> String:
 				merged[c["section"]] = chosen[c["section"]].duplicate(true)
 			else:
 				merged.erase(c["section"])
+				# Its child nodes go with it.
+				for key in merged.keys().filter(func(k: String) -> bool: return k.begins_with(c["section"] + "/")):
+					merged.erase(key)
 		elif merged.has(c["section"]):
 			var value: Variant = c[side]
 			if value == null:
