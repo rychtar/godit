@@ -152,6 +152,7 @@ func _ready() -> void:
 	if UiScale.is_in_edited_scene(self):
 		return # opened in the scene editor, not running in a dock
 	UiScale.scale_scene(self)
+	_migrate_auto_add_masks()
 	_tree.columns = 2
 	_tree.set_column_expand(CHECKBOX_COLUMN, false)
 	_tree.set_column_custom_minimum_width(CHECKBOX_COLUMN, CHECKBOX_COLUMN_WIDTH)
@@ -475,6 +476,17 @@ func _remember_statuses(entries: Array) -> void:
 	_known_status = {}
 	for entry in entries:
 		_known_status[entry["path"]] = entry["status"]
+
+
+## Masks saved by older versions carry "*.import" from the old default; .import files belong in the repo, so it's dropped once.
+static func _migrate_auto_add_masks() -> void:
+	if Settings.get_value("auto_add_masks_import_migrated", false):
+		return
+	Settings.set_value("auto_add_masks_import_migrated", true)
+	var masks: Variant = Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, null)
+	if masks is Array and masks.has("*.import"):
+		masks.erase("*.import")
+		Settings.set_value(AUTO_ADD_MASKS_SETTING_KEY, masks)
 
 
 ## Masks are globs; one without "/" matches the file name, one ending in "/" a folder anywhere, anything else the repo-relative path.
