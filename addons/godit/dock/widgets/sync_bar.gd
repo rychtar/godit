@@ -125,6 +125,11 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 
 
+## Hides the branch/Fetch/Pull/Push row but keeps the progress strip, for the Branches sidebar under the combined dock's shared row.
+func set_row_visible(on: bool) -> void:
+	get_child(0).visible = on
+
+
 ## Re-reads branch, upstream and ahead/behind (cheap: a few rev-parse calls).
 func refresh() -> void:
 	if _repo == null:

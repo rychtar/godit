@@ -32,11 +32,12 @@ For push and pull, git has to log in without asking: use a credential helper for
 - **Changelists**: double-click one to make it active and drag files between them.
 - **Branches**: switch, merge and pull in the Branches tab.
 - **History**: open **Git Log** in the bottom panel.
+- **All in one**: switch the layout to the combined dock (see Settings), which puts changes, history and branches together, SourceTree-style. Make it floating to keep it on a second monitor.
 - **Everything else**: right-click a file, branch or commit.
 
 ## Settings
 
-Project > Tools > Godit: auto-reload changed files, auto-save scripts, dock position, background fetch, blame column, and whether to confirm keyboard commits.
+Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, and the layout: the Git dock plus Git Log, everything in the bottom panel, or one combined dock.
 
 The ⋮ menu in the Changes panel controls auto-staging, auto-adding new files and the masks for files to skip (for example `*.psd` source art). `.import` and `.uid` files are added with the file they belong to, since Godot needs them in the repo.
 

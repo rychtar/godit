@@ -54,6 +54,10 @@ func _ready() -> void:
 	apply_auto_fetch_setting()
 
 
+func has_repo() -> bool:
+	return _repo != null
+
+
 ## Called by plugin.gd when the Tools menu toggle changes.
 func apply_auto_fetch_setting() -> void:
 	if _auto_fetch_timer == null:

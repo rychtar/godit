@@ -228,6 +228,20 @@ func set_repo(repo: RefCounted) -> void:
 		_auto_refresh_timer.active = true
 
 
+## Hands the branch/Fetch/Pull/Push header to the combined dock, which shows it above every view.
+func detach_sync_bar() -> Control:
+	_sync_bar.get_parent().remove_child(_sync_bar)
+	return _sync_bar
+
+
+## Reverses detach_sync_bar().
+func reattach_sync_bar() -> void:
+	if _sync_bar.get_parent() != null:
+		_sync_bar.get_parent().remove_child(_sync_bar)
+	$Layout.add_child(_sync_bar)
+	$Layout.move_child(_sync_bar, 0)
+
+
 ## Re-fetches status and only calls refresh() — which rebuilds the tree from
 ## scratch — if something actually changed since the last check.
 func _maybe_refresh() -> void:

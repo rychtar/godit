@@ -25,6 +25,8 @@ enum {
 
 ## Opens the changeset dialog, wired up by godit_dock.gd: (title, base_ref, target_ref). target "" means the working tree.
 signal compare_requested(title: String, base: String, target: String)
+## A branch, tag or stash was selected: its full ref name, for the combined dock to show it in History.
+signal ref_selected(ref: String)
 
 @onready var _tree: Tree = %BranchesTree
 @onready var _filter_edit: LineEdit = %FilterEdit
@@ -46,6 +48,8 @@ var _context: Dictionary = {}
 
 ## Section headers' collapsed state, kept across refreshes (keyed by section title).
 var _collapsed_sections := { "Tags": true, "Stashes": false }
+## Frame of the last ref_selected(), so a click that also changed the selection emits it once.
+var _ref_selected_frame := -1
 
 
 func _ready() -> void:
@@ -62,6 +66,12 @@ func _ready() -> void:
 			refresh()
 	)
 
+	_tree.item_selected.connect(_on_tree_item_selected)
+	# Clicking the already selected row again shows it again too.
+	_tree.item_mouse_selected.connect(func(_pos: Vector2, button: int) -> void:
+		if button == MOUSE_BUTTON_LEFT and _ref_selected_frame != Engine.get_process_frames():
+			_on_tree_item_selected()
+	)
 	_tree.item_collapsed.connect(func(item: TreeItem) -> void:
 		var meta: Variant = item.get_metadata(0)
 		if meta is Dictionary and meta.get("kind", "") == "section":
@@ -83,6 +93,11 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 	if _auto_refresh_timer != null:
 		_auto_refresh_timer.active = true
+
+
+## Hides the sync bar's own branch/Fetch/Pull/Push row (the combined dock has a shared one above), keeping its progress strip.
+func set_sync_row_visible(on: bool) -> void:
+	_sync_bar.set_row_visible(on)
 
 
 ## Cheap check (refs + stash list) so the tree is only rebuilt — losing scroll and selection — when something changed.
@@ -296,6 +311,21 @@ func _push_branch_to(branch: String) -> void:
 
 
 # --- tree ------------------------------------------------------------------
+
+
+func _on_tree_item_selected() -> void:
+	var meta: Variant = _tree.get_selected().get_metadata(0)
+	if not meta is Dictionary:
+		return
+	var prefixes := { "local": "refs/heads/", "remote_branch": "refs/remotes/", "tag": "refs/tags/" }
+	var kind: String = meta.get("kind", "")
+	if kind == "stash":
+		ref_selected.emit(meta["ref"])
+	elif prefixes.has(kind):
+		ref_selected.emit(prefixes[kind] + meta["name"])
+	else:
+		return
+	_ref_selected_frame = Engine.get_process_frames()
 
 
 func _on_branches_tree_item_activated() -> void:

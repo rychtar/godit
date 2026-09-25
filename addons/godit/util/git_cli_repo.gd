@@ -1075,6 +1075,12 @@ func get_head_oid() -> String:
 	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
 
 
+## The commit a full ref name ("refs/heads/main", "stash@{1}", a tag) points to, or "" if it doesn't resolve.
+func resolve_commit(ref: String) -> String:
+	var r := GitCli.run(_repo_root, ["rev-parse", "-q", "--verify", ref + "^{commit}"])
+	return r["text"].strip_edges() if r["exit_code"] == 0 else ""
+
+
 ## get_head_oid() read straight from .git's files where possible, for polling without spawning git.
 func read_head_oid() -> String:
 	var head := _read_small(get_git_dir().path_join("HEAD"))
