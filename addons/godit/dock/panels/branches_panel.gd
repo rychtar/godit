@@ -46,6 +46,9 @@ var _last_signature := ""
 ## {"kind": "local"|"remote_branch"|"tag"|"remote"|"stash"|"section", ...} for whatever the context menu was opened on.
 var _context: Dictionary = {}
 
+## What the section headers say, where it isn't their key.
+const SECTION_TITLES := { "Local": "Branches", "Remote": "Remote Branches" }
+
 ## Section headers' collapsed state, kept across refreshes (keyed by section title).
 var _collapsed_sections := { "Tags": true, "Stashes": false }
 ## Frame of the last ref_selected(), so a click that also changed the selection emits it once.
@@ -95,9 +98,19 @@ func set_repo(repo: RefCounted) -> void:
 		_auto_refresh_timer.active = true
 
 
-## Hides the sync bar's own branch/Fetch/Pull/Push row (the combined dock has a shared one above), keeping its progress strip.
-func set_sync_row_visible(on: bool) -> void:
-	_sync_bar.set_row_visible(on)
+## In the combined dock's sidebar: no branch/Fetch/Pull/Push row of its own (there's a shared one above, the progress strip stays) and a frameless tree.
+func set_sidebar_mode(on: bool) -> void:
+	_sync_bar.set_row_visible(not on)
+	for stylebox in [&"panel", &"focus"]:
+		if on:
+			_tree.add_theme_stylebox_override(stylebox, StyleBoxEmpty.new())
+		else:
+			_tree.remove_theme_stylebox_override(stylebox)
+	for constant in [&"draw_relationship_lines", &"draw_guides"]:
+		if on:
+			_tree.add_theme_constant_override(constant, 0)
+		else:
+			_tree.remove_theme_constant_override(constant)
 
 
 ## Cheap check (refs + stash list) so the tree is only rebuilt — losing scroll and selection — when something changed.
@@ -144,12 +157,19 @@ func refresh() -> void:
 		if not b["upstream"].is_empty():
 			var sync := _sync_text(b["ahead"], b["behind"])
 			tracking = "%s%s%s" % [b["upstream"], "  " + sync if not sync.is_empty() else "", "  (gone)" if b["gone"] else ""]
-		_fill_row(item, ("● " if b["is_head"] else "") + b["name"], tracking, b)
+		_fill_row(item, b["name"], tracking, b)
+		if not _wide: # just ↑↓ after the name; the upstream is in the tooltip
+			item.set_suffix(0, _sync_text(b["ahead"], b["behind"]) + ("  gone" if b["gone"] else ""))
+		item.set_icon(0, _icon(&"VcsBranches"))
 		item.set_metadata(0, { "kind": "local", "name": b["name"], "upstream": b["upstream"], "is_head": b["is_head"] })
-		item.set_tooltip_text(0, "%s — %s %s (%s)\nDouble-click to checkout, right-click for more" % [b["name"], b["oid"], b["summary"], b["date"]])
+		item.set_tooltip_text(0, "%s%s — %s %s (%s)%s\nDouble-click to checkout, right-click for more" % [
+				b["name"], "  (current)" if b["is_head"] else "", b["oid"], b["summary"], b["date"], "\nTracking " + tracking if not tracking.is_empty() else ""])
 		if b["is_head"]:
+			var success := get_theme_color(&"success_color", &"Editor")
+			item.set_custom_font(0, get_theme_font(&"bold", &"EditorFonts"))
+			item.set_icon_modulate(0, success)
 			for col in _tree.columns:
-				item.set_custom_color(col, get_theme_color(&"success_color", &"Editor"))
+				item.set_custom_color(col, success)
 	_finish_section(local_section, local_count)
 
 	var remote_section := _section(root, "Remote")
@@ -169,6 +189,8 @@ func refresh() -> void:
 		remote_count += 1
 		var item := _tree.create_item(remote_folders[remote_name])
 		_fill_row(item, b["name"].substr(remote_name.length() + 1), "", b)
+		item.set_icon(0, _icon(&"VcsBranches"))
+		item.set_icon_modulate(0, Color(1, 1, 1, 0.55))
 		item.set_metadata(0, { "kind": "remote_branch", "name": b["name"], "remote": remote_name })
 		item.set_tooltip_text(0, "%s — %s %s (%s)\nDouble-click to check out as a local tracking branch" % [b["name"], b["oid"], b["summary"], b["date"]])
 		item.set_custom_color(0, Color(0.72, 0.78, 0.9))
@@ -185,6 +207,7 @@ func refresh() -> void:
 		item.set_metadata(0, { "kind": "tag", "name": t["name"] })
 		item.set_tooltip_text(0, "%s — %s %s%s" % [t["name"], t["oid"], t["summary"], "  (annotated)" if t["annotated"] else ""])
 		item.set_custom_color(0, Color(0.95, 0.85, 0.55))
+		item.set_icon(0, _icon(&"Pin"))
 	_finish_section(tags_section, tag_count)
 
 	var stash_section := _section(root, "Stashes")
@@ -192,6 +215,7 @@ func refresh() -> void:
 	for st in stashes:
 		var item := _tree.create_item(stash_section)
 		_fill_row(item, st["message"], st["ref"], { "oid": "", "summary": "", "date": st["date"] })
+		item.set_icon(0, _icon(&"VCSCommit"))
 		item.set_metadata(0, { "kind": "stash", "ref": st["ref"], "message": st["message"] })
 		item.set_tooltip_text(0, "%s — %s\nDouble-click to apply, right-click for more" % [st["ref"], st["message"]])
 	_finish_section(stash_section, stashes.size())
@@ -201,7 +225,7 @@ func refresh() -> void:
 	for r in remotes:
 		var item := _tree.create_item(remotes_section)
 		_fill_row(item, r["name"], r["fetch_url"], {})
-		item.set_icon(0, _icon(&"Remote"))
+		item.set_icon(0, _icon(&"ExternalLink"))
 		item.set_metadata(0, { "kind": "remote", "name": r["name"], "url": r["fetch_url"] })
 		var push_note: String = "\nPush URL: " + r["push_url"] if r["push_url"] != r["fetch_url"] else ""
 		item.set_tooltip_text(0, "%s\nFetch URL: %s%s\nDouble-click to edit URL" % [r["name"], r["fetch_url"], push_note])
@@ -237,7 +261,7 @@ func _setup_columns() -> void:
 ## Fills a row's columns; in single-column mode the tracking info is appended to the name instead.
 func _fill_row(item: TreeItem, name: String, tracking: String, info: Dictionary) -> void:
 	if not _wide:
-		item.set_text(0, name + ("   → " + tracking if not tracking.is_empty() and info.has("upstream") else ""))
+		item.set_text(0, name)
 		return
 	item.set_text(0, name)
 	item.set_text(1, tracking)
@@ -264,14 +288,17 @@ func _section(root: TreeItem, title: String) -> TreeItem:
 	item.set_metadata(0, { "kind": "section", "title": title })
 	for col in _tree.columns:
 		item.set_selectable(col, false)
-	item.set_custom_color(0, Color(0.68, 0.85, 1.0))
+	# Small dimmed caps with some air above, like the combined dock's WORKSPACE header.
+	item.set_custom_color(0, Color(get_theme_color(&"font_color", &"Tree"), 0.55))
+	item.set_custom_font_size(0, int(get_theme_font_size(&"font_size", &"Tree") * 0.85))
+	item.set_custom_minimum_height(int(UiScale.px(28)))
 	item.collapsed = _collapsed_sections.get(title, false)
 	return item
 
 
 func _finish_section(section: TreeItem, count: int) -> void:
 	var meta: Dictionary = section.get_metadata(0)
-	section.set_text(0, "%s  %d" % [meta["title"], count])
+	section.set_text(0, "%s  %d" % [SECTION_TITLES.get(meta["title"], meta["title"]).to_upper(), count])
 
 
 func _matches(filter: String, name: String) -> bool:

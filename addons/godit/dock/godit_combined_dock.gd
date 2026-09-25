@@ -50,7 +50,7 @@ func _init(panels: Dictionary) -> void:
 	_sync_bar = panels["changes"].detach_sync_bar()
 	_sync_bar.set_actions_first(true)
 	_layout.add_child(_sync_bar)
-	panels["branches"].set_sync_row_visible(false)
+	panels["branches"].set_sidebar_mode(true)
 	panels["branches"].ref_selected.connect(_on_ref_selected)
 
 	var split := HSplitContainer.new()
@@ -68,8 +68,7 @@ func _init(panels: Dictionary) -> void:
 	_sidebar.add_child(_header("Workspace"))
 	var gap := Control.new()
 	gap.custom_minimum_size.y = UiScale.px(8)
-	_sidebar.add_child(gap)
-	_sidebar.add_child(_header("Repository"))
+	_sidebar.add_child(gap) # Branches below brings its own BRANCHES / TAGS / … headers
 
 	_buttons = BoxContainer.new()
 	_buttons.add_theme_constant_override("separation", int(UiScale.px(1)))
@@ -110,7 +109,7 @@ func _init(panels: Dictionary) -> void:
 	)
 
 
-## Small dimmed section title, like SourceTree's WORKSPACE / BRANCHES.
+## Small dimmed section title, like SourceTree's WORKSPACE.
 func _header(text: String) -> Label:
 	var label := Label.new()
 	label.text = text.to_upper()
@@ -209,7 +208,7 @@ func detach_panels() -> Dictionary:
 	if _panels.is_empty():
 		return {}
 	_panels["branches"].ref_selected.disconnect(_on_ref_selected)
-	_panels["branches"].set_sync_row_visible(true)
+	_panels["branches"].set_sidebar_mode(false)
 	_panels["changes"].changes_counted.disconnect(_set_change_count)
 	_sync_bar.set_actions_first(false)
 	_panels["changes"].reattach_sync_bar()
