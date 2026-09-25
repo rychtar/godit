@@ -3,7 +3,7 @@ extends Control
 
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
-const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
@@ -12,7 +12,6 @@ const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.g
 const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 
-const AUTO_REFRESH_INTERVAL := 3.0
 
 enum {
 	ID_CHECKOUT, ID_NEW_BRANCH_FROM, ID_MERGE, ID_REBASE, ID_PUSH_BRANCH, ID_SET_UPSTREAM,
@@ -39,8 +38,6 @@ var _sync_bar: VBoxContainer
 ## Below this width the tree drops to a single column (side-dock mode).
 const WIDE_MIN_WIDTH := 520.0
 var _wide := true
-## Pauses while the panel is hidden or the editor is in the background.
-var _auto_refresh_timer: PollTimer
 var _last_signature := ""
 
 ## {"kind": "local"|"remote_branch"|"tag"|"remote"|"stash"|"section", ...} for whatever the context menu was opened on.
@@ -95,22 +92,19 @@ func _ready() -> void:
 			_show_context_menu({ "kind": "section", "title": "Local" }, _tree.get_screen_position() + pos)
 	)
 
-	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
-	_auto_refresh_timer.poll.connect(_maybe_refresh)
-	add_child(_auto_refresh_timer)
-
 
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
 	_sync_bar.set_repo(repo)
 	refresh()
-	if _auto_refresh_timer != null:
-		_auto_refresh_timer.active = true
+	RepoWatcher.watch(self, _on_polled)
 
 
-## In the combined dock's sidebar: no branch/Fetch/Pull/Push row of its own (there's a shared one above, the progress strip stays) and a frameless tree.
-func set_sidebar_mode(on: bool) -> void:
+## In the combined dock's sidebar: no branch/Fetch/Pull/Push row of its own, messages in the shared toolbar's strip (shared_bar) and a frameless tree.
+func set_sidebar_mode(on: bool, shared_bar: HBoxContainer = null) -> void:
 	_sync_bar.set_row_visible(not on)
+	_sync_bar.use_operation_bar(shared_bar if on else null)
+	_operation_bar = _sync_bar.operation_bar
 	for stylebox in [&"panel", &"focus"]:
 		if on:
 			_tree.add_theme_stylebox_override(stylebox, StyleBoxEmpty.new())
@@ -123,29 +117,23 @@ func set_sidebar_mode(on: bool) -> void:
 			_tree.remove_theme_constant_override(constant)
 
 
-## Cheap check (refs + stash list) so the tree is only rebuilt — losing scroll and selection — when something changed.
-func _maybe_refresh() -> void:
-	if _repo == null or _repo.is_busy():
+## Rebuilds the tree (losing scroll and selection) only when something changed; hidden, it waits for the poll that comes with being shown.
+func _on_polled(snapshot: Dictionary) -> void:
+	if _repo == null or _repo.is_busy() or not is_visible_in_tree():
 		return
-	if _signature() != _last_signature:
+	if _signature(snapshot) != _last_signature:
 		refresh()
 
 
-func _signature() -> String:
-	var refs: Dictionary = _repo.run_read(["for-each-ref", "--format=%(refname) %(objectname) %(HEAD) %(upstream:track)"])
-	# Remotes live in config and stashes in the stash reflog; reading the files saves two git processes per tick.
-	var common_dir: String = _repo.get_common_dir()
-	return refs["text"] + _read_file(common_dir.path_join("config")) + _read_file(common_dir.path_join("logs/refs/stash"))
-
-
-static func _read_file(path: String) -> String:
-	return FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
+## Refs and HEAD (ahead/behind can only change with them), remotes and upstreams from config, stashes from their reflog.
+func _signature(snapshot: Dictionary) -> String:
+	return snapshot["refs"] + snapshot["config"] + snapshot["stash_log"]
 
 
 func refresh() -> void:
 	if _repo == null:
 		return
-	_last_signature = _signature()
+	_last_signature = _signature(_repo.read_snapshot())
 	_sync_bar.refresh()
 
 	var scroll := _tree.get_scroll()

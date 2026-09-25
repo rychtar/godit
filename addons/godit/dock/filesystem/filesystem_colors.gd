@@ -5,7 +5,7 @@ extends Node
 const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
-const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 
 ## Untracked files in the dock: grey would read as "disabled" there, so they get the usual "unversioned" red-brown.
 const COLOR_UNTRACKED := Color(0.86, 0.56, 0.45)
@@ -22,7 +22,6 @@ var _list: ItemList
 ## res:// paths the file list currently shows in a git color, to restore when they're no longer changed.
 var _list_colored := {}
 var _list_paint_queued := false
-var _timer: PollTimer
 ## res:// path (folders end in "/") -> Color, from the last status.
 var _colors := {}
 ## Repo-relative path -> status bits, from the last status (read by filesystem_menu.gd).
@@ -47,10 +46,8 @@ func _ready() -> void:
 	if not lists.is_empty():
 		_list = lists[0]
 		_list.draw.connect(_queue_list_paint)
-	_timer = PollTimer.new(3.0)
-	_timer.poll.connect(refresh)
-	add_child(_timer)
-	_timer.active = true
+	RepoWatcher.watch(self, _on_polled)
+	refresh()
 
 
 func _exit_tree() -> void:
@@ -63,11 +60,16 @@ func _exit_tree() -> void:
 		_paint_list()
 
 
-## Re-reads status (shared with the panels' polls when fresh) and repaints if anything changed.
-func refresh() -> void:
+func _on_polled(snapshot: Dictionary) -> void:
+	refresh(repo.parse_status(snapshot["status"]))
+
+
+## Repaints if the status (entries, else a fresh `git status`) changed.
+func refresh(entries: Variant = null) -> void:
 	if repo == null or _tree == null:
 		return
-	var entries: Array = repo.get_recent_status(2500)
+	if entries == null:
+		entries = repo.get_status()
 	var signature := str(entries.map(func(e: Dictionary) -> String: return "%s:%d" % [e["path"], e["status"]]))
 	if signature == _signature:
 		return

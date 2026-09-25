@@ -41,28 +41,29 @@ static func open_file_at_line(repo_root: String, path: String, line: int) -> Str
 	return open_file(repo_root, path)
 
 
-## Reloads a file the editor doesn't know changed on disk (after revert,
-## checkout, ...) — otherwise an open scene/script tab keeps showing stale
-## content until the user clicks away and back.
+## Reloads a file the editor doesn't know changed on disk (after revert, resolve...); its script tab is rewritten even with unsaved edits, since discarding them is the point.
 static func refresh_external_change(repo_root: String, path: String) -> void:
-	var abs_path := repo_root.path_join(path)
-	var res_path := ProjectSettings.localize_path(abs_path)
-	if not res_path.begins_with("res://"):
-		return
+	refresh_external_changes(repo_root, [path])
 
+
+## refresh_external_change() for several repo-relative paths at once.
+static func refresh_external_changes(repo_root: String, paths: Array) -> void:
 	# Also covers a file revert_file() just deleted outright.
 	EditorInterface.get_resource_filesystem().scan()
-
-	if res_path.get_extension() in ["tscn", "scn"]:
-		if res_path in EditorInterface.get_open_scenes():
-			EditorInterface.reload_scene_from_path(res_path)
-		return
-
-	# CACHE_MODE_REPLACE forces a re-read from disk if it's already loaded
-	# (open script tab, resource referenced by an open scene, ...).
-	if ResourceLoader.exists(res_path):
-		ResourceLoader.load(res_path, "", ResourceLoader.CACHE_MODE_REPLACE)
-	sync_open_scripts()
+	var discarded := PackedStringArray()
+	for path: String in paths:
+		var res_path := ProjectSettings.localize_path(repo_root.path_join(path))
+		if not res_path.begins_with("res://"):
+			continue
+		if res_path.get_extension() in ["tscn", "scn"]:
+			if res_path in EditorInterface.get_open_scenes() and FileAccess.file_exists(res_path):
+				EditorInterface.reload_scene_from_path(res_path)
+			continue
+		discarded.append(res_path)
+		# CACHE_MODE_REPLACE re-reads it if it's already loaded (open script tab, resource used by an open scene...).
+		if ResourceLoader.exists(res_path):
+			ResourceLoader.load(res_path, "", ResourceLoader.CACHE_MODE_REPLACE)
+	sync_open_scripts(discarded)
 
 
 ## Same as refresh_external_change(), but for an operation that can touch
@@ -77,26 +78,67 @@ static func refresh_all_external_changes() -> void:
 	sync_open_scripts()
 
 
-## Script tabs keep their own text buffer, so reloading the resource doesn't change what's shown; this rewrites each open, unmodified tab whose file changed on disk (one undoable edit, caret and scroll kept, tab stays "saved").
-static func sync_open_scripts() -> void:
+## Script and text file tabs keep their own buffer, so reloading the resource doesn't change what's shown; this rewrites each open tab whose file changed on disk (one undoable edit, caret and scroll kept, tab stays "saved"). Tabs with unsaved edits are left alone unless listed in discarded.
+static func sync_open_scripts(discarded := PackedStringArray()) -> void:
 	var script_editor := EditorInterface.get_script_editor()
 	if script_editor == null:
 		return
-	# get_open_scripts() lists only the ScriptTextEditor tabs, in tab order — pair it with those editors.
-	var scripts: Array = script_editor.get_open_scripts()
-	var editors: Array = script_editor.get_open_script_editors().filter(func(e: Node) -> bool: return e.get_class() == "ScriptTextEditor")
-	for i in mini(scripts.size(), editors.size()):
-		var script: Script = scripts[i]
-		var code_edit := (editors[i] as ScriptEditorBase).get_base_editor() as CodeEdit
-		if script == null or code_edit == null or script.resource_path.is_empty() or not FileAccess.file_exists(script.resource_path):
+	var tabs := _open_tabs(script_editor)
+	for tab: Dictionary in tabs:
+		var path: String = tab["path"]
+		var code_edit := (tab["editor"] as ScriptEditorBase).get_base_editor() as CodeEdit
+		if code_edit == null or not FileAccess.file_exists(path):
 			continue
-		if code_edit.get_version() != code_edit.get_saved_version():
+		if code_edit.get_version() != code_edit.get_saved_version() and not discarded.has(path):
 			continue # unsaved edits in the tab: leave them, Godot asks on its own
-		var disk := FileAccess.get_file_as_string(script.resource_path)
+		var disk := FileAccess.get_file_as_string(path)
 		if code_edit.text == disk:
 			continue
 		_replace_text_keeping_view(code_edit, disk)
-		script.source_code = disk
+		if tab["script"] != null:
+			tab["script"].source_code = disk
+
+
+## res:// path of the script editor's current tab, a script or a text file (.md, .json...); "" for help pages and built-in scripts.
+static func current_tab_path() -> String:
+	var script_editor := EditorInterface.get_script_editor()
+	var current: ScriptEditorBase = script_editor.get_current_editor() if script_editor != null else null
+	if current == null:
+		return ""
+	if current.get_class() == "ScriptTextEditor":
+		var script := script_editor.get_current_script()
+		return script.resource_path if script != null and not script.resource_path.contains("::") else ""
+	for tab: Dictionary in _open_tabs(script_editor):
+		if tab["editor"] == current:
+			return tab["path"]
+	return ""
+
+
+## [{"editor", "path", "script" (null for a text file)}] for every script and text file tab with a file behind it.
+static func _open_tabs(script_editor: ScriptEditor) -> Array:
+	var tabs: Array = []
+	var editors: Array = script_editor.get_open_script_editors()
+	# get_open_scripts() lists only the ScriptTextEditor tabs, in tab order — pair it with those editors.
+	var scripts: Array = script_editor.get_open_scripts()
+	var script_editors := editors.filter(func(e: Node) -> bool: return e.get_class() == "ScriptTextEditor")
+	for i in mini(scripts.size(), script_editors.size()):
+		var script: Script = scripts[i]
+		if script != null and not script.resource_path.is_empty() and not script.resource_path.contains("::"):
+			tabs.append({ "editor": script_editors[i], "path": script.resource_path, "script": script })
+	# Text files (.md, .json, .txt...) have no API giving their path; the script list's items carry it as the tooltip and the tab index as metadata.
+	var text_editors := {}
+	for editor: Node in editors:
+		if editor.get_class() == "TextEditor":
+			text_editors[editor.get_index()] = editor
+	if not text_editors.is_empty():
+		for list: ItemList in script_editor.find_children("*", "ItemList", true, false):
+			for i in list.item_count:
+				var tab_index: Variant = list.get_item_metadata(i)
+				var path := list.get_item_tooltip(i)
+				if tab_index is int and text_editors.has(tab_index) and path.begins_with("res://"):
+					tabs.append({ "editor": text_editors[tab_index], "path": path, "script": null })
+					text_editors.erase(tab_index)
+	return tabs
 
 
 static func _replace_text_keeping_view(code_edit: CodeEdit, text: String) -> void:

@@ -92,7 +92,7 @@ func _notify_incoming() -> void:
 		_announced_behind[sync["upstream"]] = behind
 		return
 	_announced_behind[sync["upstream"]] = behind
-	var overlap: Dictionary = _repo.incoming_overlap(_repo.get_recent_status(2000).map(func(e: Dictionary) -> String: return e["path"]))
+	var overlap: Dictionary = _repo.incoming_overlap(_repo.get_status().map(func(e: Dictionary) -> String: return e["path"]))
 	if not overlap.is_empty():
 		var names := overlap.keys().slice(0, 3).map(func(p: String) -> String: return p.get_file())
 		EditorInterface.get_editor_toaster().push_toast("Godit: %d new commit%s on %s also change%s %s, which you changed too. Pull soon to merge while it's small." % [
@@ -101,12 +101,6 @@ func _notify_incoming() -> void:
 		return
 	EditorInterface.get_editor_toaster().push_toast("Godit: %d new commit%s on %s. Pull them from the Git dock." % [
 		behind, "" if behind == 1 else "s", sync["upstream"]], EditorToaster.SEVERITY_INFO)
-
-
-## Called by plugin.gd after a save in the editor.
-func poll_now() -> void:
-	if _repo != null and _changes_panel.is_visible_in_tree():
-		_changes_panel._maybe_refresh()
 
 
 ## Brings the Changes tab to front within this dock and runs action there (see changes_panel.gd's run_action()).

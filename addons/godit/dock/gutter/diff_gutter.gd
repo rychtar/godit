@@ -2,12 +2,15 @@
 extends Node
 
 signal change_clicked(rel_path: String, line: int)
+## A text file tab (.md, .json...) got its flags; plugin.gd hands it to script_menu.gd, whose menu items those tabs don't ask for.
+signal text_tab_refreshed(editor: Control, code_edit: CodeEdit)
 
 const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
 const DiffHunks := preload("res://addons/godit/util/diff_hunks.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const ChangePreview := preload("res://addons/godit/dock/gutter/change_preview.gd")
 const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 
 const GUTTER_NAME := "godit_diff"
 const GUTTER_WIDTH := 14
@@ -61,14 +64,14 @@ func current_code_edit() -> CodeEdit:
 func _refresh_current() -> void:
 	if _script_editor == null:
 		return
-	var script := _script_editor.get_current_script()
 	var code_edit := current_code_edit()
-	if script == null or code_edit == null:
-		return
-	var res_path: String = script.resource_path
-	if res_path.is_empty() or not res_path.begins_with("res://"):
+	var res_path := EditorOpen.current_tab_path()
+	if code_edit == null or not res_path.begins_with("res://"):
 		return
 	refresh_code_edit(code_edit, res_path)
+	var editor := _script_editor.get_current_editor()
+	if editor.get_class() == "TextEditor" and code_edit.has_meta(META_REL_PATH):
+		text_tab_refreshed.emit(editor, code_edit)
 
 
 ## Opened repos by directory, so the 2 s poll doesn't spawn `git rev-parse` for every tick.

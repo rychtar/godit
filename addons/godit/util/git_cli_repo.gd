@@ -15,6 +15,10 @@ const US := GitCli.US
 ## Porcelain XY codes for unmerged paths (both sides touched the file, or one deleted what the other changed).
 const CONFLICT_CODES := ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]
 
+## No optional locks: a poll mustn't hold index.lock while the user runs git in a terminal.
+const STATUS_ARGS := ["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=all"]
+const REFS_ARGS := ["for-each-ref", "--format=%(refname) %(objectname)"]
+
 var _repo_root: String = ""
 ## "## branch...upstream [ahead n, behind m]" line from the last get_status().
 var status_header := ""
@@ -40,10 +44,14 @@ func get_repo_root() -> String:
 
 
 func get_status() -> Array:
-	var result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--branch", "--untracked-files=all"])
+	return parse_status(GitCli.run(_repo_root, STATUS_ARGS)["text"])
+
+
+## Entries from STATUS_ARGS output (e.g. a RepoWatcher snapshot's "status"); also sets status_header.
+func parse_status(text: String) -> Array:
 	var entries: Array = []
 	status_header = ""
-	for line in GitCli.lines(result["text"]):
+	for line in GitCli.lines(text):
 		if line.begins_with("## "):
 			status_header = line
 			continue
@@ -51,32 +59,18 @@ func get_status() -> Array:
 			continue
 		var xy := line.substr(0, 2)
 		var rest := line.substr(3)
-		var path := rest
+		var path := GitCli.unquote(rest)
 		var renamed_from := ""
 		var arrow := rest.find(" -> ")
 		if arrow != -1:
-			renamed_from = rest.substr(0, arrow)
-			path = rest.substr(arrow + 4)
+			renamed_from = GitCli.unquote(rest.substr(0, arrow))
+			path = GitCli.unquote(rest.substr(arrow + 4))
 		entries.append({
 			"path": path,
 			"status": _status_bits(xy),
 			"renamed_from": renamed_from,
 		})
-	_status_cache[_repo_root] = { "msec": Time.get_ticks_msec(), "entries": entries.duplicate(true), "header": status_header }
 	return entries
-
-
-## Last get_status() result of any repo instance on this root (the two docks each open their own) if at most max_age_msec old, else a fresh one — lets pollers share one `git status`.
-func get_recent_status(max_age_msec: int) -> Array:
-	var cached: Dictionary = _status_cache.get(_repo_root, {})
-	if cached.is_empty() or Time.get_ticks_msec() - int(cached["msec"]) > max_age_msec:
-		return get_status()
-	status_header = cached["header"]
-	return cached["entries"].duplicate(true)
-
-
-## repo root -> {"msec", "entries", "header"} of the latest get_status(), for get_recent_status().
-static var _status_cache := {}
 
 
 ## Maps porcelain v1's two-letter XY status into GitStatusFlags' bitmask.
@@ -589,9 +583,9 @@ func incoming_overlap(local_paths: Array) -> Dictionary:
 	if key != _overlap_key:
 		_overlap_key = key
 		_incoming_files = {}
-		for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "HEAD...@{upstream}"])["text"]):
+		for path in GitCli.paths(GitCli.run(_repo_root, ["diff", "--name-only", "HEAD...@{upstream}"])["text"]):
 			_incoming_files[path] = true
-		_outgoing_files = Array(GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-only", "@{upstream}...HEAD"])["text"]))
+		_outgoing_files = Array(GitCli.paths(GitCli.run(_repo_root, ["diff", "--name-only", "@{upstream}...HEAD"])["text"]))
 	var overlap := {}
 	for path in local_paths:
 		if _incoming_files.has(path):
@@ -640,11 +634,6 @@ func rename_remote(old_name: String, new_name: String) -> Dictionary:
 
 func set_remote_url(name: String, url: String) -> Dictionary:
 	return _simple(["remote", "set-url", name, url])
-
-
-## Read-only git call for callers that only need raw output (e.g. change-detection signatures).
-func run_read(args: Array) -> Dictionary:
-	return GitCli.run(_repo_root, args)
 
 
 ## Array[{"ref": "stash@{0}", "message", "date"}], newest first.
@@ -733,6 +722,35 @@ func _simple(args: Array) -> Dictionary:
 	return { "ok": r["exit_code"] == 0, "error": "" if r["exit_code"] == 0 else text, "output": text }
 
 
+## True when this repo uses git's built-in file system monitor (see set_fast_status()).
+func is_fast_status_on() -> bool:
+	return GitCli.run(_repo_root, ["config", "--local", "--bool", "--get", "core.fsmonitor"])["text"].strip_edges() == "true"
+
+
+## Turns on git's built-in file system monitor plus the untracked cache in this repo's config, so `git status` asks a daemon what changed instead of scanning every file.
+func set_fast_status(on: bool) -> Dictionary:
+	if not on:
+		GitCli.run(_repo_root, ["fsmonitor--daemon", "stop"])
+		GitCli.run(_repo_root, ["config", "--local", "--unset", "core.untrackedCache"])
+		return _simple(["config", "--local", "--unset", "core.fsmonitor"])
+	if not fast_status_supported():
+		return { "ok": false, "error": "Needs git 2.37 or newer on macOS or Windows.", "output": "" }
+	var r := _simple(["config", "--local", "core.fsmonitor", "true"])
+	if r["ok"]:
+		r = _simple(["config", "--local", "core.untrackedCache", "true"])
+	GitCli.run(_repo_root, ["status", "--porcelain"]) # starts the daemon and writes both into the index now, not on the next commit
+	return r
+
+
+## Older git reads core.fsmonitor=true as a hook to run, which would hide every change, so the version matters.
+static func fast_status_supported() -> bool:
+	if OS.get_name() not in ["macOS", "Windows"]:
+		return false
+	var r := GitCli.execute("git", PackedStringArray(["--version"]))
+	var version: PackedStringArray = r["out"].get_string_from_utf8().get_slice("git version ", 1).split(".")
+	return version.size() >= 2 and (version[0].to_int() > 2 or (version[0].to_int() == 2 and version[1].to_int() >= 37))
+
+
 var _git_dir := ""
 
 
@@ -806,7 +824,7 @@ func get_merge_message() -> String:
 ## Repo-relative paths git still considers unmerged.
 func list_conflicts() -> PackedStringArray:
 	var r := GitCli.run(_repo_root, ["diff", "--name-only", "--diff-filter=U"])
-	return GitCli.lines(r["text"])
+	return GitCli.paths(r["text"])
 
 
 ## Finishes the in-progress operation once all conflicts are resolved (a merge is concluded with its prepared message).
@@ -1089,9 +1107,28 @@ func read_head_oid() -> String:
 	return head if head.length() >= 40 and not head.contains(" ") else get_head_oid()
 
 
-## Every ref and its target in one process, so pollers can cheaply tell whether history moved.
-func get_refs_signature() -> String:
-	return GitCli.run(_repo_root, ["for-each-ref", "--format=%(refname) %(objectname)"])["text"] + read_head_oid()
+## The refs, config and stash reflog parts of a RepoWatcher snapshot, read now; with_status adds `git status` too.
+func read_snapshot(with_status := false) -> Dictionary:
+	return snapshot_of(_repo_root, get_git_dir(), get_common_dir(), with_status)
+
+
+## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved. Static and free of static vars, so RepoWatcher can run it on a worker thread.
+static func refs_signature_of(root: String, git_dir: String) -> String:
+	return GitCli.execute("git", GitCli.argv(root, REFS_ARGS))["out"].get_string_from_utf8() + read_text(git_dir.path_join("HEAD"))
+
+
+## {"status" (raw STATUS_ARGS output, "" without with_status), "refs", "config", "stash_log"}; worker-thread safe like refs_signature_of().
+static func snapshot_of(root: String, git_dir: String, common_dir: String, with_status: bool) -> Dictionary:
+	return {
+		"status": GitCli.execute("git", GitCli.argv(root, STATUS_ARGS))["out"].get_string_from_utf8() if with_status else "",
+		"refs": refs_signature_of(root, git_dir),
+		"config": read_text(common_dir.path_join("config")),
+		"stash_log": read_text(common_dir.path_join("logs/refs/stash")),
+	}
+
+
+static func read_text(path: String) -> String:
+	return FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 
 
 func is_ancestor_of_head(oid: String) -> bool:
@@ -1120,10 +1157,9 @@ func stash_untracked_rev(ref: String) -> String:
 func current_path(oid: String, path: String) -> String:
 	if FileAccess.file_exists(_repo_root.path_join(path)):
 		return path
-	for line in GitCli.lines(GitCli.run(_repo_root, ["diff", "--name-status", "-M", oid])["text"]):
-		var fields := line.split("\t")
-		if fields.size() >= 3 and fields[0].begins_with("R") and fields[1] == path:
-			return fields[2]
+	for entry in _parse_name_status(GitCli.run(_repo_root, ["diff", "--name-status", "-M", oid])["text"]):
+		if entry.get("old_path", "") == path and entry["status"] == GitIcons.DELTA_RENAMED:
+			return entry["path"]
 	return ""
 
 
@@ -1144,7 +1180,7 @@ func has_staged_changes() -> bool:
 ## Staged added/modified files bigger than limit_bytes that Git LFS doesn't already take care of: [{"path", "size"}].
 func large_staged_files(limit_bytes: int) -> Array:
 	var large: Array = []
-	for path in GitCli.lines(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=AM"])["text"]):
+	for path in GitCli.paths(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=AM"])["text"]):
 		var f := FileAccess.open(_repo_root.path_join(path), FileAccess.READ)
 		if f != null and f.get_length() > limit_bytes:
 			large.append({ "path": path, "size": f.get_length() })
@@ -1154,7 +1190,7 @@ func large_staged_files(limit_bytes: int) -> Array:
 	var attrs: String = GitCli.run(_repo_root, ["check-attr", "filter", "--"] + large.map(func(e: Dictionary) -> String: return e["path"]))["text"]
 	for line in GitCli.lines(attrs):
 		if line.ends_with(": filter: lfs"):
-			lfs[line.trim_suffix(": filter: lfs")] = true
+			lfs[GitCli.unquote(line.trim_suffix(": filter: lfs"))] = true
 	return large.filter(func(e: Dictionary) -> bool: return not lfs.has(e["path"]))
 
 
@@ -1345,10 +1381,10 @@ func get_commit_files(oid: String) -> Array:
 func _parse_name_status(text: String) -> Array:
 	var entries: Array = []
 	for line in GitCli.lines(text):
-		var fields := line.split("\t")
+		var fields := Array(line.split("\t")).map(func(f: String) -> String: return GitCli.unquote(f))
 		if fields.size() < 2:
 			continue
-		var letter := fields[0].substr(0, 1) # strip the similarity score off R100/C100
+		var letter: String = fields[0].substr(0, 1) # strip the similarity score off R100/C100
 		var path: String = fields[2] if (letter == "R" or letter == "C") and fields.size() > 2 else fields[1]
 		var entry := { "path": path, "status": _delta_status(letter) }
 		if letter == "R" or letter == "C":

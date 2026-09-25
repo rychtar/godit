@@ -3,7 +3,7 @@ extends Control
 
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
-const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
@@ -18,6 +18,8 @@ const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_reso
 const SceneConflictResolver := preload("res://addons/godit/dock/widgets/scene_conflict_resolver.gd")
 const SceneText := preload("res://addons/godit/util/scene_text.gd")
 const CompanionFiles := preload("res://addons/godit/util/companion_files.gd")
+const OperationBanner := preload("res://addons/godit/dock/widgets/operation_banner.gd")
+const CommitMessageHistory := preload("res://addons/godit/util/commit_message_history.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 ## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
@@ -64,7 +66,6 @@ signal file_history_requested(path: String)
 ## After every refresh: how many changed and new files there are (the combined dock's File Status badge).
 signal changes_counted(count: int)
 
-const AUTO_REFRESH_INTERVAL := 3.0
 
 ## ChangesTree has two columns: the checkbox needs its own narrow column,
 ## since Godot toggles a CELL_MODE_CHECK cell on any click anywhere inside
@@ -119,17 +120,13 @@ var _name_dialog_rename_target := ""
 ## Which action _revert_confirm_dialog is currently being used for: "revert" or "remove".
 var _confirm_dialog_action := "revert"
 
-## Pauses while the panel is hidden or the editor is in the background.
-var _auto_refresh_timer: PollTimer
 ## Changed + new files at the last refresh (see changes_counted).
 var change_count := 0
 var _operation_bar: HBoxContainer
 
-## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar (see _update_operation_banner()).
-var _op_banner: PanelContainer
-var _op_label: Label
-var _op_continue_button: Button
-var _op_skip_button: Button
+## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar.
+var _op_banner: OperationBanner
+var _message_history: CommitMessageHistory
 ## Branch switcher + Fetch/Pull/Push header (shared widget, also on the Branches tab).
 var _sync_bar: VBoxContainer
 ## Last branch seen by refresh(), to notice checkouts made anywhere (sync bar, Branches, Git Log, terminal).
@@ -141,9 +138,7 @@ var _diff_side_by_path := {}
 ## Which side the diff view is showing right now ("unstaged"/"staged"), so Revert knows where the hunk lives.
 var _diff_side := "unstaged"
 
-## Signature of the last-seen `git status` (see _status_signature()) — lets
-## the auto-refresh timer skip rebuilding the tree when nothing changed,
-## which would otherwise reset scroll position and selection every tick.
+## Signature of the last-seen `git status`, so a poll only rebuilds the tree (losing scroll and selection) when something changed.
 var _last_status_signature := ""
 ## Changed files' mtimes at the last check: a re-saved file keeps its status, so only this reveals that its diff is stale.
 var _last_content_signature := ""
@@ -176,7 +171,14 @@ func _ready() -> void:
 	$Layout.move_child(_sync_bar, 0)
 	_sync_bar.changed.connect(refresh)
 	_operation_bar = _sync_bar.operation_bar
-	_build_operation_banner()
+	_op_banner = OperationBanner.new(_operation_bar)
+	_op_banner.step_done.connect(func(ok: bool) -> void:
+		if ok:
+			_commit_message.text = ""
+		refresh()
+	)
+	$Layout.add_child(_op_banner)
+	$Layout.move_child(_op_banner, 1)
 
 	var stash_button := Button.new()
 	stash_button.text = "Stash…"
@@ -202,11 +204,10 @@ func _ready() -> void:
 	)
 	_commit_message.gui_input.connect(_on_commit_message_gui_input)
 	_commit_message.tooltip_text = "Ctrl/Cmd+Enter to commit, Ctrl/Cmd+Shift+Enter to commit and push\nUp/Down in an empty box: your previous messages"
-	_build_recent_messages_button()
-
-	_auto_refresh_timer = PollTimer.new(AUTO_REFRESH_INTERVAL)
-	_auto_refresh_timer.poll.connect(_maybe_refresh)
-	add_child(_auto_refresh_timer)
+	_message_history = CommitMessageHistory.new(_commit_message, _update_commit_buttons_enabled)
+	var history_button := _message_history.make_button()
+	_amend_check.get_parent().add_child(history_button)
+	_amend_check.get_parent().move_child(history_button, _amend_check.get_index())
 
 
 func _exit_tree() -> void:
@@ -224,12 +225,13 @@ func _exit_tree() -> void:
 func set_repo(repo: RefCounted) -> void:
 	_repo = repo
 	_sync_bar.set_repo(repo)
+	_op_banner.repo = repo
+	_message_history.repo = repo
 	_changelist_state = ChangelistStore.load_state(_repo.get_repo_root())
 	_commit_message.text = _changelist_state["messages"].get(_changelist_state["active"], "")
 	_sync_staging_to_active_changelist()
 	refresh()
-	if _auto_refresh_timer != null:
-		_auto_refresh_timer.active = true
+	RepoWatcher.watch(self, _on_polled)
 
 
 ## Hands the branch/Fetch/Pull/Push header to the combined dock, which shows it above every view.
@@ -246,16 +248,15 @@ func reattach_sync_bar() -> void:
 	$Layout.move_child(_sync_bar, 0)
 
 
-## Re-fetches status and only calls refresh() — which rebuilds the tree from
-## scratch — if something actually changed since the last check.
-func _maybe_refresh() -> void:
-	if _repo == null:
-		return
-	if _repo.is_busy():
+## Rebuilds the tree only when the status changed, hidden too (the change count, toolbar and auto-staging stay current); re-shows the diff when a changed file was saved again.
+func _on_polled(snapshot: Dictionary) -> void:
+	if _repo == null or _repo.is_busy():
 		return # a pull/push is rewriting things right now — catch up once it's done
-	var entries: Array = _repo.get_status()
+	var entries: Array = _repo.parse_status(snapshot["status"])
 	if _status_signature(entries) != _last_status_signature:
 		refresh(entries)
+		return
+	if not is_visible_in_tree():
 		return
 	var content := _content_signature(entries)
 	if content != _last_content_signature:
@@ -280,8 +281,7 @@ func _status_signature(entries: Array) -> String:
 	return "|".join(parts)
 
 
-## status_entries lets callers that already fetched `git status` (e.g.
-## _maybe_refresh()) pass it along instead of fetching it twice.
+## status_entries: a get_status() result the caller already has, to skip fetching it again.
 func refresh(status_entries: Variant = null) -> void:
 	if _repo == null:
 		return
@@ -296,7 +296,7 @@ func refresh(status_entries: Variant = null) -> void:
 	if selected_item != null and selected_item.get_metadata(0) is Dictionary:
 		selected_path = selected_item.get_metadata(0).get("path", "")
 	var scroll_y := _tree.get_scroll().y
-	var op := _update_operation_banner()
+	var op := _op_banner.refresh()
 	_sync_bar.refresh()
 
 	_suppress_item_edited = true
@@ -748,96 +748,6 @@ func _add_conflict_item(group: TreeItem, folder_cache: Dictionary, path: String)
 	item.set_custom_color(TEXT_COLUMN, GitIcons.COLOR_DELETED)
 	item.set_metadata(0, { "kind": "conflict_file", "path": path, "staged": false, "status": GitStatusFlags.CONFLICTED })
 	item.set_tooltip_text(TEXT_COLUMN, "%s — conflicted\nDouble-click to resolve side by side. Right-click: Accept Ours / Theirs, or Mark Resolved after editing it yourself." % path)
-
-
-func _build_operation_banner() -> void:
-	_op_banner = PanelContainer.new()
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.85, 0.55, 0.2, 0.18)
-	style.border_color = Color(0.95, 0.65, 0.25, 0.6)
-	style.border_width_left = 3
-	style.content_margin_left = 8
-	style.content_margin_right = 4
-	style.content_margin_top = 3
-	style.content_margin_bottom = 3
-	_op_banner.add_theme_stylebox_override("panel", style)
-	_op_banner.visible = false
-
-	var row := HBoxContainer.new()
-	_op_label = Label.new()
-	_op_label.size_flags_horizontal = SIZE_EXPAND_FILL
-	_op_label.clip_text = true
-	_op_label.mouse_filter = Control.MOUSE_FILTER_PASS
-	row.add_child(_op_label)
-
-	_op_continue_button = Button.new()
-	_op_continue_button.text = "Continue"
-	_op_continue_button.pressed.connect(_on_op_continue_pressed)
-	row.add_child(_op_continue_button)
-
-	_op_skip_button = Button.new()
-	_op_skip_button.text = "Skip"
-	_op_skip_button.tooltip_text = "Drop the commit being applied and move on to the next one"
-	_op_skip_button.pressed.connect(_on_op_skip_pressed)
-	row.add_child(_op_skip_button)
-
-	var abort := Button.new()
-	abort.text = "Abort"
-	abort.tooltip_text = "Undo the whole operation and go back to how things were before it started"
-	abort.pressed.connect(_on_op_abort_pressed)
-	row.add_child(abort)
-
-	_op_banner.add_child(row)
-	$Layout.add_child(_op_banner)
-	$Layout.move_child(_op_banner, 1)
-
-
-## Shows/hides the in-progress banner; returns the operation state it used.
-func _update_operation_banner() -> Dictionary:
-	var op: Dictionary = _repo.get_operation_state()
-	var kind: String = op["kind"]
-	_op_banner.visible = not kind.is_empty()
-	if kind.is_empty():
-		return op
-	var verb: String = { "merge": "Merging", "rebase": "Rebasing", "cherry-pick": "Cherry-picking", "revert": "Reverting" }.get(kind, kind)
-	var conflicts: int = op["conflicts"]
-	var detail: String = op["detail"]
-	_op_label.text = "%s%s — %s" % [verb, " " + detail if not detail.is_empty() else "", "%d conflict%s left" % [conflicts, "" if conflicts == 1 else "s"] if conflicts > 0 else "no conflicts left"]
-	_op_label.tooltip_text = _op_label.text
-	_op_continue_button.disabled = conflicts > 0
-	_op_continue_button.tooltip_text = "Resolve every conflict first" if conflicts > 0 else "Commit the resolution and carry on"
-	_op_skip_button.visible = kind != "merge"
-	return op
-
-
-func _on_op_continue_pressed() -> void:
-	var result: Dictionary = _repo.continue_operation()
-	await _after_operation_step(result, "Continue")
-
-
-func _on_op_skip_pressed() -> void:
-	if await Dialogs.confirm(self, "Skip Commit", "Drop the commit currently being applied (its changes are discarded) and continue with the next one?", "Skip"):
-		await _after_operation_step(_repo.skip_operation(), "Skip")
-
-
-func _on_op_abort_pressed() -> void:
-	if await Dialogs.confirm(self, "Abort", "Abort the %s and return to the state before it started?\nAny conflict resolutions made so far are lost." % _repo.get_operation_state()["kind"], "Abort"):
-		await _after_operation_step(_repo.abort_operation(), "Abort")
-
-
-func _after_operation_step(result: Dictionary, title: String) -> void:
-	EditorOpen.refresh_all_external_changes()
-	if result.get("conflicts", false):
-		_operation_bar.done("Stopped on the next conflicts — resolve them, then Continue.", true)
-	elif not result["ok"]:
-		var error: String = result["error"]
-		if error.contains("nothing to commit") or error.contains("is now empty"):
-			error += "\n\nThe commit being applied ended up empty — use Skip to drop it."
-		await Dialogs.error(self, "%s failed" % title, GitErrors.explain(error))
-	else:
-		_operation_bar.done("%s done." % title)
-		_commit_message.text = ""
-	refresh()
 
 
 func _changelist_for_path(path: String) -> String:
@@ -1444,7 +1354,7 @@ func _revert_paths(paths: Array) -> void:
 			errors.append("%s: %s" % [path, result["error"]])
 		_changelist_state["assignments"].erase(path)
 	_save_changelist_state()
-	EditorOpen.refresh_all_external_changes()
+	EditorOpen.refresh_external_changes(_repo.get_repo_root(), paths)
 	if not errors.is_empty():
 		Dialogs.error(self, "Some files couldn't be reverted", "\n".join(errors))
 	refresh()
@@ -1494,59 +1404,11 @@ func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
 	refresh()
 
 
-const MESSAGE_HISTORY_SIZE := 20
-
-## Previous messages for Up/Down in the message box, loaded when browsing starts; -1 = not browsing.
-var _message_history := PackedStringArray()
-var _message_history_index := -1
-
-
-func _build_recent_messages_button() -> void:
-	var button := MenuButton.new()
-	button.icon = get_theme_icon("History", "EditorIcons")
-	button.flat = true
-	button.tooltip_text = "Recent commit messages"
-	var popup := button.get_popup()
-	popup.about_to_popup.connect(func() -> void:
-		popup.clear()
-		_message_history = _repo.recent_commit_messages(MESSAGE_HISTORY_SIZE)
-		for i in _message_history.size():
-			popup.add_item(_message_history[i].get_slice("\n", 0).left(80), i)
-		if _message_history.is_empty():
-			popup.add_item("(no commits yet)")
-			popup.set_item_disabled(0, true)
-	)
-	popup.id_pressed.connect(func(id: int) -> void:
-		_commit_message.text = _message_history[id]
-		_commit_message.grab_focus()
-		_update_commit_buttons_enabled()
-	)
-	_amend_check.get_parent().add_child(button)
-	_amend_check.get_parent().move_child(button, _amend_check.get_index())
-
-
-## Up in an empty box (or one still showing a recalled message) steps back through previous messages; Down steps forward, back to empty.
-func _browse_message_history(step: int) -> bool:
-	var browsing := _message_history_index >= 0 and _message_history_index < _message_history.size() and _commit_message.text == _message_history[_message_history_index]
-	if not browsing:
-		if step < 0 or not _commit_message.text.is_empty():
-			return false
-		_message_history = _repo.recent_commit_messages(MESSAGE_HISTORY_SIZE)
-		_message_history_index = -1
-	var next := _message_history_index + step
-	if next >= _message_history.size():
-		return browsing
-	_message_history_index = maxi(next, -1)
-	_commit_message.text = _message_history[_message_history_index] if _message_history_index >= 0 else ""
-	_update_commit_buttons_enabled()
-	return true
-
-
 func _on_commit_message_gui_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode in [KEY_UP, KEY_DOWN] and not event.shift_pressed:
 		var up: bool = event.keycode == KEY_UP
 		var at_edge := _commit_message.get_caret_line() == 0 if up else _commit_message.get_caret_line() == _commit_message.get_line_count() - 1
-		if at_edge and _browse_message_history(1 if up else -1):
+		if at_edge and _message_history.browse(1 if up else -1):
 			_commit_message.accept_event()
 			return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER] \

@@ -17,7 +17,9 @@ enum { PULL_DEFAULT, PULL_MERGE, PULL_REBASE, PULL_FF_ONLY, PULL_AUTOSTASH }
 enum { PUSH_DEFAULT, PUSH_WITH_TAGS, PUSH_TO, PUSH_FORCE, PUSH_PULL_REQUEST }
 const ID_NEW_BRANCH := 100000
 
+## Where progress and results go: its own strip, or the one use_operation_bar() pointed it to.
 var operation_bar: HBoxContainer
+var _own_operation_bar: HBoxContainer
 
 var _repo: RefCounted
 var _branch_button: MenuButton
@@ -82,6 +84,7 @@ func _init() -> void:
 	refresh.set_meta("icon_name", &"Reload")
 
 	operation_bar = OperationBar.new()
+	_own_operation_bar = operation_bar
 	add_child(operation_bar)
 
 
@@ -133,9 +136,15 @@ func set_toolbar_mode(on: bool) -> void:
 	refresh()
 
 
-## Hides the branch/Fetch/Pull/Push row but keeps the progress strip, for the Branches sidebar under the combined dock's shared row.
+## Hides the branch/Fetch/Pull/Push row, for the Branches sidebar under the combined dock's shared row.
 func set_row_visible(on: bool) -> void:
 	get_child(0).visible = on
+
+
+## Reports into other's strip instead of its own (the combined dock's toolbar, so messages don't pop up in the sidebar); null goes back to its own.
+func use_operation_bar(other: HBoxContainer) -> void:
+	_own_operation_bar.visible = false
+	operation_bar = other if other != null else _own_operation_bar
 
 
 ## Re-reads branch, upstream and ahead/behind (cheap: a few rev-parse calls).
