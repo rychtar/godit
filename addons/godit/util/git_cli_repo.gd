@@ -722,6 +722,35 @@ func _simple(args: Array) -> Dictionary:
 	return { "ok": r["exit_code"] == 0, "error": "" if r["exit_code"] == 0 else text, "output": text }
 
 
+## True when this repo uses git's built-in file system monitor (see set_fast_status()).
+func is_fast_status_on() -> bool:
+	return GitCli.run(_repo_root, ["config", "--local", "--bool", "--get", "core.fsmonitor"])["text"].strip_edges() == "true"
+
+
+## Turns on git's built-in file system monitor plus the untracked cache in this repo's config, so `git status` asks a daemon what changed instead of scanning every file.
+func set_fast_status(on: bool) -> Dictionary:
+	if not on:
+		GitCli.run(_repo_root, ["fsmonitor--daemon", "stop"])
+		GitCli.run(_repo_root, ["config", "--local", "--unset", "core.untrackedCache"])
+		return _simple(["config", "--local", "--unset", "core.fsmonitor"])
+	if not fast_status_supported():
+		return { "ok": false, "error": "Needs git 2.37 or newer on macOS or Windows.", "output": "" }
+	var r := _simple(["config", "--local", "core.fsmonitor", "true"])
+	if r["ok"]:
+		r = _simple(["config", "--local", "core.untrackedCache", "true"])
+	GitCli.run(_repo_root, ["status", "--porcelain"]) # starts the daemon and writes both into the index now, not on the next commit
+	return r
+
+
+## Older git reads core.fsmonitor=true as a hook to run, which would hide every change, so the version matters.
+static func fast_status_supported() -> bool:
+	if OS.get_name() not in ["macOS", "Windows"]:
+		return false
+	var r := GitCli.execute("git", PackedStringArray(["--version"]))
+	var version: PackedStringArray = r["out"].get_string_from_utf8().get_slice("git version ", 1).split(".")
+	return version.size() >= 2 and (version[0].to_int() > 2 or (version[0].to_int() == 2 and version[1].to_int() >= 37))
+
+
 var _git_dir := ""
 
 

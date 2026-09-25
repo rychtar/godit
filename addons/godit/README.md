@@ -37,7 +37,7 @@ For push and pull, git has to log in without asking: use a credential helper for
 
 ## Settings
 
-Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel.
+Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, a faster `git status` for large projects (git's file system monitor), and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel.
 
 The ⋮ menu in the Changes panel controls auto-staging, auto-adding new files and the masks for files to skip (for example `*.psd` source art). `.import` and `.uid` files are added with the file they belong to, since Godot needs them in the repo.
 

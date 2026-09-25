@@ -16,6 +16,7 @@ const FilesystemColorsScript := preload("res://addons/godit/dock/filesystem/file
 const FilesystemMenuScript := preload("res://addons/godit/dock/filesystem/filesystem_menu.gd")
 const CombinedDockScript := preload("res://addons/godit/dock/godit_combined_dock.gd")
 const RepoWatcherScript := preload("res://addons/godit/util/repo_watcher.gd")
+const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
 ##
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
@@ -76,6 +77,7 @@ const ID_BLAME := 4
 
 const ID_CONFIRM_SHORTCUT_COMMIT := 5
 const ID_SAVE_BEFORE_GIT := 6
+const ID_FAST_STATUS := 9
 
 
 func _enter_tree() -> void:
@@ -94,6 +96,8 @@ func _enter_tree() -> void:
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_BLAME), Settings.get_value(BLAME_SETTING_KEY, false))
 	tools_menu.add_check_item("Confirm Ctrl/Cmd+Enter commits", ID_CONFIRM_SHORTCUT_COMMIT)
 	tools_menu.add_check_item("Save open files before git operations without asking", ID_SAVE_BEFORE_GIT)
+	tools_menu.add_check_item("Faster git status for large projects (file system monitor)", ID_FAST_STATUS)
+	tools_menu.set_item_tooltip(tools_menu.get_item_index(ID_FAST_STATUS), "Git's built-in fsmonitor daemon and untracked cache, set in this repo's config:\n`git status` asks what changed instead of scanning every file.")
 	tools_menu.add_separator("Layout")
 	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (default; can float on a second monitor)", ID_LAYOUT_COMBINED)
 	tools_menu.add_radio_check_item("Git dock + Git Log at bottom", ID_LAYOUT_SEPARATE)
@@ -103,6 +107,11 @@ func _enter_tree() -> void:
 	tools_menu.about_to_popup.connect(func() -> void:
 		tools_menu.set_item_checked(tools_menu.get_item_index(ID_CONFIRM_SHORTCUT_COMMIT), Settings.get_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, true))
 		tools_menu.set_item_checked(tools_menu.get_item_index(ID_SAVE_BEFORE_GIT), Settings.get_value(SaveGuard.ALWAYS_SAVE_SETTING_KEY, false))
+		# Repo config, which can change outside Godit too.
+		var fast_index := tools_menu.get_item_index(ID_FAST_STATUS)
+		var repo: RefCounted = watcher.repo
+		tools_menu.set_item_disabled(fast_index, repo == null or (not repo.is_fast_status_on() and not GitCliRepo.fast_status_supported()))
+		tools_menu.set_item_checked(fast_index, repo != null and repo.is_fast_status_on())
 	)
 	tools_menu.id_pressed.connect(_on_tools_menu_id_pressed)
 	add_tool_submenu_item("Godit", tools_menu)
@@ -298,6 +307,11 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 			Settings.set_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, checked)
 		ID_SAVE_BEFORE_GIT:
 			Settings.set_value(SaveGuard.ALWAYS_SAVE_SETTING_KEY, checked)
+		ID_FAST_STATUS:
+			var result: Dictionary = watcher.repo.set_fast_status(checked)
+			if not result["ok"]:
+				tools_menu.set_item_checked(index, not checked)
+				EditorInterface.get_editor_toaster().push_toast("Godit: " + result["error"], EditorToaster.SEVERITY_WARNING)
 		ID_AUTO_FETCH:
 			Settings.set_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, checked)
 			dock_instance.apply_auto_fetch_setting()
