@@ -1,0 +1,130 @@
+## Colors changed, new and conflicted files in the editor's FileSystem dock by their git status, and folders that contain any.
+@tool
+extends Node
+
+const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
+const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
+const GitIcons := preload("res://addons/godit/util/git_icons.gd")
+const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
+
+## Untracked files in the dock: grey would read as "disabled" there, so they get the usual "unversioned" red-brown.
+const COLOR_UNTRACKED := Color(0.86, 0.56, 0.45)
+const COLOR_CONFLICTED := Color(1.0, 0.4, 0.4)
+## Folders get their strongest child's color, faded toward the normal text.
+const FOLDER_FADE := 0.35
+const META_ORIGINAL := &"godit_original_color"
+
+## Null when the project isn't in a git repo.
+var repo: RefCounted
+var _tree: Tree
+var _timer: PollTimer
+## res:// path (folders end in "/") -> Color, from the last status.
+var _colors := {}
+## Repo-relative path -> status bits, from the last status (read by filesystem_menu.gd).
+var status_by_path := {}
+var _signature := ""
+## The FileSystem dock rebuilds its whole Tree on rescans and searches; a new root item means the colors are gone.
+var _painted_root: TreeItem
+
+
+func _ready() -> void:
+	repo = RepoOpener.open_current_project_repo()["repo"]
+	if repo == null:
+		return
+	var dock := EditorInterface.get_file_system_dock()
+	var trees := dock.find_children("*", "Tree", true, false)
+	if trees.is_empty():
+		return
+	_tree = trees[0]
+	_tree.draw.connect(_on_tree_draw)
+	_tree.item_collapsed.connect(func(_item: TreeItem) -> void: _paint.call_deferred())
+	_timer = PollTimer.new(3.0)
+	_timer.poll.connect(refresh)
+	add_child(_timer)
+	_timer.active = true
+
+
+func _exit_tree() -> void:
+	if _tree != null and is_instance_valid(_tree):
+		_tree.draw.disconnect(_on_tree_draw)
+		_colors = {}
+		_paint()
+
+
+## Re-reads status (shared with the panels' polls when fresh) and repaints if anything changed.
+func refresh() -> void:
+	if repo == null or _tree == null:
+		return
+	var entries: Array = repo.get_recent_status(2500)
+	var signature := str(entries.map(func(e: Dictionary) -> String: return "%s:%d" % [e["path"], e["status"]]))
+	if signature == _signature:
+		return
+	_signature = signature
+	status_by_path = {}
+	_colors = {}
+	var project_root := ProjectSettings.globalize_path("res://")
+	var folder_rank := {}
+	for entry in entries:
+		var status: int = entry["status"]
+		if status & GitStatusFlags.IGNORED:
+			continue
+		status_by_path[entry["path"]] = status
+		var abs_path: String = repo.get_repo_root().path_join(entry["path"])
+		if not abs_path.begins_with(project_root):
+			continue
+		var res_path := "res://" + abs_path.substr(project_root.length())
+		var color := color_for(status)
+		_colors[res_path] = color
+		# Conflicts outrank changes, which outrank new files, in the folder's color.
+		var rank := 3 if status & GitStatusFlags.CONFLICTED else (1 if GitStatusFlags.is_untracked(status) else 2)
+		var dir := res_path.get_base_dir()
+		while dir.length() > "res://".length():
+			var key := dir + "/"
+			if rank > folder_rank.get(key, 0):
+				folder_rank[key] = rank
+				_colors[key] = color.lerp(GitIcons.COLOR_DEFAULT, FOLDER_FADE)
+			dir = dir.get_base_dir()
+	_paint()
+
+
+static func color_for(status: int) -> Color:
+	if status & GitStatusFlags.CONFLICTED:
+		return COLOR_CONFLICTED
+	if GitStatusFlags.is_untracked(status):
+		return COLOR_UNTRACKED
+	return GitIcons.status_color(status)
+
+
+func _on_tree_draw() -> void:
+	if _tree.get_root() != _painted_root:
+		_painted_root = _tree.get_root()
+		_paint.call_deferred()
+
+
+## Applies _colors to every row, restoring rows that were colored before but aren't changed any more.
+func _paint() -> void:
+	if _tree == null or not is_instance_valid(_tree) or _tree.get_root() == null:
+		return
+	_painted_root = _tree.get_root()
+	var stack: Array[TreeItem] = [_tree.get_root()]
+	while not stack.is_empty():
+		var item: TreeItem = stack.pop_back()
+		var path: Variant = item.get_metadata(0)
+		if path is String:
+			var color: Variant = _colors.get(path)
+			if color != null:
+				if not item.has_meta(META_ORIGINAL):
+					item.set_meta(META_ORIGINAL, item.get_custom_color(0))
+				if item.get_custom_color(0) != color:
+					item.set_custom_color(0, color)
+			elif item.has_meta(META_ORIGINAL):
+				var original: Color = item.get_meta(META_ORIGINAL)
+				if original == Color(): # the getter's value for "no custom color"
+					item.clear_custom_color(0)
+				else:
+					item.set_custom_color(0, original)
+				item.remove_meta(META_ORIGINAL)
+		var child := item.get_first_child()
+		while child != null:
+			stack.append(child)
+			child = child.get_next()

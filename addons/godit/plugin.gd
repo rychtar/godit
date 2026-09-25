@@ -12,6 +12,8 @@ const GitCli := preload("res://addons/godit/util/git_cli.gd")
 const GoditDockScript := preload("res://addons/godit/dock/godit_dock.gd")
 const ChangesPanelScript := preload("res://addons/godit/dock/panels/changes_panel.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
+const FilesystemColorsScript := preload("res://addons/godit/dock/filesystem/filesystem_colors.gd")
+const FilesystemMenuScript := preload("res://addons/godit/dock/filesystem/filesystem_menu.gd")
 ##
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
@@ -27,6 +29,10 @@ var diff_gutter: Node
 var blame_gutter: Node
 ## "Git" submenu in the script editor's right-click menu.
 var script_menu: EditorContextMenuPlugin
+## Git status colors in the FileSystem dock.
+var filesystem_colors: Node
+## "Git" items in the FileSystem dock's right-click menu.
+var filesystem_menu: EditorContextMenuPlugin
 ## Project > Tools > Godit submenu, holding the auto-reload toggle.
 var tools_menu: PopupMenu
 
@@ -109,6 +115,17 @@ func _enter_tree() -> void:
 	script_menu.show_file_history = _show_file_history
 	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_SCRIPT_EDITOR_CODE, script_menu)
 	dock_instance.file_history_requested.connect(_show_file_history)
+
+	filesystem_colors = FilesystemColorsScript.new()
+	add_child(filesystem_colors)
+	filesystem_menu = FilesystemMenuScript.new()
+	filesystem_menu.colors = filesystem_colors
+	filesystem_menu.dock = dock_instance
+	filesystem_menu.show_file_history = _show_file_history
+	filesystem_menu.show_change = func(path: String) -> void:
+		_show_changes("")
+		dock_instance.reveal_change(path, 1)
+	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_FILESYSTEM, filesystem_menu)
 	history_dock_instance.changes_requested.connect(_show_changes)
 	# Saves show up right away; the panels' polling still catches changes made outside the editor.
 	resource_saved.connect(func(_r: Resource) -> void: _queue_poll())
@@ -131,6 +148,8 @@ func _queue_poll() -> void:
 			dock_instance.poll_now()
 		if is_instance_valid(history_dock_instance):
 			history_dock_instance.poll_now()
+		if is_instance_valid(filesystem_colors):
+			filesystem_colors.refresh()
 	).call_deferred()
 
 
@@ -156,6 +175,9 @@ func _exit_tree() -> void:
 	diff_gutter.free()
 	remove_context_menu_plugin(script_menu)
 	script_menu = null
+	remove_context_menu_plugin(filesystem_menu)
+	filesystem_menu = null
+	filesystem_colors.free() # restores the dock's own colors on the way out
 	blame_gutter.disable()
 	blame_gutter.free()
 

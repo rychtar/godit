@@ -5,6 +5,7 @@ const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
 const ChangesetDialog := preload("res://addons/godit/dock/widgets/changeset_dialog.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const RepoInitView := preload("res://addons/godit/dock/widgets/repo_init_view.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 
 const AUTO_FETCH_SETTING_KEY := "auto_fetch"
 const AUTO_FETCH_INTERVAL_SECS := 600.0
@@ -109,6 +110,22 @@ func reveal_change(path: String, line: int) -> void:
 	if _changes_panel.get_parent() == _tab_container:
 		_tab_container.current_tab = _changes_panel.get_index()
 	_changes_panel.reveal(path, line)
+
+
+## FileSystem dock actions (filesystem_menu.gd): repo-relative paths, .uid/.import sidecars included.
+func add_paths(paths: Array) -> void:
+	_changes_panel._add_to_vcs(_changes_panel._with_companions(paths))
+	_changes_panel.refresh()
+
+
+func ignore_paths(paths: Array) -> void:
+	for path in _changes_panel._with_companions(paths):
+		_changes_panel._ignore_path(path)
+
+
+func revert_paths(paths: Array) -> void:
+	if await SaveGuard.ensure_saved(_changes_panel, "Revert"):
+		await _changes_panel._revert_paths(paths)
 
 
 ## Pulls Changes and Branches out of the tab bar together, so plugin.gd can dock both at the bottom instead.
