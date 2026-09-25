@@ -52,7 +52,7 @@ func _init(panels: Dictionary) -> void:
 	_layout.set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	add_child(_layout)
 	_sync_bar = panels["changes"].detach_sync_bar()
-	_sync_bar.set_actions_first(true)
+	_sync_bar.set_toolbar_mode(true)
 	_layout.add_theme_constant_override("separation", 0) # toolbar line, sidebar edge and views meet
 	_toolbar = PanelContainer.new()
 	_toolbar.add_child(_sync_bar)
@@ -245,7 +245,7 @@ func detach_panels() -> Dictionary:
 	_panels["branches"].ref_selected.disconnect(_on_ref_selected)
 	_panels["branches"].set_sidebar_mode(false)
 	_panels["changes"].changes_counted.disconnect(_set_change_count)
-	_sync_bar.set_actions_first(false)
+	_sync_bar.set_toolbar_mode(false)
 	_panels["changes"].reattach_sync_bar()
 	for panel: Control in _panels.values():
 		if panel.get_parent() != null:

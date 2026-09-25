@@ -125,9 +125,10 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 
 
-## Fetch/Pull/Push right after the branch button instead of at the far right, where they're a long way off in a window-wide bar.
-func set_actions_first(on: bool) -> void:
+## The combined dock's window-wide toolbar: no branch switcher (the sidebar lists and switches branches) and Fetch/Pull/Push at the left instead of far off at the right.
+func set_toolbar_mode(on: bool) -> void:
 	var row := get_child(0)
+	_branch_button.visible = not on
 	row.move_child(_upstream_label, row.get_child_count() - 1 if on else 1)
 
 
