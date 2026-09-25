@@ -61,6 +61,8 @@ const OPT_EDIT_MASKS := 2
 
 ## "Show History" on a file — godit_dock.gd forwards it to the Git Log panel.
 signal file_history_requested(path: String)
+## After every refresh: how many changed and new files there are (the combined dock's File Status badge).
+signal changes_counted(count: int)
 
 const AUTO_REFRESH_INTERVAL := 3.0
 
@@ -119,6 +121,8 @@ var _confirm_dialog_action := "revert"
 
 ## Pauses while the panel is hidden or the editor is in the background.
 var _auto_refresh_timer: PollTimer
+## Changed + new files at the last refresh (see changes_counted).
+var change_count := 0
 var _operation_bar: HBoxContainer
 
 ## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar (see _update_operation_banner()).
@@ -418,6 +422,8 @@ func refresh(status_entries: Variant = null) -> void:
 					overlap.size(), "" if overlap.size() == 1 else "s", "is" if overlap.size() == 1 else "are", _repo.get_upstream()]
 
 	_update_commit_buttons_enabled(any_staged)
+	change_count = tracked_count + untracked_count
+	changes_counted.emit(change_count)
 
 
 ## Flags rows whose file the upstream changed too (pulling may conflict); returns incoming_overlap() for the status line.

@@ -13,13 +13,23 @@ const WIDE_MIN_WIDTH := 720
 const VIEWS := ["changes", "history", "branches", "console"]
 const VIEW_TITLES := {"changes": "File Status", "history": "History", "branches": "Branches", "console": "Console"}
 const VIEW_ICONS := {"changes": &"Edit", "history": &"History", "branches": &"GuiTreeArrowRight", "console": &"Terminal"}
+const VIEW_TOOLTIPS := {
+	"changes": "Changed files, staging and the commit box",
+	"history": "Commit graph of the whole repository",
+	"branches": "Local and remote branches, tags, stashes and remotes",
+	"console": "Every git command Godit ran, and a prompt for your own",
+}
 
 var _panels: Dictionary = {}
+var _sync_bar: Control
 var _layout: VBoxContainer
 var _sidebar: VBoxContainer
 var _buttons: BoxContainer
 var _views: TabContainer
 var _view_buttons := {}
+## Number of changed files, right-aligned on the File Status button.
+var _changes_badge: Label
+var _headers: Array[Label] = []
 var _wide := true
 ## The view shown last, besides Branches while it sits in the sidebar.
 var _view := "changes"
@@ -37,7 +47,9 @@ func _init(panels: Dictionary) -> void:
 	_layout = VBoxContainer.new()
 	_layout.set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	add_child(_layout)
-	_layout.add_child(panels["changes"].detach_sync_bar())
+	_sync_bar = panels["changes"].detach_sync_bar()
+	_sync_bar.set_actions_first(true)
+	_layout.add_child(_sync_bar)
 	panels["branches"].set_sync_row_visible(false)
 	panels["branches"].ref_selected.connect(_on_ref_selected)
 
@@ -46,24 +58,46 @@ func _init(panels: Dictionary) -> void:
 	_layout.add_child(split)
 	_sidebar = VBoxContainer.new()
 	_sidebar.custom_minimum_size.x = UiScale.px(SIDEBAR_WIDTH)
+	_sidebar.add_theme_constant_override("separation", int(UiScale.px(2)))
 	split.add_child(_sidebar)
 	_views = TabContainer.new()
 	_views.tabs_visible = false
 	_views.size_flags_horizontal = SIZE_EXPAND_FILL
 	split.add_child(_views)
 
+	_sidebar.add_child(_header("Workspace"))
+	var gap := Control.new()
+	gap.custom_minimum_size.y = UiScale.px(8)
+	_sidebar.add_child(gap)
+	_sidebar.add_child(_header("Repository"))
+
 	_buttons = BoxContainer.new()
+	_buttons.add_theme_constant_override("separation", int(UiScale.px(1)))
 	var group := ButtonGroup.new()
 	for view: String in VIEWS:
 		var button := Button.new()
 		button.text = VIEW_TITLES[view]
+		button.tooltip_text = VIEW_TOOLTIPS[view]
 		button.toggle_mode = true
 		button.button_group = group
-		button.flat = true
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.custom_minimum_size.y = UiScale.px(26)
 		button.pressed.connect(show_view.bind(view))
 		_buttons.add_child(button)
 		_view_buttons[view] = button
+
+	_changes_badge = Label.new()
+	_changes_badge.set_anchors_and_offsets_preset(PRESET_RIGHT_WIDE)
+	_changes_badge.offset_left = -UiScale.px(48)
+	_changes_badge.offset_right = -UiScale.px(8)
+	_changes_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_changes_badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_changes_badge.mouse_filter = MOUSE_FILTER_IGNORE
+	_changes_badge.modulate.a = 0.6
+	_view_buttons["changes"].add_child(_changes_badge)
+	_set_change_count(panels["changes"].change_count)
+	panels["changes"].changes_counted.connect(_set_change_count)
+
 	for view: String in VIEWS:
 		panels[view].visible = true # the tab containers they came from hid all but the current one
 		panels[view].size_flags_vertical = SIZE_EXPAND_FILL
@@ -76,11 +110,60 @@ func _init(panels: Dictionary) -> void:
 	)
 
 
+## Small dimmed section title, like SourceTree's WORKSPACE / BRANCHES.
+func _header(text: String) -> Label:
+	var label := Label.new()
+	label.text = text.to_upper()
+	label.modulate.a = 0.55
+	var margin := StyleBoxEmpty.new()
+	margin.content_margin_left = UiScale.px(6)
+	margin.content_margin_top = UiScale.px(4)
+	label.add_theme_stylebox_override("normal", margin)
+	_headers.append(label)
+	return label
+
+
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_THEME_CHANGED:
-		for view: String in _view_buttons:
-			if has_theme_icon(VIEW_ICONS[view], &"EditorIcons"):
-				_view_buttons[view].icon = get_theme_icon(VIEW_ICONS[view], &"EditorIcons")
+	if what != NOTIFICATION_THEME_CHANGED or _panels.is_empty():
+		return
+	for view: String in _view_buttons:
+		if has_theme_icon(VIEW_ICONS[view], &"EditorIcons"):
+			_view_buttons[view].icon = get_theme_icon(VIEW_ICONS[view], &"EditorIcons")
+		_style_view_button(_view_buttons[view])
+	var small := int(get_theme_font_size(&"font_size", &"Label") * 0.85)
+	for header in _headers:
+		header.add_theme_font_size_override("font_size", small)
+
+
+## Flat rows with a hover tint and the current view marked by an accent bar and background, instead of the stock button look.
+func _style_view_button(button: Button) -> void:
+	var accent := get_theme_color(&"accent_color", &"Editor")
+	var font_color := get_theme_color(&"font_color", &"Label")
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0, 0, 0, 0)
+	normal.content_margin_left = UiScale.px(10)
+	normal.content_margin_right = UiScale.px(8)
+	normal.set_corner_radius_all(int(UiScale.px(3)))
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(font_color, 0.07)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(accent, 0.22)
+	pressed.border_color = accent
+	pressed.border_width_left = int(UiScale.px(3))
+	pressed.content_margin_left = UiScale.px(7) # keeps the text in place next to the bar
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_stylebox_override("hover_pressed", pressed)
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	button.add_theme_color_override("font_color", Color(font_color, 0.75))
+	button.add_theme_color_override("font_hover_color", font_color)
+	button.add_theme_color_override("font_pressed_color", font_color)
+	button.add_theme_color_override("font_hover_pressed_color", font_color)
+
+
+func _set_change_count(count: int) -> void:
+	_changes_badge.text = str(count) if count > 0 else ""
 
 
 ## Wide: buttons and Branches in a sidebar left of the views. Narrow: buttons in a row above, Branches a view like the rest.
@@ -92,12 +175,13 @@ func _set_wide(wide: bool) -> void:
 	branches.get_parent().remove_child(branches)
 	_buttons.vertical = wide
 	_view_buttons["branches"].visible = not wide
+	_changes_badge.visible = wide # would sit on top of the clipped title in a row
 	for button: Button in _view_buttons.values():
 		button.size_flags_horizontal = SIZE_FILL if wide else SIZE_EXPAND_FILL
 		button.clip_text = not wide # four titles in a row would otherwise hold the side dock wider than it is
-		button.tooltip_text = "" if wide else button.text
 	if wide:
 		_sidebar.add_child(_buttons)
+		_sidebar.move_child(_buttons, 1)
 		_sidebar.add_child(branches)
 		branches.visible = true # a TabContainer hid it as a background tab
 	else:
@@ -126,6 +210,8 @@ func detach_panels() -> Dictionary:
 		return {}
 	_panels["branches"].ref_selected.disconnect(_on_ref_selected)
 	_panels["branches"].set_sync_row_visible(true)
+	_panels["changes"].changes_counted.disconnect(_set_change_count)
+	_sync_bar.set_actions_first(false)
 	_panels["changes"].reattach_sync_bar()
 	for panel: Control in _panels.values():
 		if panel.get_parent() != null:

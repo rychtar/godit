@@ -125,6 +125,12 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 
 
+## Fetch/Pull/Push right after the branch button instead of at the far right, where they're a long way off in a window-wide bar.
+func set_actions_first(on: bool) -> void:
+	var row := get_child(0)
+	row.move_child(_upstream_label, row.get_child_count() - 1 if on else 1)
+
+
 ## Hides the branch/Fetch/Pull/Push row but keeps the progress strip, for the Branches sidebar under the combined dock's shared row.
 func set_row_visible(on: bool) -> void:
 	get_child(0).visible = on
