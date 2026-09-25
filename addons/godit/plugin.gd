@@ -365,6 +365,7 @@ func _apply_dock_layout() -> void:
 				panels = dock_instance.detach_panels()
 				panels.merge(history_dock_instance.detach_panels())
 			combined_dock = CombinedDockScript.new(panels)
+			combined_dock.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT) # dragged to the bottom panel, it mustn't shrink to a clipped sliver either
 			add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, combined_dock)
 			# 4.6+: let it go to the bottom panel too, not just side docks and floating.
 			var dock := _editor_dock_of(combined_dock)
