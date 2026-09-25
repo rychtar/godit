@@ -17,6 +17,11 @@ const META_ORIGINAL := &"godit_original_color"
 ## Null when the project isn't in a git repo.
 var repo: RefCounted
 var _tree: Tree
+## The file list shown next to the tree in the dock's split mode.
+var _list: ItemList
+## res:// paths the file list currently shows in a git color, to restore when they're no longer changed.
+var _list_colored := {}
+var _list_paint_queued := false
 var _timer: PollTimer
 ## res:// path (folders end in "/") -> Color, from the last status.
 var _colors := {}
@@ -38,6 +43,10 @@ func _ready() -> void:
 	_tree = trees[0]
 	_tree.draw.connect(_on_tree_draw)
 	_tree.item_collapsed.connect(func(_item: TreeItem) -> void: _paint.call_deferred())
+	var lists := dock.find_children("*", "ItemList", true, false)
+	if not lists.is_empty():
+		_list = lists[0]
+		_list.draw.connect(_queue_list_paint)
 	_timer = PollTimer.new(3.0)
 	_timer.poll.connect(refresh)
 	add_child(_timer)
@@ -45,10 +54,13 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_colors = {}
 	if _tree != null and is_instance_valid(_tree):
 		_tree.draw.disconnect(_on_tree_draw)
-		_colors = {}
 		_paint()
+	if _list != null and is_instance_valid(_list):
+		_list.draw.disconnect(_queue_list_paint)
+		_paint_list()
 
 
 ## Re-reads status (shared with the panels' polls when fresh) and repaints if anything changed.
@@ -106,6 +118,7 @@ func _paint() -> void:
 	if _tree == null or not is_instance_valid(_tree) or _tree.get_root() == null:
 		return
 	_painted_root = _tree.get_root()
+	_queue_list_paint()
 	var stack: Array[TreeItem] = [_tree.get_root()]
 	while not stack.is_empty():
 		var item: TreeItem = stack.pop_back()
@@ -128,3 +141,31 @@ func _paint() -> void:
 		while child != null:
 			stack.append(child)
 			child = child.get_next()
+
+
+## The list is refilled on every folder change and has no per-item slot to mark, so each redraw re-checks its (one folder's worth of) items.
+func _queue_list_paint() -> void:
+	if _list_paint_queued or _list == null or not _list.is_visible_in_tree():
+		return
+	_list_paint_queued = true
+	(func() -> void:
+		_list_paint_queued = false
+		_paint_list()
+	).call_deferred()
+
+
+func _paint_list() -> void:
+	if _list == null or not is_instance_valid(_list):
+		return
+	for i in _list.item_count:
+		var path: Variant = _list.get_item_metadata(i)
+		if not path is String:
+			continue
+		var color: Variant = _colors.get(path, _colors.get(path + "/"))
+		if color != null:
+			_list_colored[path] = true
+			if _list.get_item_custom_fg_color(i) != color:
+				_list.set_item_custom_fg_color(i, color)
+		elif _list_colored.has(path):
+			_list_colored.erase(path)
+			_list.set_item_custom_fg_color(i, Color()) # Color() = no custom color
