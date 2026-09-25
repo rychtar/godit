@@ -11,6 +11,7 @@ const Settings := preload("res://addons/godit/util/settings.gd")
 const GitCli := preload("res://addons/godit/util/git_cli.gd")
 const GoditDockScript := preload("res://addons/godit/dock/godit_dock.gd")
 const ChangesPanelScript := preload("res://addons/godit/dock/panels/changes_panel.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 ##
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
@@ -50,6 +51,7 @@ const BLAME_SETTING_KEY := "show_blame"
 const ID_BLAME := 4
 
 const ID_CONFIRM_SHORTCUT_COMMIT := 5
+const ID_SAVE_BEFORE_GIT := 6
 
 
 func _enter_tree() -> void:
@@ -67,9 +69,11 @@ func _enter_tree() -> void:
 	tools_menu.add_check_item("Show blame in the script editor", ID_BLAME)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_BLAME), Settings.get_value(BLAME_SETTING_KEY, false))
 	tools_menu.add_check_item("Confirm Ctrl/Cmd+Enter commits", ID_CONFIRM_SHORTCUT_COMMIT)
-	# The confirmation dialog's "Don't ask again" changes this setting too, so re-read it on every open.
+	tools_menu.add_check_item("Save open files before git operations without asking", ID_SAVE_BEFORE_GIT)
+	# Dialog buttons ("Don't ask again", "Always Save First") change these settings too, so re-read them on every open.
 	tools_menu.about_to_popup.connect(func() -> void:
 		tools_menu.set_item_checked(tools_menu.get_item_index(ID_CONFIRM_SHORTCUT_COMMIT), Settings.get_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, true))
+		tools_menu.set_item_checked(tools_menu.get_item_index(ID_SAVE_BEFORE_GIT), Settings.get_value(SaveGuard.ALWAYS_SAVE_SETTING_KEY, false))
 	)
 	tools_menu.id_pressed.connect(_on_tools_menu_id_pressed)
 	add_tool_submenu_item("Godit", tools_menu)
@@ -227,6 +231,8 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 			_set_blame_enabled(checked)
 		ID_CONFIRM_SHORTCUT_COMMIT:
 			Settings.set_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, checked)
+		ID_SAVE_BEFORE_GIT:
+			Settings.set_value(SaveGuard.ALWAYS_SAVE_SETTING_KEY, checked)
 		ID_AUTO_FETCH:
 			Settings.set_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, checked)
 			dock_instance.apply_auto_fetch_setting()

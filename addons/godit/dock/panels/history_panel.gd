@@ -8,6 +8,7 @@ const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 const ChangesetDialog := preload("res://addons/godit/dock/widgets/changeset_dialog.gd")
@@ -823,6 +824,13 @@ func _show_stash_menu(screen_position: Vector2) -> void:
 
 func _on_context_menu_id_pressed(id: int) -> void:
 	var stash_ref: String = _commits_by_oid.get(_context_oid, {}).get("stash", "")
+	var verbs := {
+		ID_STASH_APPLY: "Apply", ID_STASH_POP: "Pop", ID_CHERRY_PICK: "Cherry-pick", ID_CHERRY_PICK_NO_COMMIT: "Cherry-pick",
+		ID_REVERT_COMMIT: "Revert", ID_REWORD: "Reword", ID_FIXUP: "Fixup", ID_SQUASH: "Squash", ID_DROP: "Drop", ID_UNDO_LAST: "Undo",
+		ID_CHECKOUT_COMMIT: "Checkout", ID_RESET_TO_HERE: "Reset",
+	}
+	if verbs.has(id) and not await SaveGuard.ensure_saved(self, verbs[id]):
+		return
 	match id:
 		ID_STASH_SHOW:
 			_open_changeset("%s  %s" % [stash_ref, _summary(_context_oid)], stash_ref + "^", stash_ref)
@@ -911,6 +919,8 @@ func _on_commits_dropped(oids: PackedStringArray, _target_oid: String) -> void:
 	if missing.is_empty():
 		Dialogs.error(self, "Nothing to Cherry-pick", "%s already contains %s." % [branch, "these commits" if oids.size() > 1 else "this commit"])
 		return
+	if not await SaveGuard.ensure_saved(self, "Cherry-pick"):
+		return
 	var what := "%d commits" % missing.size() if missing.size() > 1 else "%s \"%s\"" % [missing[0].substr(0, 7), _summary(missing[0])]
 	if await Dialogs.confirm(self, "Cherry-pick", "Cherry-pick %s into %s?" % [what, branch], "Cherry-pick"):
 		_after_operation(_repo.cherry_pick(missing), "Cherry-pick")
@@ -932,7 +942,7 @@ func _on_refs_dropped(refs: PackedStringArray, target_oid: String) -> void:
 		{ "key": "mode", "label": "Merge mode", "type": "option", "options": MERGE_MODES.keys(), "default": MERGE_MODES.keys()[0] },
 		{ "type": "label", "label": "Rebase rewrites %s's history — don't do it to commits others already pulled." % current },
 	], "Run")
-	if answer == null:
+	if answer == null or not await SaveGuard.ensure_saved(self, "Merge" if actions.find(answer["action"]) % 2 == 0 else "Rebase"):
 		return
 	var index := actions.find(answer["action"])
 	var other: String = others[index / 2]

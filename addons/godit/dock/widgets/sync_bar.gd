@@ -3,6 +3,7 @@
 extends VBoxContainer
 
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const OperationBar := preload("res://addons/godit/dock/widgets/operation_bar.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
@@ -174,7 +175,7 @@ func _on_branch_menu_id_pressed(id: int) -> void:
 	if id == ID_NEW_BRANCH:
 		await new_branch_dialog("HEAD")
 		return
-	if id < 0 or id >= _menu_branches.size():
+	if id < 0 or id >= _menu_branches.size() or not await SaveGuard.ensure_saved(self, "Checkout"):
 		return
 	var result: Dictionary = _repo.checkout_branch(_menu_branches[id])
 	EditorOpen.refresh_all_external_changes()

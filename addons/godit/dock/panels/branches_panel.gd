@@ -6,6 +6,7 @@ const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
 const TreeFolders := preload("res://addons/godit/util/tree_folders.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
@@ -297,7 +298,7 @@ func _push_branch_to(branch: String) -> void:
 
 func _on_branches_tree_item_activated() -> void:
 	var item := _tree.get_selected()
-	if item == null:
+	if item == null or not await SaveGuard.ensure_saved(self, "Checkout"):
 		return
 	var meta: Variant = item.get_metadata(0)
 	if not meta is Dictionary:
@@ -421,6 +422,9 @@ func _show_context_menu(meta: Dictionary, screen_position: Vector2) -> void:
 func _on_context_menu_id_pressed(id: int) -> void:
 	var kind: String = _context.get("kind", "")
 	var name: String = _context.get("name", "")
+	var verbs := { ID_CHECKOUT: "Checkout", ID_MERGE: "Merge", ID_REBASE: "Rebase", ID_STASH_APPLY: "Apply", ID_STASH_POP: "Pop", ID_STASH_BRANCH: "Checkout" }
+	if verbs.has(id) and not await SaveGuard.ensure_saved(self, verbs[id]):
+		return
 	match id:
 		ID_CHECKOUT:
 			match kind:

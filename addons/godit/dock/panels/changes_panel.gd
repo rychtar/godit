@@ -11,6 +11,7 @@ const ChangelistStore := preload("res://addons/godit/util/changelist_store.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_resolver.gd")
 
@@ -1372,7 +1373,7 @@ func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
 	else:
 		fields.push_front({ "type": "label", "label": "Stash %d file%s:\n%s" % [paths.size(), "" if paths.size() == 1 else "s", _path_list(Array(paths))] })
 	var answer: Variant = await Dialogs.form(self, "Stash Changes", fields, "Stash")
-	if answer == null:
+	if answer == null or not await SaveGuard.ensure_saved(self, "Stash"):
 		return
 	var result: Dictionary = _repo.stash_push(String(answer["message"]).strip_edges(), answer["untracked"], paths, answer.get("keep_index", false))
 	EditorOpen.refresh_all_external_changes()
@@ -1625,6 +1626,10 @@ func _do_commit(push_after: bool) -> void:
 	if message.is_empty():
 		_show_error("Commit failed", "Commit message can't be empty.")
 		return
+	if not SaveGuard.unsaved_files().is_empty():
+		if not await SaveGuard.ensure_saved(self, "Commit", true):
+			return
+		refresh() # auto-stages what was just saved
 
 	var result: Dictionary = _repo.commit(message, _amend_check.button_pressed)
 	if not result["ok"]:
