@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Every background git job (fetch, pull, push, blame, history search) leaked its thread, mutex and two regexes: the job and its thread, and the job and its own `finished` listener, held each other.
 - Staging a hunk, the script gutter and blame silently did nothing when the cache folder (`~/.cache` on Linux) didn't exist yet. Their temp files go to a `godit` folder in it, which is created.
 - Staging or unstaging a hunk failed when the git config has `diff.noprefix` or `diff.mnemonicPrefix`. Diffs now always use `a/` and `b/` prefixes.
 - Reword and Fixup in Git Log flattened merge commits that came after the commit. They are disabled in that case, and a rebase that fails drops its helper `amend!`/`fixup!` commit.

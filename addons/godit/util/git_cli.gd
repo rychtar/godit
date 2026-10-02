@@ -220,6 +220,7 @@ class Job:
 		cancel()
 		if _thread != null and _thread.is_started():
 			_thread.wait_to_finish()
+		_thread = null
 		is_running = false
 
 
@@ -301,5 +302,9 @@ class Job:
 		if _abandoned:
 			return
 		_thread.wait_to_finish()
+		_thread = null # the Thread holds a Callable back to this Job, which would keep both alive forever
 		is_running = false
 		finished.emit(result)
+		# GitCli.start()'s listener captures this Job, which would keep it (and its Mutex and RegExes) alive; nothing is emitted after this.
+		for connection in finished.get_connections():
+			finished.disconnect(connection["callable"])
