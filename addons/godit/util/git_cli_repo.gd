@@ -189,11 +189,18 @@ func get_head_text(path: String) -> Variant:
 	return null
 
 
+## A path for a temp file in a godit folder of the cache directory, which is created if needed: a fresh Linux home has no ~/.cache, and writing there failed silently.
+static func _temp_path(file_name: String) -> String:
+	var dir := OS.get_cache_dir().path_join("godit")
+	DirAccess.make_dir_recursive_absolute(dir)
+	return dir.path_join(file_name)
+
+
 ## Zero-context diff between two texts (e.g. HEAD and the editor's unsaved buffer), for DiffHunks.parse_regions().
 func diff_texts(old_text: String, new_text: String) -> String:
 	var stamp := Time.get_ticks_usec()
-	var old_path := OS.get_cache_dir().path_join("godit_old_%d.tmp" % stamp)
-	var new_path := OS.get_cache_dir().path_join("godit_new_%d.tmp" % stamp)
+	var old_path := _temp_path("godit_old_%d.tmp" % stamp)
+	var new_path := _temp_path("godit_new_%d.tmp" % stamp)
 	for pair in [[old_path, old_text], [new_path, new_text]]:
 		var f := FileAccess.open(pair[0], FileAccess.WRITE)
 		if f == null:
@@ -209,7 +216,7 @@ func diff_texts(old_text: String, new_text: String) -> String:
 
 ## Applies a patch built by DiffHunks.build_patch(). cached=true targets the index (stage/unstage), false the working tree (revert); reverse undoes the patch instead of applying it. --recount means partial-hunk patches needn't have exact line counts in their headers.
 func apply_patch(patch: String, cached: bool, reverse: bool, check_only := false) -> Dictionary:
-	var patch_path := OS.get_cache_dir().path_join("godit_patch_%d.patch" % Time.get_ticks_usec())
+	var patch_path := _temp_path("godit_patch_%d.patch" % Time.get_ticks_usec())
 	var patch_file := FileAccess.open(patch_path, FileAccess.WRITE)
 	if patch_file == null:
 		return { "ok": false, "error": "couldn't write a temp patch file at %s" % patch_path, "output": "" }
@@ -1002,7 +1009,7 @@ var _search_job: RefCounted = null
 
 ## Per-line blame of path as it reads in contents (the editor's possibly unsaved text): [{"oid", "author", "time", "summary"}], 0-based by line; "oid" is "" for uncommitted lines. null if git failed. Coroutine (background thread).
 func blame(path: String, contents: String) -> Variant:
-	var tmp_path := OS.get_cache_dir().path_join("godit_blame_%d.tmp" % Time.get_ticks_usec())
+	var tmp_path := _temp_path("godit_blame_%d.tmp" % Time.get_ticks_usec())
 	var tmp := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if tmp == null:
 		return null

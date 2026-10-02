@@ -263,3 +263,20 @@ func test_search_commits() -> void:
 	check("by the code a commit added", by_code.map(func(c: Dictionary) -> String: return c.summary), ["add something"])
 	var by_hash = await repo.search_commits(repo.get_head_oid().substr(0, 8), "message", 10)
 	check("by hash", by_hash[0].oid, repo.get_head_oid())
+
+func test_temp_files_work_when_the_cache_folder_does_not_exist() -> void:
+	if OS.get_name() != "Linux":
+		return # the cache folder is only taken from the environment there
+	var original := OS.get_environment("XDG_CACHE_HOME")
+	OS.set_environment("XDG_CACHE_HOME", make_temp_dir().path_join("not/created/yet"))
+	var repo := make_repo()
+	commit_file(repo, "f.gd", "a\nb\n", "first")
+	write_file(repo.get_repo_root().path_join("f.gd"), "a\nB\n")
+	check_contains("a diff of two texts", repo.diff_texts("a\nb\n", "a\nB\n"), "@@")
+	check("a hunk can be staged", _stage_first_hunk(repo, "f.gd").ok, true)
+	var blamed = await repo.blame("f.gd", "a\nb\n")
+	check("blame works", blamed.size(), 2)
+	if original.is_empty():
+		OS.unset_environment("XDG_CACHE_HOME")
+	else:
+		OS.set_environment("XDG_CACHE_HOME", original)
