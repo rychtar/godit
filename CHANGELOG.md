@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.1.1 - 2026-10-02
+## 1.2.0 - 2026-10-02
+
+### Added
+
+- Tests (a headless runner and 100+ tests) and a GitHub Actions workflow that runs them on Godot 4.4.1 and 4.7.1. Neither is part of the addon package.
 
 ### Fixed
 
