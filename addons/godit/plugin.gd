@@ -356,6 +356,8 @@ func _update_layout_items() -> void:
 ## Side docks and the bottom panel are separate registrations in Godot's editor, so switching layouts reparents the panels live: back into the Git dock and Git Log first, then into the wanted layout.
 func _apply_dock_layout() -> void:
 	var want := _dock_layout()
+	if want == LAYOUT_BOTTOM and not dock_instance.has_repo():
+		want = LAYOUT_SEPARATE # nothing to put in the bottom tabs, and the Git dock is where "Initialize Repository" shows
 	if want == _layout:
 		return
 
