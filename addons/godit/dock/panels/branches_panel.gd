@@ -335,7 +335,8 @@ func _push_branch_to(branch: String) -> void:
 
 
 func _on_tree_item_selected() -> void:
-	var meta: Variant = _tree.get_selected().get_metadata(0)
+	var selected := _tree.get_selected()
+	var meta: Variant = selected.get_metadata(0) if selected != null else null
 	if not meta is Dictionary:
 		return
 	var prefixes := { "local": "refs/heads/", "remote_branch": "refs/remotes/", "tag": "refs/tags/" }
