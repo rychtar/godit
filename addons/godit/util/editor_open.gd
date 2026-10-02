@@ -107,6 +107,36 @@ static func sync_open_scripts(discarded := PackedStringArray()) -> void:
 			tab["script"].source_code = disk
 
 
+## res:// paths of the script and text file tabs with unsaved edits; ScriptEditor.get_unsaved_files() does the same, but only from Godot 4.7.
+static func unsaved_tab_paths(script_editor: ScriptEditor) -> PackedStringArray:
+	var paths := PackedStringArray()
+	for tab: Dictionary in _open_tabs(script_editor):
+		var code_edit := (tab["editor"] as ScriptEditorBase).get_base_editor() as CodeEdit
+		if code_edit != null and code_edit.get_version() != code_edit.get_saved_version():
+			paths.append(tab["path"])
+	return paths
+
+
+## Writes the unsaved script and text file tabs to disk; ScriptEditor.save_all_scripts() does the same, but only from Godot 4.7.
+static func save_unsaved_tabs(script_editor: ScriptEditor) -> void:
+	for tab: Dictionary in _open_tabs(script_editor):
+		var code_edit := (tab["editor"] as ScriptEditorBase).get_base_editor() as CodeEdit
+		if code_edit == null or code_edit.get_version() == code_edit.get_saved_version():
+			continue
+		var script: Script = tab["script"]
+		if script != null:
+			script.source_code = code_edit.text
+			if ResourceSaver.save(script, tab["path"]) != OK:
+				continue
+		else:
+			var file := FileAccess.open(tab["path"], FileAccess.WRITE)
+			if file == null:
+				continue
+			file.store_string(code_edit.text)
+			file.close()
+		code_edit.tag_saved_version()
+
+
 ## res:// path of the script editor's current tab, a script or a text file (.md, .json...); "" for help pages and built-in scripts.
 static func current_tab_path() -> String:
 	var script_editor := EditorInterface.get_script_editor()
