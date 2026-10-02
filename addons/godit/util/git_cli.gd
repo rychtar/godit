@@ -92,9 +92,9 @@ static func _read_all(pipe: FileAccess) -> PackedByteArray:
 	return bytes
 
 
-## Full argv for `git <args>` in repo_root; quotePath off so non-ASCII paths come out as UTF-8, not "\304\215" escapes.
+## Full argv for `git <args>` in repo_root; quotePath off so non-ASCII paths come out as UTF-8, not "\304\215" escapes, and no gpg lines (log.showSignature) in the middle of `git log --format` output.
 static func argv(repo_root: String, args: Array) -> PackedStringArray:
-	var full_args := PackedStringArray(["-C", repo_root, "-c", "core.quotePath=false"])
+	var full_args := PackedStringArray(["-C", repo_root, "-c", "core.quotePath=false", "-c", "log.showSignature=false"])
 	full_args.append_array(PackedStringArray(args))
 	return full_args
 
