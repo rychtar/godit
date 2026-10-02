@@ -114,7 +114,7 @@ func get_diff(path: String, staged: bool, options: Dictionary = {}) -> String:
 
 ## For a conflicted file: its working-tree content (with conflict markers) against "ours".
 func get_conflict_diff(path: String) -> String:
-	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--", path])["text"]
+	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--", path])["text"]
 
 
 func is_untracked(path: String) -> bool:
@@ -123,7 +123,8 @@ func is_untracked(path: String) -> bool:
 
 
 static func _diff_flags(options: Dictionary) -> Array:
-	var flags: Array = ["--no-color", "--no-ext-diff"]
+	# Fixed prefixes: diff.noprefix / diff.mnemonicPrefix in the user's config would break `git apply` and the header parsing.
+	var flags: Array = ["--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/"]
 	var context: int = options.get("context", 3)
 	flags.append("--unified=%d" % (context if context >= 0 else 1000000))
 	if options.get("ignore_whitespace", false):
