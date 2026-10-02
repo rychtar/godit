@@ -277,6 +277,7 @@ func _save(mark_resolved: bool) -> void:
 	var abs_path: String = _repo.get_repo_root().path_join(_path)
 	var file := FileAccess.open(abs_path, FileAccess.WRITE)
 	if file == null:
+		EditorInterface.get_editor_toaster().push_toast("Godit: couldn't write %s" % _path, EditorToaster.SEVERITY_ERROR)
 		return
 	file.store_string(_compose())
 	file.close()

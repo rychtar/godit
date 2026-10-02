@@ -197,6 +197,7 @@ func diff_texts(old_text: String, new_text: String) -> String:
 	for pair in [[old_path, old_text], [new_path, new_text]]:
 		var f := FileAccess.open(pair[0], FileAccess.WRITE)
 		if f == null:
+			DirAccess.remove_absolute(old_path)
 			return ""
 		f.store_string(pair[1])
 		f.close()
