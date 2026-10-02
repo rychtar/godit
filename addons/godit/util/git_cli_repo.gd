@@ -1312,15 +1312,18 @@ func undo_last_commit() -> Dictionary:
 func reword_commit(oid: String, message: String) -> Dictionary:
 	if oid == get_head_oid():
 		return _simple(["commit", "--amend", "--only", "--allow-empty", "-m", message])
+	if has_merges_since(oid):
+		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
 	# The same "amend! <subject>" commit `git commit --fixup=reword:` would make (autosquash then swaps the message in), built with commit-tree so it neither needs an editor nor picks up anything staged.
 	var subject: String = GitCli.run(_repo_root, ["log", "-1", "--format=%s", oid])["text"].strip_edges()
 	var made := _simple(["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "amend! " + subject, "-m", message])
 	if not made["ok"]:
 		return made
+	var original := get_head_oid()
 	var moved := _simple(["update-ref", "-m", "godit: reword " + oid.substr(0, 7), "HEAD", made["output"]])
 	if not moved["ok"]:
 		return moved
-	return _autosquash_onto(oid)
+	return _autosquash_onto(oid, original)
 
 
 ## Folds the currently staged changes into commit oid (rewrites everything after it).
@@ -1329,17 +1332,24 @@ func fixup_commit(oid: String) -> Dictionary:
 		return { "ok": false, "error": "Nothing is staged — stage the changes to fold in first.", "output": "" }
 	if oid == get_head_oid():
 		return _simple(["commit", "--amend", "--no-edit"])
+	if has_merges_since(oid):
+		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
+	var original := get_head_oid()
 	var fixup := _simple(["commit", "--fixup=" + oid])
 	if not fixup["ok"]:
 		return fixup
-	return _autosquash_onto(oid)
+	return _autosquash_onto(oid, original)
 
 
-func _autosquash_onto(oid: String) -> Dictionary:
+## original: HEAD before the helper (amend!/fixup!) commit was made; a rebase that fails outright (not on conflicts) is moved back there, keeping the staged changes.
+func _autosquash_onto(oid: String, original: String) -> Dictionary:
 	var base := oid + "^" if has_parent(oid) else "--root"
 	var args := ["rebase", "--interactive", "--autosquash", "--autostash"]
 	args.append(base)
-	return _with_conflict_flag(_simple(args))
+	var result := _with_conflict_flag(_simple(args))
+	if not result["ok"] and not result["conflicts"] and not original.is_empty() and get_operation_state()["kind"].is_empty():
+		_simple(["reset", "--soft", original])
+	return result
 
 
 ## Squashes oid and every commit after it up to HEAD into one commit with message.

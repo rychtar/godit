@@ -800,7 +800,13 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 		m.add_separator("Rewrite %s's history" % current)
 		m.add_item("Reword Message…", ID_REWORD)
 		m.add_item("Fixup: Fold Staged Changes into This Commit", ID_FIXUP)
-		m.set_item_disabled(m.get_item_index(ID_FIXUP), not _repo.has_staged_changes())
+		m.set_item_disabled(m.get_item_index(ID_FIXUP), has_merges_after or not _repo.has_staged_changes())
+		# Both replay the commits after it with a rebase, which would flatten merges (the head commit is just amended).
+		m.set_item_disabled(m.get_item_index(ID_REWORD), has_merges_after)
+		if has_merges_after:
+			var no_merges := "A merge commit lies after it — rewriting through merges would flatten them"
+			m.set_item_tooltip(m.get_item_index(ID_REWORD), no_merges)
+			m.set_item_tooltip(m.get_item_index(ID_FIXUP), no_merges)
 		m.add_item("Squash This and Newer Commits into One…", ID_SQUASH)
 		m.set_item_disabled(m.get_item_index(ID_SQUASH), has_merges_after or not has_parent or oid == head)
 		m.add_item("Drop Commit…", ID_DROP)
