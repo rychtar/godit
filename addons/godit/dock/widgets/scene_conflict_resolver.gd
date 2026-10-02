@@ -22,6 +22,8 @@ var _result: Dictionary = {}
 var _choices := {}
 var _tree: Tree
 var _status_label: Label
+## In a rebase the sides swap: "ours" is the branch being rebased onto, "theirs" the commit being replayed.
+var _rebasing := false
 
 
 func _init() -> void:
@@ -47,6 +49,7 @@ func _init() -> void:
 func open(repo: RefCounted, path: String) -> Dictionary:
 	_repo = repo
 	_path = path
+	_rebasing = repo.get_operation_state()["kind"] == "rebase"
 	var text := func(stage: String) -> String: return repo.get_file_bytes(stage, path).get_string_from_utf8()
 	_result = SceneMerge.merge(text.call(":1"), text.call(":2"), text.call(":3"))
 	if not _result["ok"]:
@@ -72,7 +75,7 @@ func _build() -> void:
 	var buttons := HBoxContainer.new()
 	for side in ["ours", "theirs"]:
 		var b := Button.new()
-		b.text = "Take All Ours (current branch)" if side == "ours" else "Take All Theirs (incoming)"
+		b.text = ("Take All Ours (%s)" % _ours_label()) if side == "ours" else ("Take All Theirs (%s)" % _theirs_label())
 		b.disabled = conflicts.is_empty()
 		b.pressed.connect(func() -> void:
 			for c in conflicts:
@@ -86,8 +89,8 @@ func _build() -> void:
 	_tree.columns = 3
 	_tree.column_titles_visible = true
 	_tree.set_column_title(0, "Node / property")
-	_tree.set_column_title(1, "Ours (current branch)")
-	_tree.set_column_title(2, "Theirs (incoming)")
+	_tree.set_column_title(1, "Ours (%s)" % _ours_label())
+	_tree.set_column_title(2, "Theirs (%s)" % _theirs_label())
 	_tree.hide_root = true
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tree.item_edited.connect(_on_item_edited)
@@ -117,6 +120,14 @@ func _build() -> void:
 
 	_status_label = Label.new()
 	layout.add_child(_status_label)
+
+
+func _ours_label() -> String:
+	return "branch rebased onto" if _rebasing else "current branch"
+
+
+func _theirs_label() -> String:
+	return "your commit being replayed" if _rebasing else "incoming"
 
 
 static func _short(value: Variant) -> String:
