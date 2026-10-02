@@ -266,7 +266,9 @@ func _compose() -> String:
 		if segment.has("text"):
 			parts.append("\n".join(segment["text"]))
 		else:
-			parts.append((_results[idx] as CodeEdit).text)
+			var chosen: String = (_results[idx] as CodeEdit).text
+			if not chosen.is_empty(): # an emptied result removes the lines instead of leaving a blank one
+				parts.append(chosen)
 	var text := "\n".join(parts)
 	return text.replace("\n", "\r\n") if _crlf else text
 
