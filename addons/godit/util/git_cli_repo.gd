@@ -167,12 +167,13 @@ func get_file_bytes(rev: String, path: String) -> PackedByteArray:
 	return GitCli.run_bytes(_repo_root, ["cat-file", "blob", spec])
 
 
-## path's text in HEAD for the script editor gutter: "" for an untracked file (all of it counts as added), null when there's nothing to compare against (ignored, unborn branch).
+## path's text in HEAD for the script editor gutter: "" for an untracked or newly added file (all of it counts as added), null when there's nothing to compare against (ignored, renamed).
 func get_head_text(path: String) -> Variant:
 	var shown := GitCli.run(_repo_root, ["show", "HEAD:" + path], false)
 	if shown["exit_code"] == 0:
 		return shown["text"]
-	if GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])["text"].strip_edges().begins_with("??"):
+	var status: String = GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])["text"].strip_edges()
+	if status.begins_with("??") or status.begins_with("A"):
 		return ""
 	return null
 
