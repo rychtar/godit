@@ -17,7 +17,6 @@ const FilesystemMenuScript := preload("res://addons/godit/dock/filesystem/filesy
 const CombinedDockScript := preload("res://addons/godit/dock/godit_combined_dock.gd")
 const RepoWatcherScript := preload("res://addons/godit/util/repo_watcher.gd")
 const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
-##
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger

@@ -167,18 +167,6 @@ func get_file_bytes(rev: String, path: String) -> PackedByteArray:
 	return GitCli.run_bytes(_repo_root, ["cat-file", "blob", spec])
 
 
-## Working-tree diff against HEAD (staged + unstaged combined) — for the script editor's gutter.
-func get_diff_against_head(path: String) -> String:
-	var status_result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])
-	if status_result["text"].strip_edges().begins_with("??"):
-		return GitCli.run(_repo_root, ["diff", "--no-index", "--", "/dev/null", path])["text"]
-
-	if GitCli.run(_repo_root, ["rev-parse", "--verify", "-q", "HEAD"])["exit_code"] != 0:
-		return "" # unborn branch, nothing to diff against
-
-	return GitCli.run(_repo_root, ["diff", "HEAD", "--", path])["text"]
-
-
 ## path's text in HEAD for the script editor gutter: "" for an untracked file (all of it counts as added), null when there's nothing to compare against (ignored, unborn branch).
 func get_head_text(path: String) -> Variant:
 	var shown := GitCli.run(_repo_root, ["show", "HEAD:" + path], false)
