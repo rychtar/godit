@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Staging a hunk, the script gutter and blame silently did nothing when the cache folder (`~/.cache` on Linux) didn't exist yet. Their temp files go to a `godit` folder in it, which is created.
 - Staging or unstaging a hunk failed when the git config has `diff.noprefix` or `diff.mnemonicPrefix`. Diffs now always use `a/` and `b/` prefixes.
 - Reword and Fixup in Git Log flattened merge commits that came after the commit. They are disabled in that case, and a rebase that fails drops its helper `amend!`/`fixup!` commit.
 - Reverting a staged rename deleted the file from disk. The old file is restored too.
