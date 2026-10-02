@@ -61,7 +61,7 @@ func parse_status(text: String) -> Array:
 		var rest := line.substr(3)
 		var path := GitCli.unquote(rest)
 		var renamed_from := ""
-		var arrow := rest.find(" -> ")
+		var arrow := rest.find(" -> ") if "R" in xy or "C" in xy else -1 # a file name may contain " -> " too
 		if arrow != -1:
 			renamed_from = GitCli.unquote(rest.substr(0, arrow))
 			path = GitCli.unquote(rest.substr(arrow + 4))
