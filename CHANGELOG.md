@@ -24,6 +24,8 @@
 - The gutter and conflict diffs broke when `diff.external` is set in the git config.
 - Conflict resolver: choosing a side that is a single blank line removed it.
 - `log.showSignature` in the git config put gpg lines into the History.
+- Every pull, checkout or stash reloaded all open scenes, even those it didn't touch (losing their undo history), and a pull that brought nothing did too. Only scenes whose file changed on disk are reloaded now.
+- A failed `git status` (empty output) cleared the changelist assignments of all files.
 - The FileSystem dock's right-click menu ran `git status` on the spot, which was slow in big projects. It uses the last status now.
 
 ### Changed
