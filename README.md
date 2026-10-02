@@ -1,5 +1,7 @@
 # Godit
 
+[![Tests](https://github.com/rychtar/godit/actions/workflows/tests.yml/badge.svg)](https://github.com/rychtar/godit/actions/workflows/tests.yml)
+
 A git client inside the Godot editor. Stage, commit, switch branches and browse history without leaving the editor.
 
 ![Godit](media/thumbnail.webp)
@@ -40,6 +42,17 @@ For push and pull, git has to log in without asking: use a credential helper for
 Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, a faster `git status` for large projects (git's file system monitor), and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel.
 
 The ⋮ menu in the Changes panel controls auto-staging, auto-adding new files and the masks for files to skip (for example `*.psd` source art). `.import` and `.uid` files are added with the file they belong to, since Godot needs them in the repo.
+
+## Tests
+
+Run from the project folder (needs Godot 4.4+ and `git`, no other dependencies):
+
+```
+godot --headless --path . --script tests/run_tests.gd
+```
+
+Every `tests/test_*.gd` file is a test file, every method starting with `test_` is a test. The exit code is 1 when a test fails.
+The git tests work in throwaway repositories in the temp folder, with git's own config set aside. They run on every push (see `.github/workflows/tests.yml`).
 
 ## License
 

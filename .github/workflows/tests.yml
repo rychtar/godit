@@ -1,0 +1,26 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Godot ${{ matrix.godot }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # the minimum supported version and the one the plugin is tested with
+        godot: ["4.4.1", "4.7.1"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot
+        run: |
+          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${{ matrix.godot }}-stable/Godot_v${{ matrix.godot }}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          sudo mv "Godot_v${{ matrix.godot }}-stable_linux.x86_64" /usr/local/bin/godot
+
+      - name: Run tests
+        run: godot --headless --path . --script tests/run_tests.gd
