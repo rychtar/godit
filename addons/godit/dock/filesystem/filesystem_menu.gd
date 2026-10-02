@@ -14,7 +14,6 @@ var show_change: Callable
 func _popup_menu(paths: PackedStringArray) -> void:
 	if colors == null or colors.repo == null:
 		return
-	colors.refresh()
 	var files := _repo_paths(paths, false)
 	var changed := _changed_under(paths)
 	var untracked := changed.filter(func(p: String) -> bool: return GitStatusFlags.is_untracked(colors.status_by_path[p]))
