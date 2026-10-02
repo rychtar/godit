@@ -38,6 +38,13 @@ static func save_all() -> void:
 
 ## Coroutine. verb names the operation ("Commit", "Checkout"...); for_commit says the risk is missing edits rather than overwritten ones. False = the user cancelled.
 static func ensure_saved(parent: Node, verb: String, for_commit := false) -> bool:
+	var proceed: bool = await _ensure_saved(parent, verb, for_commit)
+	if proceed:
+		EditorOpen.remember_scene_state() # what the open scenes look like on disk before the operation, to reload only those it changes
+	return proceed
+
+
+static func _ensure_saved(parent: Node, verb: String, for_commit: bool) -> bool:
 	var unsaved := unsaved_files()
 	if unsaved.is_empty():
 		return true

@@ -81,9 +81,26 @@ static func refresh_all_external_changes() -> void:
 	EditorInterface.get_resource_filesystem().scan()
 	for scene_path in EditorInterface.get_open_scenes():
 		# Unsaved new scenes have no path, and a checkout may have deleted the file.
-		if not scene_path.is_empty() and FileAccess.file_exists(scene_path):
-			EditorInterface.reload_scene_from_path(scene_path)
+		if scene_path.is_empty() or not FileAccess.file_exists(scene_path):
+			continue
+		# A scene the operation left alone keeps its undo history and unsaved edits (a pull that brings nothing reloaded every open scene).
+		if _scene_hashes.get(scene_path, "") == FileAccess.get_md5(scene_path):
+			continue
+		EditorInterface.reload_scene_from_path(scene_path)
+	remember_scene_state()
 	sync_open_scripts()
+
+
+## md5 of every open scene file by path, as of now (see refresh_all_external_changes()).
+static var _scene_hashes := {}
+
+
+## Called before a git operation (SaveGuard) and after each refresh above.
+static func remember_scene_state() -> void:
+	_scene_hashes = {}
+	for scene_path in EditorInterface.get_open_scenes():
+		if not scene_path.is_empty() and FileAccess.file_exists(scene_path):
+			_scene_hashes[scene_path] = FileAccess.get_md5(scene_path)
 
 
 ## Script and text file tabs keep their own buffer, so reloading the resource doesn't change what's shown; this rewrites each open tab whose file changed on disk (one undoable edit, caret and scroll kept, tab stays "saved"). Tabs with unsaved edits are left alone unless listed in discarded.
