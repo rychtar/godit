@@ -43,7 +43,9 @@ func _on_init_pressed() -> void:
 	if RepoSetup.lfs_available():
 		fields.append({ "key": "lfs", "label": "Store images, audio, models and fonts with Git LFS", "type": "check", "default": false,
 				"tooltip": "Keeps big binary files out of the regular history. Everyone who clones the repo needs Git LFS installed too." })
-	var gh := RepoSetup.find_gh()
+	_button.disabled = true # the lookup below takes a moment
+	var gh: String = await RepoSetup.find_gh()
+	_button.disabled = false
 	if not gh.is_empty():
 		fields.append({ "key": "publish", "label": "Publish to GitHub", "type": "check", "default": false, "tooltip": "Needs the first commit." })
 		fields.append({ "key": "repo_name", "label": "GitHub repository name", "default": RepoSetup.suggested_repo_name() })
@@ -54,7 +56,7 @@ func _on_init_pressed() -> void:
 
 	_button.disabled = true
 	_label.text = "Creating the repository…"
-	var result := RepoSetup.init_repo(root, {
+	var result: Dictionary = await RepoSetup.init_repo(root, {
 		"commit": answer["commit"], "lfs": answer.get("lfs", false),
 		"name": String(answer.get("name", "")).strip_edges(), "email": String(answer.get("email", "")).strip_edges(),
 	})
