@@ -252,6 +252,8 @@ func reattach_sync_bar() -> void:
 func _on_polled(snapshot: Dictionary) -> void:
 	if _repo == null or _repo.is_busy():
 		return # a pull/push is rewriting things right now — catch up once it's done
+	if String(snapshot["status"]).is_empty():
+		return # git failed (a status always has its ## branch line); an empty list would wipe the changelist assignments
 	var entries: Array = _repo.parse_status(snapshot["status"])
 	if _status_signature(entries) != _last_status_signature:
 		refresh(entries)
@@ -286,6 +288,8 @@ func refresh(status_entries: Variant = null) -> void:
 	if _repo == null:
 		return
 	var entries: Array = status_entries if status_entries != null else _repo.get_status()
+	if status_entries == null and _repo.status_header.is_empty():
+		return # git failed, see _on_polled()
 	entries = _auto_track(entries)
 	_last_status_signature = _status_signature(entries)
 	_last_content_signature = _content_signature(entries)
