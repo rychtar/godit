@@ -286,6 +286,7 @@ func revert_file(path: String) -> Dictionary:
 		result["ok"] = true
 		return result
 
+	var renamed_from := _staged_rename_source(path)
 	GitCli.run(_repo_root, ["rm", "-f", "--cached", "--", path], true) # ok if not staged
 	var abs_path := _repo_root.path_join(path)
 	if FileAccess.file_exists(abs_path):
@@ -293,8 +294,22 @@ func revert_file(path: String) -> Dictionary:
 		if dir == null or dir.remove(abs_path) != OK:
 			result["error"] = "couldn't delete %s from disk" % path
 			return result
+	if not renamed_from.is_empty():
+		# Undoing a staged rename brings the old file back too, or its content would be gone from disk.
+		var restore_result := GitCli.run(_repo_root, ["checkout", "HEAD", "--", renamed_from], true)
+		if restore_result["exit_code"] != 0:
+			result["error"] = restore_result["text"].strip_edges()
+			return result
 	result["ok"] = true
 	return result
+
+
+## The path path was staged as a rename of, or "".
+func _staged_rename_source(path: String) -> String:
+	for entry in _parse_name_status(GitCli.run(_repo_root, ["diff", "--cached", "--name-status", "-M"])["text"]):
+		if entry["path"] == path and entry["status"] == GitIcons.DELTA_RENAMED:
+			return entry["old_path"]
+	return ""
 
 
 ## Deletes path from disk and stages the removal (`git rm -f`) in one step —
