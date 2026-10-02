@@ -31,8 +31,19 @@ func open(path: String) -> bool:
 	var root: String = result["text"].strip_edges()
 	if root.is_empty():
 		return false
-	_repo_root = root
+	_repo_root = _in_callers_spelling(path, root)
 	return true
+
+
+## git resolves symlinks, Godot's paths don't — so a project reached through one would never match the repo root textually. The root is rebuilt from the caller's path minus its folder inside the repo.
+static func _in_callers_spelling(path: String, git_root: String) -> String:
+	var prefix: String = GitCli.run(path, ["rev-parse", "--show-prefix"])["text"].strip_edges().trim_suffix("/")
+	var trimmed := path.trim_suffix("/")
+	if prefix.is_empty():
+		return trimmed # the path is the repo root itself
+	if trimmed.ends_with("/" + prefix):
+		return trimmed.trim_suffix("/" + prefix)
+	return git_root
 
 
 func is_valid() -> bool:
