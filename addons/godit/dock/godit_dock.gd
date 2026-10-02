@@ -10,7 +10,7 @@ const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const AUTO_FETCH_SETTING_KEY := "auto_fetch"
 const AUTO_FETCH_INTERVAL_SECS := 600.0
 
-## Forwarded from the Changes panel; plugin.gd routes it to the Git Log panel. 
+## Forwarded from the Changes panel; plugin.gd routes it to the Git Log panel.
 signal file_history_requested(path: String)
 
 ## Set by plugin.gd right after instantiation.
@@ -68,8 +68,6 @@ func apply_auto_fetch_setting() -> void:
 	else:
 		_auto_fetch_timer.stop()
 
-
-##
 
 ## Silent on failure (offline, no credentials): the manual Fetch button is where errors get explained.
 func _on_auto_fetch_timeout() -> void:

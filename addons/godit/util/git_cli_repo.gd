@@ -31,8 +31,19 @@ func open(path: String) -> bool:
 	var root: String = result["text"].strip_edges()
 	if root.is_empty():
 		return false
-	_repo_root = root
+	_repo_root = _in_callers_spelling(path, root)
 	return true
+
+
+## git resolves symlinks, Godot's paths don't — so a project reached through one would never match the repo root textually. The root is rebuilt from the caller's path minus its folder inside the repo.
+static func _in_callers_spelling(path: String, git_root: String) -> String:
+	var prefix: String = GitCli.run(path, ["rev-parse", "--show-prefix"])["text"].strip_edges().trim_suffix("/")
+	var trimmed := path.trim_suffix("/")
+	if prefix.is_empty():
+		return trimmed # the path is the repo root itself
+	if trimmed.ends_with("/" + prefix):
+		return trimmed.trim_suffix("/" + prefix)
+	return git_root
 
 
 func is_valid() -> bool:
@@ -61,7 +72,7 @@ func parse_status(text: String) -> Array:
 		var rest := line.substr(3)
 		var path := GitCli.unquote(rest)
 		var renamed_from := ""
-		var arrow := rest.find(" -> ")
+		var arrow := rest.find(" -> ") if "R" in xy or "C" in xy else -1 # a file name may contain " -> " too
 		if arrow != -1:
 			renamed_from = GitCli.unquote(rest.substr(0, arrow))
 			path = GitCli.unquote(rest.substr(arrow + 4))
@@ -114,7 +125,7 @@ func get_diff(path: String, staged: bool, options: Dictionary = {}) -> String:
 
 ## For a conflicted file: its working-tree content (with conflict markers) against "ours".
 func get_conflict_diff(path: String) -> String:
-	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--", path])["text"]
+	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--", path])["text"]
 
 
 func is_untracked(path: String) -> bool:
@@ -123,7 +134,8 @@ func is_untracked(path: String) -> bool:
 
 
 static func _diff_flags(options: Dictionary) -> Array:
-	var flags: Array = ["--no-color", "--no-ext-diff"]
+	# Fixed prefixes: diff.noprefix / diff.mnemonicPrefix in the user's config would break `git apply` and the header parsing.
+	var flags: Array = ["--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/"]
 	var context: int = options.get("context", 3)
 	flags.append("--unified=%d" % (context if context >= 0 else 1000000))
 	if options.get("ignore_whitespace", false):
@@ -166,24 +178,13 @@ func get_file_bytes(rev: String, path: String) -> PackedByteArray:
 	return GitCli.run_bytes(_repo_root, ["cat-file", "blob", spec])
 
 
-## Working-tree diff against HEAD (staged + unstaged combined) — for the script editor's gutter.
-func get_diff_against_head(path: String) -> String:
-	var status_result := GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])
-	if status_result["text"].strip_edges().begins_with("??"):
-		return GitCli.run(_repo_root, ["diff", "--no-index", "--", "/dev/null", path])["text"]
-
-	if GitCli.run(_repo_root, ["rev-parse", "--verify", "-q", "HEAD"])["exit_code"] != 0:
-		return "" # unborn branch, nothing to diff against
-
-	return GitCli.run(_repo_root, ["diff", "HEAD", "--", path])["text"]
-
-
-## path's text in HEAD for the script editor gutter: "" for an untracked file (all of it counts as added), null when there's nothing to compare against (ignored, unborn branch).
+## path's text in HEAD for the script editor gutter: "" for an untracked or newly added file (all of it counts as added), null when there's nothing to compare against (ignored, renamed).
 func get_head_text(path: String) -> Variant:
 	var shown := GitCli.run(_repo_root, ["show", "HEAD:" + path], false)
 	if shown["exit_code"] == 0:
 		return shown["text"]
-	if GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])["text"].strip_edges().begins_with("??"):
+	var status: String = GitCli.run(_repo_root, ["status", "--porcelain=v1", "--", path])["text"].strip_edges()
+	if status.begins_with("??") or status.begins_with("A"):
 		return ""
 	return null
 
@@ -196,6 +197,7 @@ func diff_texts(old_text: String, new_text: String) -> String:
 	for pair in [[old_path, old_text], [new_path, new_text]]:
 		var f := FileAccess.open(pair[0], FileAccess.WRITE)
 		if f == null:
+			DirAccess.remove_absolute(old_path)
 			return ""
 		f.store_string(pair[1])
 		f.close()
@@ -285,6 +287,7 @@ func revert_file(path: String) -> Dictionary:
 		result["ok"] = true
 		return result
 
+	var renamed_from := _staged_rename_source(path)
 	GitCli.run(_repo_root, ["rm", "-f", "--cached", "--", path], true) # ok if not staged
 	var abs_path := _repo_root.path_join(path)
 	if FileAccess.file_exists(abs_path):
@@ -292,8 +295,22 @@ func revert_file(path: String) -> Dictionary:
 		if dir == null or dir.remove(abs_path) != OK:
 			result["error"] = "couldn't delete %s from disk" % path
 			return result
+	if not renamed_from.is_empty():
+		# Undoing a staged rename brings the old file back too, or its content would be gone from disk.
+		var restore_result := GitCli.run(_repo_root, ["checkout", "HEAD", "--", renamed_from], true)
+		if restore_result["exit_code"] != 0:
+			result["error"] = restore_result["text"].strip_edges()
+			return result
 	result["ok"] = true
 	return result
+
+
+## The path path was staged as a rename of, or "".
+func _staged_rename_source(path: String) -> String:
+	for entry in _parse_name_status(GitCli.run(_repo_root, ["diff", "--cached", "--name-status", "-M"])["text"]):
+		if entry["path"] == path and entry["status"] == GitIcons.DELTA_RENAMED:
+			return entry["old_path"]
+	return ""
 
 
 ## Deletes path from disk and stages the removal (`git rm -f`) in one step —
@@ -1311,15 +1328,18 @@ func undo_last_commit() -> Dictionary:
 func reword_commit(oid: String, message: String) -> Dictionary:
 	if oid == get_head_oid():
 		return _simple(["commit", "--amend", "--only", "--allow-empty", "-m", message])
+	if has_merges_since(oid):
+		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
 	# The same "amend! <subject>" commit `git commit --fixup=reword:` would make (autosquash then swaps the message in), built with commit-tree so it neither needs an editor nor picks up anything staged.
 	var subject: String = GitCli.run(_repo_root, ["log", "-1", "--format=%s", oid])["text"].strip_edges()
 	var made := _simple(["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "amend! " + subject, "-m", message])
 	if not made["ok"]:
 		return made
+	var original := get_head_oid()
 	var moved := _simple(["update-ref", "-m", "godit: reword " + oid.substr(0, 7), "HEAD", made["output"]])
 	if not moved["ok"]:
 		return moved
-	return _autosquash_onto(oid)
+	return _autosquash_onto(oid, original)
 
 
 ## Folds the currently staged changes into commit oid (rewrites everything after it).
@@ -1328,17 +1348,24 @@ func fixup_commit(oid: String) -> Dictionary:
 		return { "ok": false, "error": "Nothing is staged — stage the changes to fold in first.", "output": "" }
 	if oid == get_head_oid():
 		return _simple(["commit", "--amend", "--no-edit"])
+	if has_merges_since(oid):
+		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
+	var original := get_head_oid()
 	var fixup := _simple(["commit", "--fixup=" + oid])
 	if not fixup["ok"]:
 		return fixup
-	return _autosquash_onto(oid)
+	return _autosquash_onto(oid, original)
 
 
-func _autosquash_onto(oid: String) -> Dictionary:
+## original: HEAD before the helper (amend!/fixup!) commit was made; a rebase that fails outright (not on conflicts) is moved back there, keeping the staged changes.
+func _autosquash_onto(oid: String, original: String) -> Dictionary:
 	var base := oid + "^" if has_parent(oid) else "--root"
 	var args := ["rebase", "--interactive", "--autosquash", "--autostash"]
 	args.append(base)
-	return _with_conflict_flag(_simple(args))
+	var result := _with_conflict_flag(_simple(args))
+	if not result["ok"] and not result["conflicts"] and not original.is_empty() and get_operation_state()["kind"].is_empty():
+		_simple(["reset", "--soft", original])
+	return result
 
 
 ## Squashes oid and every commit after it up to HEAD into one commit with message.

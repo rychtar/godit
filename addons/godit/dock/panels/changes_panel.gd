@@ -802,6 +802,9 @@ func _ignore_path(path: String) -> void:
 	new_content += path + "\n"
 
 	var write_file := FileAccess.open(gitignore_path, FileAccess.WRITE)
+	if write_file == null:
+		Dialogs.error(self, "Can't ignore", "Couldn't write %s." % gitignore_path)
+		return
 	write_file.store_string(new_content)
 	write_file.close()
 	refresh()

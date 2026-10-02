@@ -22,10 +22,13 @@ static func lfs_available() -> bool:
 	return OS.execute("git", ["lfs", "version"], [], false, false) == 0
 
 
-## Path of a logged-in GitHub CLI, or "".
+## Path of a logged-in GitHub CLI, or "". Coroutine: `gh auth status` asks the network, so it runs on a thread.
 static func find_gh() -> String:
 	for candidate in GH_CANDIDATES:
-		if OS.execute(candidate, ["auth", "status"], [], false, false) == 0:
+		var run := _ProgramRun.new()
+		run.start(candidate, ["auth", "status"])
+		var result: Dictionary = await run.finished
+		if result["exit_code"] == 0:
 			return candidate
 	return ""
 
@@ -36,7 +39,7 @@ static func has_identity(root: String) -> bool:
 			and not GitCli.run(root, ["config", "user.email"])["text"].strip_edges().is_empty()
 
 
-## options: {"lfs": bool, "commit": bool, "name": String, "email": String (both only set when git has no identity yet)} -> {"ok", "error"}.
+## options: {"lfs": bool, "commit": bool, "name": String, "email": String (both only set when git has no identity yet)} -> {"ok", "error"}. Coroutine: staging and the first commit of a big project run in the background.
 static func init_repo(root: String, options: Dictionary) -> Dictionary:
 	var r := GitCli.run(root, ["init"], true)
 	if r["exit_code"] != 0:
@@ -53,8 +56,9 @@ static func init_repo(root: String, options: Dictionary) -> Dictionary:
 	if not String(options.get("email", "")).is_empty():
 		GitCli.run(root, ["config", "user.email", options["email"]], true)
 	if options.get("commit", true):
-		GitCli.run(root, ["add", "-A"], true)
-		r = GitCli.run(root, ["commit", "-m", "Initial commit"], true)
+		r = await GitCli.start(root, ["add", "-A"]).finished
+		if r["exit_code"] == 0:
+			r = await GitCli.start(root, ["commit", "-m", "Initial commit"]).finished
 		if r["exit_code"] != 0:
 			return { "ok": false, "error": "The repository was created, but the first commit failed:\n" + r["text"].strip_edges() }
 	return { "ok": true, "error": "" }

@@ -69,6 +69,8 @@ static func merge(base_text: String, ours_text: String, theirs_text: String) -> 
 			var value: Variant
 			if ov == tv:
 				value = ov
+			elif k == "(id)" and key.begins_with("ext:"):
+				value = ov # ids are renumbered when writing, so differing ones aren't a conflict
 			elif ov == bv:
 				value = tv
 				auto.append("Theirs changed %s: %s" % [label, _prop_label(k)])

@@ -140,7 +140,9 @@ static func prepare_environment() -> void:
 	_saved_env.clear()
 	var overrides := ENV_OVERRIDES.duplicate()
 	if not OS.has_environment("GIT_SSH_COMMAND") and not OS.has_environment("GIT_SSH"):
-		overrides["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+		# GIT_SSH_COMMAND beats core.sshCommand, so the configured command (a specific key, say) is kept and only extended.
+		var configured: String = run(ProjectSettings.globalize_path("res://"), ["config", "--get", "core.sshCommand"])["text"].strip_edges()
+		overrides["GIT_SSH_COMMAND"] = (configured if not configured.is_empty() else "ssh") + " -o BatchMode=yes"
 	for key in overrides:
 		_saved_env[key] = OS.get_environment(key) if OS.has_environment(key) else null
 		OS.set_environment(key, overrides[key])

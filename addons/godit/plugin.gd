@@ -17,7 +17,6 @@ const FilesystemMenuScript := preload("res://addons/godit/dock/filesystem/filesy
 const CombinedDockScript := preload("res://addons/godit/dock/godit_combined_dock.gd")
 const RepoWatcherScript := preload("res://addons/godit/util/repo_watcher.gd")
 const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
-##
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -54,6 +53,8 @@ const ID_AUTO_RELOAD := 0
 const AUTO_SAVE_SETTING_KEY := "auto_save_scripts"
 const AUTO_SAVE_EDITOR_SETTING := "text_editor/behavior/files/autosave_interval_secs"
 const AUTO_SAVE_INTERVAL_SECS := 3
+## The user's own autosave interval, kept while Godit's auto-save is on so turning it off puts it back.
+const AUTO_SAVE_ORIGINAL_KEY := "auto_save_original_interval"
 const ID_AUTO_SAVE := 1
 
 ## Replaced by DOCK_LAYOUT_SETTING_KEY; still read as the default for users who had it on.
@@ -326,8 +327,18 @@ func _apply_auto_reload_setting() -> void:
 
 ## Mirrors our own per-user Godit preference onto Godot's own (editor-wide) autosave interval.
 func _apply_auto_save_setting() -> void:
-	var interval := AUTO_SAVE_INTERVAL_SECS if Settings.get_value(AUTO_SAVE_SETTING_KEY, false) else 0
-	EditorInterface.get_editor_settings().set_setting(AUTO_SAVE_EDITOR_SETTING, interval)
+	var editor_settings := EditorInterface.get_editor_settings()
+	var original: Variant = Settings.get_value(AUTO_SAVE_ORIGINAL_KEY, null)
+	if Settings.get_value(AUTO_SAVE_SETTING_KEY, false):
+		if original == null:
+			var current: Variant = editor_settings.get_setting(AUTO_SAVE_EDITOR_SETTING)
+			Settings.set_value(AUTO_SAVE_ORIGINAL_KEY, 0 if current == AUTO_SAVE_INTERVAL_SECS else current) # 3 here means an older version set it
+		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, AUTO_SAVE_INTERVAL_SECS)
+	elif original != null:
+		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, original)
+		Settings.set_value(AUTO_SAVE_ORIGINAL_KEY, null)
+	elif editor_settings.get_setting(AUTO_SAVE_EDITOR_SETTING) == AUTO_SAVE_INTERVAL_SECS:
+		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, 0) # set by an older version that didn't remember the user's own interval
 
 
 ## Combined on a fresh install; whoever toggled the old "at bottom" checkbox keeps what they had.
@@ -345,6 +356,8 @@ func _update_layout_items() -> void:
 ## Side docks and the bottom panel are separate registrations in Godot's editor, so switching layouts reparents the panels live: back into the Git dock and Git Log first, then into the wanted layout.
 func _apply_dock_layout() -> void:
 	var want := _dock_layout()
+	if want == LAYOUT_BOTTOM and not dock_instance.has_repo():
+		want = LAYOUT_SEPARATE # nothing to put in the bottom tabs, and the Git dock is where "Initialize Repository" shows
 	if want == _layout:
 		return
 

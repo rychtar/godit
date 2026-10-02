@@ -16,7 +16,7 @@ static var instance: Node
 
 ## The watcher's own repo instance, null outside a git repo.
 var repo: RefCounted
-var _timer := Timer.new()
+var _timer: Timer
 var _thread: Thread
 ## poll_now() came in while a poll was running: poll again once it's done.
 var _again := false
@@ -42,6 +42,7 @@ func _ready() -> void:
 	repo = RepoOpener.open_current_project_repo()["repo"]
 	if repo == null:
 		return
+	_timer = Timer.new()
 	_timer.wait_time = INTERVAL
 	_timer.timeout.connect(poll_now)
 	add_child(_timer)
@@ -51,7 +52,8 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if instance == self:
 		instance = null
-	_timer.stop()
+	if _timer != null:
+		_timer.stop()
 	if _thread != null:
 		_thread.wait_to_finish()
 		_thread = null

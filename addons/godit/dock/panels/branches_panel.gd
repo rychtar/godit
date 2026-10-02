@@ -351,12 +351,16 @@ func _on_tree_item_selected() -> void:
 
 func _on_branches_tree_item_activated() -> void:
 	var item := _tree.get_selected()
-	if item == null or not await SaveGuard.ensure_saved(self, "Checkout"):
+	if item == null:
 		return
 	var meta: Variant = item.get_metadata(0)
 	if not meta is Dictionary:
 		return
-	match meta.get("kind", ""):
+	var kind: String = meta.get("kind", "")
+	var rewrites_files: bool = kind in ["remote_branch", "tag", "stash"] or (kind == "local" and not meta["is_head"])
+	if rewrites_files and not await SaveGuard.ensure_saved(self, "Apply" if kind == "stash" else "Checkout"):
+		return
+	match kind:
 		"local":
 			if not meta["is_head"]:
 				_checkout(meta["name"])
