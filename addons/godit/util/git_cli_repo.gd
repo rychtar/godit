@@ -125,7 +125,7 @@ func get_diff(path: String, staged: bool, options: Dictionary = {}) -> String:
 
 ## For a conflicted file: its working-tree content (with conflict markers) against "ours".
 func get_conflict_diff(path: String) -> String:
-	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--", path])["text"]
+	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "--", path])["text"]
 
 
 func is_untracked(path: String) -> bool:
@@ -201,7 +201,7 @@ func diff_texts(old_text: String, new_text: String) -> String:
 			return ""
 		f.store_string(pair[1])
 		f.close()
-	var r := GitCli.run(_repo_root, ["diff", "--no-index", "--no-color", "-U0", "--", old_path, new_path])
+	var r := GitCli.run(_repo_root, ["diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", "--", old_path, new_path])
 	DirAccess.remove_absolute(old_path)
 	DirAccess.remove_absolute(new_path)
 	return r["text"]
