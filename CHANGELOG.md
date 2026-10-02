@@ -20,6 +20,12 @@
 - Resolvers, `.gitignore` edits and temporary diff files report a failed write instead of ignoring it.
 - The watcher no longer creates a timer outside a git repository.
 
+- Godit didn't load on Godot 4.4-4.6: saving open files before git operations used methods that only exist from 4.7. Older versions offer to save scripts and text files only; unsaved scenes can't be listed there.
+- The gutter and conflict diffs broke when `diff.external` is set in the git config.
+- Conflict resolver: choosing a side that is a single blank line removed it.
+- `log.showSignature` in the git config put gpg lines into the History.
+- The FileSystem dock's right-click menu ran `git status` on the spot, which was slow in big projects. It uses the last status now.
+
 ### Changed
 
 - "Push with Tags" is now "Push with Annotated Tags", which is what `--follow-tags` does. A lightweight tag is pushed from Branches (right-click, Push Tag).
