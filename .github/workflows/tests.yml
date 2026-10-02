@@ -14,7 +14,7 @@ jobs:
         # the minimum supported version and the one the plugin is tested with
         godot: ["4.4.1", "4.7.1"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Godot
         run: |
