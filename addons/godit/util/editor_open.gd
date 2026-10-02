@@ -34,10 +34,18 @@ static func open_file_at_line(repo_root: String, path: String, line: int) -> Str
 	var res_path := ProjectSettings.localize_path(repo_root.path_join(path))
 	if res_path.begins_with("res://") and ResourceLoader.exists(res_path):
 		var resource := load(res_path)
-		if resource is Script or resource is Shader or resource.get_class() == "TextFile":
+		if resource is Script:
 			EditorInterface.edit_script(resource, maxi(1, line), 0)
 			EditorInterface.set_main_screen_editor("Script")
 			return ""
+		var error := open_file(repo_root, path)
+		# edit_script() only takes scripts; a text file (.md, .json...) is opened as a resource and its tab's caret moved here.
+		if error.is_empty() and current_tab_path() == res_path:
+			var code_edit := EditorInterface.get_script_editor().get_current_editor().get_base_editor() as CodeEdit
+			if code_edit != null:
+				code_edit.set_caret_line(clampi(line - 1, 0, code_edit.get_line_count() - 1))
+				code_edit.center_viewport_to_caret()
+		return error
 	return open_file(repo_root, path)
 
 
