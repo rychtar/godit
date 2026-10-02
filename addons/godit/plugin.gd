@@ -53,6 +53,8 @@ const ID_AUTO_RELOAD := 0
 const AUTO_SAVE_SETTING_KEY := "auto_save_scripts"
 const AUTO_SAVE_EDITOR_SETTING := "text_editor/behavior/files/autosave_interval_secs"
 const AUTO_SAVE_INTERVAL_SECS := 3
+## The user's own autosave interval, kept while Godit's auto-save is on so turning it off puts it back.
+const AUTO_SAVE_ORIGINAL_KEY := "auto_save_original_interval"
 const ID_AUTO_SAVE := 1
 
 ## Replaced by DOCK_LAYOUT_SETTING_KEY; still read as the default for users who had it on.
@@ -325,8 +327,18 @@ func _apply_auto_reload_setting() -> void:
 
 ## Mirrors our own per-user Godit preference onto Godot's own (editor-wide) autosave interval.
 func _apply_auto_save_setting() -> void:
-	var interval := AUTO_SAVE_INTERVAL_SECS if Settings.get_value(AUTO_SAVE_SETTING_KEY, false) else 0
-	EditorInterface.get_editor_settings().set_setting(AUTO_SAVE_EDITOR_SETTING, interval)
+	var editor_settings := EditorInterface.get_editor_settings()
+	var original: Variant = Settings.get_value(AUTO_SAVE_ORIGINAL_KEY, null)
+	if Settings.get_value(AUTO_SAVE_SETTING_KEY, false):
+		if original == null:
+			var current: Variant = editor_settings.get_setting(AUTO_SAVE_EDITOR_SETTING)
+			Settings.set_value(AUTO_SAVE_ORIGINAL_KEY, 0 if current == AUTO_SAVE_INTERVAL_SECS else current) # 3 here means an older version set it
+		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, AUTO_SAVE_INTERVAL_SECS)
+	elif original != null:
+		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, original)
+		Settings.set_value(AUTO_SAVE_ORIGINAL_KEY, null)
+	elif editor_settings.get_setting(AUTO_SAVE_EDITOR_SETTING) == AUTO_SAVE_INTERVAL_SECS:
+		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, 0) # set by an older version that didn't remember the user's own interval
 
 
 ## Combined on a fresh install; whoever toggled the old "at bottom" checkbox keeps what they had.
