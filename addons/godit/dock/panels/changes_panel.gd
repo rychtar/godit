@@ -631,13 +631,22 @@ func _queue_show_selected_diff() -> void:
 	).call_deferred()
 
 
-## Double-clicking a changelist header makes it active (headers aren't selectable, so item_activated never fires for them).
+## Cells that can't be selected (folders, group headers, checkboxes) get neither item_activated nor item_mouse_selected: a double click on a changelist header makes it active, a right click opens the menu.
 func _on_tree_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
-		var item := _tree.get_item_at_position(event.position)
-		if item != null and item.get_metadata(0) is Dictionary and item.get_metadata(0).get("kind", "") == "changelist_group":
-			_set_active_changelist(item.get_metadata(0)["name"])
+	var mb := event as InputEventMouseButton
+	if mb == null or not mb.pressed:
+		return
+	var item := _tree.get_item_at_position(mb.position)
+	if item == null or not item.get_metadata(0) is Dictionary:
+		return
+	if mb.button_index == MOUSE_BUTTON_RIGHT:
+		var column := _tree.get_column_at_position(mb.position)
+		if column >= 0 and not item.is_selectable(column):
+			_show_context_menu_for_item(item, _tree.get_screen_position() + mb.position.round())
 			_tree.accept_event()
+	elif mb.double_click and mb.button_index == MOUSE_BUTTON_LEFT and item.get_metadata(0).get("kind", "") == "changelist_group":
+		_set_active_changelist(item.get_metadata(0)["name"])
+		_tree.accept_event()
 
 
 func _get_tree_drag_data(at_position: Vector2) -> Variant:
@@ -1144,14 +1153,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 			_collect_file_paths(item, new_paths, "untracked_file")
 			if folder_paths.is_empty() and new_paths.is_empty():
 				return
-			var any_path: String = (folder_paths + new_paths)[0]
-			var depth := 0
-			var up := item.get_parent()
-			while up != null and up.get_metadata(0) is Dictionary and up.get_metadata(0).get("kind", "") == "folder":
-				depth += 1
-				up = up.get_parent()
-			# Repo-relative dir of this folder row: the first depth+1 segments of any file under it.
-			var dir := "/".join(any_path.split("/").slice(0, depth + 1))
+			var dir: String = meta["dir"]
 			_context_target = { "kind": "folder", "name": meta.get("name", ""), "paths": folder_paths, "new_paths": new_paths, "dir": dir }
 			if not new_paths.is_empty():
 				_context_menu.add_item("Add %d New File%s to Git" % [new_paths.size(), "" if new_paths.size() == 1 else "s"], ID_ADD_FOLDER_TO_VCS)

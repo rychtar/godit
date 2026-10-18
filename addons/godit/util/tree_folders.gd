@@ -23,7 +23,7 @@ static func get_or_create_folder(tree: Tree, group_root: TreeItem, cache: Dictio
 	folder_item.set_icon(text_column, tree.get_theme_icon(&"Folder", &"EditorIcons"))
 	for col in tree.columns:
 		folder_item.set_selectable(col, false)
-	folder_item.set_metadata(0, { "kind": "folder", "name": folder_name })
+	folder_item.set_metadata(0, { "kind": "folder", "name": folder_name, "dir": dir_path })
 	if checkbox_column >= 0:
 		folder_item.set_cell_mode(checkbox_column, TreeItem.CELL_MODE_CHECK)
 		folder_item.set_editable(checkbox_column, true)
