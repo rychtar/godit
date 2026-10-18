@@ -1686,6 +1686,8 @@ func _do_commit(push_after: bool) -> void:
 		refresh() # auto-stages what was just saved
 	if not await _check_large_files():
 		return
+	if not await _check_references():
+		return
 
 	var result: Dictionary = _repo.commit(message, _amend_check.button_pressed)
 	if not result["ok"]:
@@ -1701,6 +1703,45 @@ func _do_commit(push_after: bool) -> void:
 
 	if push_after:
 		_do_push()
+
+
+const REFERENCE_STATES := {
+	"untracked": "not added to git",
+	"missing": "doesn't exist",
+	"case": "in git with different letter case, which breaks on Linux",
+}
+## Listed in the warning; the rest are counted.
+const REFERENCES_LISTED := 12
+
+
+## Coroutine: warns when the staged scenes, resources, scripts or project.godot reference files the commit won't contain, offering to add the ones that exist. False = cancel the commit.
+func _check_references() -> bool:
+	var project_dir := ProjectSettings.globalize_path("res://").trim_suffix("/").trim_prefix(_repo.get_repo_root()).trim_prefix("/")
+	var missing: Array = _repo.missing_references(project_dir)
+	if missing.is_empty():
+		return true
+	var listed := "\n".join(missing.slice(0, REFERENCES_LISTED).map(func(e: Dictionary) -> String:
+		return "  %s → %s  (%s)" % [e["from"], e["path"], REFERENCE_STATES[e["state"]]]))
+	if missing.size() > REFERENCES_LISTED:
+		listed += "\n  … and %d more" % (missing.size() - REFERENCES_LISTED)
+	var addable: Array = []
+	for e: Dictionary in missing:
+		if e["state"] == "untracked" and not addable.has(e["path"]):
+			addable.append(e["path"])
+	var actions := {}
+	if not addable.is_empty():
+		actions["add"] = "Add %d File%s and Commit" % [addable.size(), "" if addable.size() == 1 else "s"]
+	actions["commit"] = "Commit Anyway"
+	var answer: String = await Dialogs.error_with_actions(self, "Missing Files", "The commit references files it won't contain, so it won't load for anyone who checks it out:\n%s" % listed, actions)
+	match answer:
+		"add":
+			_add_to_vcs(_with_companions(addable))
+			refresh()
+		"commit":
+			pass
+		_:
+			return false
+	return true
 
 
 ## Staged files over this size get a warning before the commit (GitHub rejects anything over 100 MB).

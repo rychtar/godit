@@ -1218,6 +1218,77 @@ func large_staged_files(limit_bytes: int) -> Array:
 	return large.filter(func(e: Dictionary) -> bool: return not lfs.has(e["path"]))
 
 
+## Text files whose res:// references the commit has to carry along.
+const REFERENCING_EXTENSIONS := ["tscn", "tres", "gd", "gdshader", "gdshaderinc", "godot"]
+## Bigger staged files aren't searched (a text mesh .tres can be huge, and its references are near the top anyway).
+const REFERENCES_MAX_BYTES := 20 * 1024 * 1024
+
+
+## Files the staged scenes, resources, scripts and project.godot reference that the commit won't contain: [{"from": staged file, "path": referenced file, "state": "untracked" | "missing" | "case" (in git with other letter case)}], repo-relative; ignored files are left out, as ignoring them was a choice (addons installed by a package manager). project_dir: where res:// is, relative to the repo root ("" at the root).
+func missing_references(project_dir: String) -> Array:
+	var prefix := project_dir + "/" if not project_dir.is_empty() else ""
+	var sources := Array(GitCli.paths(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=ACMR"])["text"])).filter(func(path: String) -> bool:
+		return path.begins_with(prefix) and path.get_extension() in REFERENCING_EXTENSIONS)
+	if sources.is_empty():
+		return []
+	var in_index := {}
+	var by_lower_case := {}
+	for path in GitCli.paths(GitCli.run(_repo_root, ["ls-files"])["text"]):
+		in_index[path] = true
+		by_lower_case[path.to_lower()] = path
+	var unstaged := {}
+	for path in GitCli.paths(GitCli.run(_repo_root, ["diff", "--name-only"])["text"]):
+		unstaged[path] = true
+
+	var found: Array = []
+	var seen := {}
+	for source: String in sources:
+		var text := ""
+		if unstaged.has(source):
+			text = get_file_bytes(":", source).get_string_from_utf8() # what gets committed, not what's on disk
+		elif FileAccess.file_exists(_repo_root.path_join(source)):
+			var f := FileAccess.open(_repo_root.path_join(source), FileAccess.READ)
+			if f == null or f.get_length() > REFERENCES_MAX_BYTES:
+				continue
+			text = f.get_as_text()
+		for res_path in res_references(text):
+			var path := prefix + res_path.trim_prefix("res://")
+			if in_index.has(path) or seen.has(source + "|" + path) or DirAccess.dir_exists_absolute(_repo_root.path_join(path)):
+				continue
+			seen[source + "|" + path] = true
+			var state := "missing"
+			if by_lower_case.has(path.to_lower()):
+				state = "case"
+			elif FileAccess.file_exists(_repo_root.path_join(path)):
+				state = "untracked"
+			found.append({ "from": source, "path": path, "state": state })
+
+	var untracked := found.filter(func(e: Dictionary) -> bool: return e["state"] == "untracked").map(func(e: Dictionary) -> String: return e["path"])
+	if not untracked.is_empty():
+		var ignored := {}
+		for path in GitCli.paths(GitCli.run(_repo_root, ["check-ignore", "--no-index", "--"] + untracked)["text"]):
+			ignored[path] = true
+		found = found.filter(func(e: Dictionary) -> bool: return not ignored.has(e["path"]))
+	return found
+
+
+## The res:// files a scene, resource, script or project.godot names in quotes (uid:// ones resolved when the project knows them); folders, the .godot cache and built paths ("res://levels/%s.tscn") are left out.
+static func res_references(text: String) -> PackedStringArray:
+	var found := PackedStringArray()
+	for m in RegEx.create_from_string("[\"']\\*?((?:res|uid)://[^\"'\\n]*)[\"']").search_all(text):
+		var path := m.get_string(1).get_slice("::", 0)
+		if path.begins_with("uid://"):
+			var id := ResourceUID.text_to_id(path)
+			if id == ResourceUID.INVALID_ID or not ResourceUID.has_id(id):
+				continue
+			path = ResourceUID.get_id_path(id)
+		if path.length() <= "res://".length() or path.ends_with("/") or path.begins_with("res://.godot/") or "%" in path or "{" in path or "*" in path:
+			continue
+		if not found.has(path):
+			found.append(path)
+	return found
+
+
 ## Tracks every file with the same extension as one of paths with Git LFS ("*.png"), and re-stages paths so they're stored as LFS pointers.
 func lfs_track(paths: Array) -> Dictionary:
 	var patterns: Array = []

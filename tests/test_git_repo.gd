@@ -280,3 +280,44 @@ func test_temp_files_work_when_the_cache_folder_does_not_exist() -> void:
 		OS.unset_environment("XDG_CACHE_HOME")
 	else:
 		OS.set_environment("XDG_CACHE_HOME", original)
+
+func test_res_references() -> void:
+	var scene := "[ext_resource type=\"Texture2D\" uid=\"uid://bunknown\" path=\"res://art/tree.png\" id=\"1\"]\n[node name=\"A\" type=\"Node\"]\nscript = ExtResource(\"1\")\n"
+	check("a scene's ext_resource, an unknown uid skipped", GitCliRepo.res_references(scene), PackedStringArray(["res://art/tree.png"]))
+	var script := "extends \"res://base.gd\"\nconst A = preload('res://a.tscn')\nvar level = load(\"res://levels/%s.tscn\" % n)\nvar dir = \"res://levels/\"\nvar sub = load(\"res://m.tres::Material_1\")\n"
+	check("a script's literal paths", GitCliRepo.res_references(script), PackedStringArray(["res://base.gd", "res://a.tscn", "res://m.tres"]))
+	check("an autoload in project.godot", GitCliRepo.res_references("Game=\"*res://game.gd\"\n"), PackedStringArray(["res://game.gd"]))
+
+func test_missing_references_of_a_commit() -> void:
+	var repo := make_repo()
+	var root := repo.get_repo_root()
+	commit_file(repo, "art/Rock.png", "png", "rock")
+	write_file(root.path_join(".gitignore"), "/build/\n")
+	for path in ["art/tree.png", "build/baked.tres", "levels/one.tscn"]:
+		write_file(root.path_join(path), "x")
+	write_file(root.path_join("main.tscn"), "\n".join([
+		"[ext_resource path=\"res://art/tree.png\" id=\"1\"]",
+		"[ext_resource path=\"res://build/baked.tres\" id=\"2\"]",
+		"[ext_resource path=\"res://art/gone.png\" id=\"3\"]",
+		"[ext_resource path=\"res://art/rock.png\" id=\"4\"]",
+		"[ext_resource path=\"res://art/Rock.png\" id=\"5\"]",
+		"[ext_resource path=\"res://levels/one.tscn\" id=\"6\"]",
+	]))
+	git(root, ["add", "main.tscn", "levels/one.tscn"])
+	var found := repo.missing_references("")
+	check("what main.tscn is missing, ignored files left out", found.map(func(e: Dictionary) -> String: return "%s %s %s" % [e.from, e.path, e.state]), [
+		"main.tscn art/tree.png untracked",
+		"main.tscn art/gone.png missing",
+		"main.tscn art/rock.png case",
+	])
+	git(root, ["add", "art/tree.png"])
+	write_file(root.path_join("main.tscn"), "[ext_resource path=\"res://other.png\" id=\"1\"]")
+	check("the staged version counts, not the file on disk", repo.missing_references("").map(func(e: Dictionary) -> String: return e.path), ["art/gone.png", "art/rock.png"])
+
+func test_missing_references_in_a_project_below_the_repo_root() -> void:
+	var repo := make_repo()
+	var root := repo.get_repo_root()
+	write_file(root.path_join("game/main.tscn"), "[ext_resource path=\"res://icon.svg\" id=\"1\"]")
+	write_file(root.path_join("docs/notes.gd"), "const A = preload(\"res://nothing.gd\")")
+	git(root, ["add", "."])
+	check("res:// is the project folder, files outside it aren't checked", repo.missing_references("game").map(func(e: Dictionary) -> String: return "%s %s" % [e.path, e.state]), ["game/icon.svg missing"])
