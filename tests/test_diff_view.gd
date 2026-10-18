@@ -48,3 +48,19 @@ func test_word_diff() -> void:
 func test_tokenize_and_prefix_suffix_diff() -> void:
 	check("tokens", Array(DiffView._tokenize("a_b  c(1)")), ["a_b", "  ", "c", "(", "1", ")"])
 	check("prefix and suffix", DiffView._prefix_suffix_diff("hello world", "hello brave world"), [[], [Vector2i(6, 6)]])
+
+func test_decode_image() -> void:
+	var image := Image.create(3, 2, false, Image.FORMAT_RGBA8)
+	check("a png", DiffView.decode_image(image.save_png_to_buffer(), "PNG").get_size(), Vector2i(3, 2))
+	check("nothing", DiffView.decode_image(PackedByteArray(), "png"), null)
+
+func test_image_compare_layout_shares_one_scale() -> void:
+	var compare: Control = track(preload("res://addons/godit/dock/widgets/image_compare.gd").new())
+	compare.size = Vector2(200, 100)
+	compare.old_texture = PlaceholderTexture2D.new()
+	compare.old_texture.size = Vector2(100, 100)
+	compare.new_texture = PlaceholderTexture2D.new()
+	compare.new_texture.size = Vector2(50, 50)
+	var rects: Dictionary = compare.layout()
+	check("the bigger one fits", rects["old"], Rect2(50, 0, 100, 100))
+	check("the smaller one at the same scale, centered", rects["new"], Rect2(75, 25, 50, 50))

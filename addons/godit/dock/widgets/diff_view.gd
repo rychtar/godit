@@ -8,6 +8,8 @@ const SyntaxColors := preload("res://addons/godit/util/syntax_colors.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 const SceneText := preload("res://addons/godit/util/scene_text.gd")
+const ImageCompare := preload("res://addons/godit/dock/widgets/image_compare.gd")
+const IMAGE_MODES := { "side": "Side by Side", "swipe": "Swipe", "onion": "Onion Skin" }
 
 const IMAGE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
 ## Godot rewrites these on save without any real change; with "Hide Godot noise" on, a -/+ pair differing only here is dimmed.
@@ -51,7 +53,7 @@ var _options_button: MenuButton
 var _empty_label: Label
 var _scroll: ScrollContainer
 var _rows_view: Control
-var _image_view: HBoxContainer
+var _image_view: VBoxContainer
 var _scene_toggle: Button
 ## Node-by-node view of a .tscn/.tres change, instead of the text diff.
 var _scene_tree: Tree
@@ -143,7 +145,7 @@ func _init() -> void:
 	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(_empty_label)
 
-	_image_view = HBoxContainer.new()
+	_image_view = VBoxContainer.new()
 	_image_view.size_flags_vertical = SIZE_EXPAND_FILL
 	_image_view.visible = false
 	add_child(_image_view)
@@ -427,7 +429,7 @@ func _on_rows_action_pressed(action: String, hunk_index: int, selected: PackedIn
 	hunk_action_requested.emit(action, DiffHunks.build_patch(_file_header, _hunks[hunk_index], selected, reverse))
 
 
-## Before/after thumbnails for image files; returns whether it's showing.
+## Before/after of an image file: side by side, or on top of each other (swipe, onion skin) when both exist; returns whether it's showing.
 func _show_image_preview(path: String) -> bool:
 	for child in _image_view.get_children():
 		child.queue_free()
@@ -436,45 +438,107 @@ func _show_image_preview(path: String) -> bool:
 	_image_view.visible = is_image and repo != null and _context.has("new_rev")
 	if not _image_view.visible:
 		return false
-	var old_rev: String = _context.get("old_rev", "HEAD")
-	var new_rev: String = _context.get("new_rev", "")
-	var old_path: String = _context.get("old_path", path)
-	_image_view.add_child(_image_panel("Before", repo.get_file_bytes(old_rev, old_path), path.get_extension()))
-	_image_view.add_child(_image_panel("After", repo.get_file_bytes(new_rev, path), path.get_extension()))
+	var extension := path.get_extension()
+	var old_bytes: PackedByteArray = repo.get_file_bytes(_context.get("old_rev", "HEAD"), _context.get("old_path", path))
+	var new_bytes: PackedByteArray = repo.get_file_bytes(_context.get("new_rev", ""), path)
+	var old_image := decode_image(old_bytes, extension)
+	var new_image := decode_image(new_bytes, extension)
+	var mode: String = _setting("image_mode", "side") if old_image != null and new_image != null else "side"
+
+	if old_image != null and new_image != null:
+		var bar := HBoxContainer.new()
+		var group := ButtonGroup.new()
+		for key in IMAGE_MODES:
+			var button := Button.new()
+			button.text = IMAGE_MODES[key]
+			button.flat = true
+			button.toggle_mode = true
+			button.button_group = group
+			button.button_pressed = key == mode
+			button.pressed.connect(func() -> void:
+				Settings.set_value("diff_image_mode", key)
+				_show_image_preview(path)
+			)
+			bar.add_child(button)
+		_image_view.add_child(bar)
+
+	if mode == "side":
+		var panels := HBoxContainer.new()
+		panels.size_flags_vertical = SIZE_EXPAND_FILL
+		panels.add_child(_image_panel("Before", old_bytes, old_image))
+		panels.add_child(_image_panel("After", new_bytes, new_image))
+		_image_view.add_child(panels)
+		return true
+
+	var compare := ImageCompare.new()
+	compare.old_texture = ImageTexture.create_from_image(old_image)
+	compare.new_texture = ImageTexture.create_from_image(new_image)
+	compare.mode = mode
+	compare.texture_filter = _filter_for(old_image.get_size().max(new_image.get_size()))
+	var captions := HBoxContainer.new()
+	for caption in [_image_caption("Before", old_bytes, old_image), _image_caption("After", new_bytes, new_image)]:
+		var label := Label.new()
+		label.text = caption
+		label.size_flags_horizontal = SIZE_EXPAND_FILL
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if captions.get_child_count() == 0 else HORIZONTAL_ALIGNMENT_RIGHT
+		captions.add_child(label)
+	_image_view.add_child(captions)
+	_image_view.add_child(compare)
+	if mode == "onion":
+		var slider := HSlider.new()
+		slider.max_value = 1.0
+		slider.step = 0.01
+		slider.value = compare.amount
+		slider.tooltip_text = "How much of After shows over Before"
+		slider.value_changed.connect(func(value: float) -> void: compare.amount = value)
+		_image_view.add_child(slider)
 	return true
 
 
-static func _image_panel(caption: String, bytes: PackedByteArray, extension: String) -> Control:
+## The image in bytes (by the file's extension), or null when there's none or it can't be read.
+static func decode_image(bytes: PackedByteArray, extension: String) -> Image:
+	if bytes.is_empty():
+		return null
+	var image := Image.new()
+	var err := ERR_FILE_UNRECOGNIZED
+	match extension.to_lower():
+		"png": err = image.load_png_from_buffer(bytes)
+		"jpg", "jpeg": err = image.load_jpg_from_buffer(bytes)
+		"webp": err = image.load_webp_from_buffer(bytes)
+		"svg": err = image.load_svg_from_buffer(bytes)
+		"bmp": err = image.load_bmp_from_buffer(bytes)
+		"tga": err = image.load_tga_from_buffer(bytes)
+	return image if err == OK else null
+
+
+static func _image_caption(caption: String, bytes: PackedByteArray, image: Image) -> String:
+	if bytes.is_empty():
+		return "%s — (none)" % caption
+	if image == null:
+		return "%s — can't preview (%s)" % [caption, String.humanize_size(bytes.size())]
+	return "%s — %d×%d, %s" % [caption, image.get_width(), image.get_height(), String.humanize_size(bytes.size())]
+
+
+## Pixel art stays crisp; anything bigger is smoothed when scaled.
+static func _filter_for(image_size: Vector2i) -> CanvasItem.TextureFilter:
+	return CanvasItem.TEXTURE_FILTER_NEAREST if maxi(image_size.x, image_size.y) < 128 else CanvasItem.TEXTURE_FILTER_LINEAR
+
+
+static func _image_panel(caption: String, bytes: PackedByteArray, image: Image) -> Control:
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = SIZE_EXPAND_FILL
 	var label := Label.new()
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.text = _image_caption(caption, bytes, image)
 	box.add_child(label)
-
-	var image := Image.new()
-	var err := ERR_FILE_UNRECOGNIZED
-	if not bytes.is_empty():
-		match extension.to_lower():
-			"png": err = image.load_png_from_buffer(bytes)
-			"jpg", "jpeg": err = image.load_jpg_from_buffer(bytes)
-			"webp": err = image.load_webp_from_buffer(bytes)
-			"svg": err = image.load_svg_from_buffer(bytes)
-			"bmp": err = image.load_bmp_from_buffer(bytes)
-			"tga": err = image.load_tga_from_buffer(bytes)
-	if bytes.is_empty():
-		label.text = "%s — (none)" % caption
+	if image == null:
 		return box
-	if err != OK:
-		label.text = "%s — can't preview (%s)" % [caption, String.humanize_size(bytes.size())]
-		return box
-
-	label.text = "%s — %d×%d, %s" % [caption, image.get_width(), image.get_height(), String.humanize_size(bytes.size())]
 	var rect := TextureRect.new()
 	rect.texture = ImageTexture.create_from_image(image)
 	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	rect.size_flags_vertical = SIZE_EXPAND_FILL
-	rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST if maxi(image.get_width(), image.get_height()) < 128 else CanvasItem.TEXTURE_FILTER_LINEAR
+	rect.texture_filter = _filter_for(image.get_size())
 	box.add_child(rect)
 	return box
 
