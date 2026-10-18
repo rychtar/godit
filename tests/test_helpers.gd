@@ -58,3 +58,22 @@ func test_gutter_flags_and_text_normalizing() -> void:
 	check("deleted at the top", flags[1].type, "deleted_before")
 	check("CRLF and a missing final newline", DiffGutter._normalized("a\r\nb"), "a\nb\n")
 	check("empty", DiffGutter._normalized(""), "")
+
+func test_gutter_changed_characters() -> void:
+	var lines := PackedStringArray(["a", "var speed := 12", "print(\"hello world\")", "added", "x"])
+	var regions := [
+		{ "old_start": 2, "old_count": 2, "new_start": 2, "new_count": 3, "old_lines": PackedStringArray(["var speed := 10", "print(\"hello\")"]) },
+		{ "old_start": 5, "old_count": 0, "new_start": 5, "new_count": 1, "old_lines": PackedStringArray() },
+	]
+	var inline := DiffGutter._inline_for(regions, lines)
+	check("the changed number", inline[1], [Vector2i(13, 2)])
+	check("the added word", inline[2], [Vector2i(12, 6)])
+	check("an extra line in the region and an added region have none", [inline.has(3), inline.has(4)], [false, false])
+
+func test_gutter_pairs_lines_by_likeness() -> void:
+	var old := PackedStringArray(["var direction := Input.get_axis(\"ui_left\", \"ui_right\")"])
+	var new := PackedStringArray(["if Input.is_action_just_pressed(\"jump\") and is_on_floor():", "    velocity.y = jump_velocity", "var direction := Input.get_axis(\"move_left\", \"move_right\")"])
+	check("the line that changed, not the first one", DiffGutter._pair_lines(old, new), [Vector2i(0, 2)])
+	check("same counts pair in order", DiffGutter._pair_lines(PackedStringArray(["a", "b"]), PackedStringArray(["x", "y"])), [Vector2i(0, 0), Vector2i(1, 1)])
+	var regions := [{ "old_start": 1, "old_count": 1, "new_start": 1, "new_count": 3, "old_lines": old }]
+	check("its words", DiffGutter._inline_for(regions, new).keys(), [2])
