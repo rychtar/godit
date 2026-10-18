@@ -1420,18 +1420,19 @@ func reword_commit(oid: String, message: String) -> Dictionary:
 	return _autosquash_onto(oid, original)
 
 
-## Folds the currently staged changes into commit oid (rewrites everything after it).
-func fixup_commit(oid: String) -> Dictionary:
+## Gives commit oid a new message and folds the staged changes into it in one go (rewrites everything after it); with nothing staged it's reword_commit().
+func edit_commit(oid: String, message: String) -> Dictionary:
 	if not has_staged_changes():
-		return { "ok": false, "error": "Nothing is staged — stage the changes to fold in first.", "output": "" }
+		return reword_commit(oid, message)
 	if oid == get_head_oid():
-		return _simple(["commit", "--amend", "--no-edit"])
+		return _simple(["commit", "--amend", "-m", message])
 	if has_merges_since(oid):
 		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
 	var original := get_head_oid()
-	var fixup := _simple(["commit", "--fixup=" + oid])
-	if not fixup["ok"]:
-		return fixup
+	# What `git commit --fixup=amend:` makes, naming the commit by hash since two commits can share a subject.
+	var helper := _simple(["commit", "-m", "amend! " + oid, "-m", message])
+	if not helper["ok"]:
+		return helper
 	return _autosquash_onto(oid, original)
 
 

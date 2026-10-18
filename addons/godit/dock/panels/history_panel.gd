@@ -40,7 +40,7 @@ const PAGE_SIZE := 300
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT, ID_RESET_TO_HERE,
 	ID_CREATE_TAG, ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT, ID_REVERT_COMMIT, ID_COMPARE_WORKTREE,
-	ID_COMPARE_SELECTED, ID_REWORD, ID_FIXUP, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES, ID_OPEN_ON_WEB,
+	ID_COMPARE_SELECTED, ID_EDIT_COMMIT, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES, ID_OPEN_ON_WEB,
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
@@ -805,15 +805,11 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 
 	if can_rewrite:
 		m.add_separator("Rewrite %s's history" % current)
-		m.add_item("Reword Message…", ID_REWORD)
-		m.add_item("Fixup: Fold Staged Changes into This Commit", ID_FIXUP)
-		m.set_item_disabled(m.get_item_index(ID_FIXUP), has_merges_after or not _repo.has_staged_changes())
-		# Both replay the commits after it with a rebase, which would flatten merges (the head commit is just amended).
-		m.set_item_disabled(m.get_item_index(ID_REWORD), has_merges_after)
-		if has_merges_after:
-			var no_merges := "A merge commit lies after it — rewriting through merges would flatten them"
-			m.set_item_tooltip(m.get_item_index(ID_REWORD), no_merges)
-			m.set_item_tooltip(m.get_item_index(ID_FIXUP), no_merges)
+		m.add_item("Edit Commit… (message, staged changes)", ID_EDIT_COMMIT)
+		# It replays the commits after it with a rebase, which would flatten merges (the head commit is just amended).
+		m.set_item_disabled(m.get_item_index(ID_EDIT_COMMIT), has_merges_after)
+		m.set_item_tooltip(m.get_item_index(ID_EDIT_COMMIT), "A merge commit lies after it — rewriting through merges would flatten them" if has_merges_after
+				else "Change its message and fold the staged changes into it")
 		m.add_item("Squash This and Newer Commits into One…", ID_SQUASH)
 		m.set_item_disabled(m.get_item_index(ID_SQUASH), has_merges_after or not has_parent or oid == head)
 		m.add_item("Drop Commit…", ID_DROP)
@@ -872,7 +868,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 	var stash_ref: String = _commits_by_oid.get(_context_oid, {}).get("stash", "")
 	var verbs := {
 		ID_STASH_APPLY: "Apply", ID_STASH_POP: "Pop", ID_CHERRY_PICK: "Cherry-pick", ID_CHERRY_PICK_NO_COMMIT: "Cherry-pick",
-		ID_REVERT_COMMIT: "Revert", ID_REWORD: "Reword", ID_FIXUP: "Fixup", ID_SQUASH: "Squash", ID_DROP: "Drop", ID_UNDO_LAST: "Undo",
+		ID_REVERT_COMMIT: "Revert", ID_EDIT_COMMIT: "Edit", ID_SQUASH: "Squash", ID_DROP: "Drop", ID_UNDO_LAST: "Undo",
 		ID_CHECKOUT_COMMIT: "Checkout", ID_RESET_TO_HERE: "Reset",
 	}
 	if verbs.has(id) and not await SaveGuard.ensure_saved(self, verbs[id]):
@@ -934,17 +930,8 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			if await Dialogs.confirm(self, "Revert Commit",
 					"Create a new commit that undoes %s \"%s\"?\n\nHistory isn't rewritten — safe for commits that were already pushed." % [_context_oid.substr(0, 7), _summary(_context_oid)], "Revert"):
 				_after_operation(_repo.revert_commit(_context_oid), "Revert")
-		ID_REWORD:
-			var old_message := String(_commits_by_oid.get(_context_oid, {}).get("message", "")).strip_edges()
-			var answer: Variant = await Dialogs.form(self, "Reword %s" % _context_oid.substr(0, 7), [
-				{ "key": "message", "label": "Commit message" + _pushed_warning(_context_oid, true), "type": "multiline", "default": old_message },
-			], "Reword")
-			if answer != null and not String(answer["message"]).strip_edges().is_empty() and String(answer["message"]).strip_edges() != old_message:
-				_after_operation(_repo.reword_commit(_context_oid, String(answer["message"]).strip_edges()), "Reword")
-		ID_FIXUP:
-			if await Dialogs.confirm(self, "Fixup",
-					"Fold the staged changes into %s \"%s\"?%s" % [_context_oid.substr(0, 7), _summary(_context_oid), _pushed_warning(_context_oid, true)], "Fixup"):
-				_after_operation(_repo.fixup_commit(_context_oid), "Fixup")
+		ID_EDIT_COMMIT:
+			await _edit_commit(_context_oid)
 		ID_SQUASH:
 			var answer: Variant = await Dialogs.form(self, "Squash into One Commit", [
 				{ "type": "label", "label": "Combine %s and every newer commit on %s into a single commit.%s" % [_context_oid.substr(0, 7), _repo.get_current_branch(), _pushed_warning(_context_oid, true)] },
@@ -998,6 +985,30 @@ func _on_refs_dropped(refs: PackedStringArray, target_oid: String) -> void:
 		_after_operation(_repo.merge(other, MERGE_MODES[answer["mode"]]), "Merge")
 	else:
 		_after_operation(_repo.rebase(other), "Rebase")
+
+
+## Edit Commit: a new message, and the staged changes folded in when ticked.
+func _edit_commit(oid: String) -> void:
+	var old_message := String(_commits_by_oid.get(oid, {}).get("message", "")).strip_edges()
+	var staged: int = _repo.get_status().filter(func(e: Dictionary) -> bool: return GitStatusFlags.is_staged(e["status"])).size()
+	var fields: Array = [{ "key": "message", "label": "Commit message", "type": "multiline", "default": old_message }]
+	if staged > 0:
+		fields.append({ "key": "staged", "label": "Fold the %d staged file%s into this commit" % [staged, "" if staged == 1 else "s"], "type": "check", "default": true })
+	else:
+		fields.append({ "type": "label", "label": "Nothing is staged; stage changes in Changes to fold them into this commit too." })
+	var warning := _pushed_warning(oid, true).strip_edges()
+	if not warning.is_empty():
+		fields.append({ "type": "label", "label": warning })
+	var answer: Variant = await Dialogs.form(self, "Edit Commit %s" % oid.substr(0, 7), fields, "Save")
+	if answer == null:
+		return
+	var message := String(answer["message"]).strip_edges()
+	if message.is_empty():
+		return
+	if answer.get("staged", false):
+		_after_operation(_repo.edit_commit(oid, message), "Edit")
+	elif message != old_message:
+		_after_operation(_repo.reword_commit(oid, message), "Reword")
 
 
 func _summary(oid: String) -> String:

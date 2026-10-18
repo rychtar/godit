@@ -44,23 +44,47 @@ func test_reword_refuses_when_a_merge_follows() -> void:
 	check_contains("why", result.error, "merge")
 	check("history untouched", repo.get_head_oid(), before)
 
-func test_fixup_folds_staged_changes_into_an_older_commit() -> void:
+func test_edit_an_older_commit_with_staged_changes() -> void:
+	var repo := _linear()
+	commit_file(repo, "c.txt", "c\n", "c2") # a second "c2" after the one edited
+	write_file(repo.get_repo_root().path_join("b.txt"), "b\n")
+	git(repo.get_repo_root(), ["add", "b.txt"])
+	var target: String = Array(_oid(repo, "c2").split("\n")).back() # the older one
+	check("edited", repo.edit_commit(target, "c2 edited\n\nwith b").ok, true)
+	check("history", head_subjects(repo), ["c2", "c3", "c2 edited", "c1"])
+	var edited := git(repo.get_repo_root(), ["log", "--format=%H", "--grep=c2 edited"])
+	check("the file is in the edited commit", git(repo.get_repo_root(), ["show", "--name-only", "--format=", edited]).contains("b.txt"), true)
+	check("its body", git(repo.get_repo_root(), ["log", "-1", "--format=%b", edited]), "with b")
+	check("nothing left staged", repo.has_staged_changes(), false)
+
+func test_edit_without_staged_changes_only_rewords() -> void:
+	var repo := _linear()
+	check("edited", repo.edit_commit(_oid(repo, "c2"), "c2 reworded").ok, true)
+	check("history", head_subjects(repo), ["c3", "c2 reworded", "c1"])
+
+func test_edit_the_head_commit_with_staged_changes() -> void:
 	var repo := _linear()
 	write_file(repo.get_repo_root().path_join("b.txt"), "b\n")
 	git(repo.get_repo_root(), ["add", "b.txt"])
-	check("folded", repo.fixup_commit(_oid(repo, "c2")).ok, true)
+	check("edited", repo.edit_commit(repo.get_head_oid(), "c3 edited").ok, true)
+	check("history", head_subjects(repo), ["c3 edited", "c2", "c1"])
+	check("the file is in it", git(repo.get_repo_root(), ["show", "--name-only", "--format=", "HEAD"]).contains("b.txt"), true)
+
+func test_edit_with_the_same_message_folds_staged_changes_in() -> void:
+	var repo := _linear()
+	write_file(repo.get_repo_root().path_join("b.txt"), "b\n")
+	git(repo.get_repo_root(), ["add", "b.txt"])
+	check("folded", repo.edit_commit(_oid(repo, "c2"), "c2").ok, true)
 	check("history", head_subjects(repo), ["c3", "c2", "c1"])
 	check("the file is in c2 now", git(repo.get_repo_root(), ["show", "--name-only", "--format=", _oid(repo, "c2")]).contains("b.txt"), true)
 	check("working tree is clean", repo.get_status().size(), 0)
 
-func test_fixup_needs_something_staged_and_refuses_merges() -> void:
-	var repo := _linear()
-	check("nothing staged", repo.fixup_commit(_oid(repo, "c2")).ok, false)
+func test_edit_refuses_when_a_merge_follows() -> void:
 	var merged := _with_a_merge()
 	write_file(merged.get_repo_root().path_join("b.txt"), "b\n")
 	git(merged.get_repo_root(), ["add", "b.txt"])
-	var result := merged.fixup_commit(_oid(merged, "c2"))
-	check("a merge follows", result.ok, false)
+	var result := merged.edit_commit(_oid(merged, "c2"), "x")
+	check("refused", result.ok, false)
 	check_contains("why", result.error, "merge")
 
 func test_squash_to_head() -> void:
