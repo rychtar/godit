@@ -135,6 +135,15 @@ static func diff(old_text: String, new_text: String) -> Dictionary:
 	return result
 
 
+## A .tscn/.tres text without the file's own uid in its first header, so a copy of it doesn't clash with the original.
+static func without_own_uid(text: String) -> String:
+	var header_end := text.find("]")
+	if not text.begins_with("[gd_") or header_end == -1:
+		return text
+	var header := RegEx.create_from_string(" uid=\"uid://[a-z0-9]+\"").sub(text.substr(0, header_end), "")
+	return header + text.substr(header_end)
+
+
 ## project.godot, export_presets.cfg, .import files and other ConfigFile-format text.
 static func is_config_file(path: String) -> bool:
 	return path.get_extension().to_lower() in ["godot", "cfg", "import"]

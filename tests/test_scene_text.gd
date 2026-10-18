@@ -59,3 +59,9 @@ func test_input_actions_are_readable() -> void:
 	check("the raw value is kept", parsed.input.jump.begins_with("{"), true)
 	var readable := SceneText._readable_config("input", parsed.input)
 	check("shortened", readable.jump, "deadzone 0.2: Ctrl+S, Joypad button 0")
+
+func test_without_own_uid() -> void:
+	var scene := "[gd_scene load_steps=2 format=3 uid=\"uid://abc123\"]\n\n[ext_resource type=\"Script\" uid=\"uid://def456\" path=\"res://a.gd\" id=\"1\"]\n"
+	check("the header's uid goes, the references' stay", SceneText.without_own_uid(scene), "[gd_scene load_steps=2 format=3]\n\n[ext_resource type=\"Script\" uid=\"uid://def456\" path=\"res://a.gd\" id=\"1\"]\n")
+	check("a resource", SceneText.without_own_uid("[gd_resource type=\"Theme\" format=3 uid=\"uid://x1\"]\n"), "[gd_resource type=\"Theme\" format=3]\n")
+	check("other text", SceneText.without_own_uid("extends Node"), "extends Node")

@@ -9,6 +9,7 @@ const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const WebLinks := preload("res://addons/godit/util/web_links.gd")
+const SceneText := preload("res://addons/godit/util/scene_text.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
@@ -44,7 +45,9 @@ enum {
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
-enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB }
+enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB, ID_FILE_OPEN_VERSION }
+## Where Open This Version puts its copies: inside .godot, which every Godot project's .gitignore leaves out.
+const HISTORY_COPIES := "res://.godot/godit/history"
 
 @onready var _search_edit: LineEdit = %SearchEdit
 var _search_mode: OptionButton
@@ -706,6 +709,28 @@ func _open_historical_file(path: String, line := 0) -> void:
 		Dialogs.error(self, "Can't open file", error)
 
 
+## A scene or resource as it was in the selected commit, opened from a copy named "name@commit"; it uses today's versions of the files it references.
+func _open_version(path: String) -> void:
+	var bytes: PackedByteArray = _repo.get_file_bytes(_detail_oid, path)
+	if bytes.is_empty():
+		Dialogs.error(self, "Can't open this version", "\"%s\" isn't in %s." % [path, _detail_oid.substr(0, 7)])
+		return
+	var short := _detail_oid.substr(0, 7)
+	var copy := HISTORY_COPIES.path_join(short).path_join(path.get_base_dir()).path_join("%s@%s.%s" % [path.get_file().get_basename(), short, path.get_extension()])
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(copy.get_base_dir()))
+	var file := FileAccess.open(copy, FileAccess.WRITE)
+	if file == null:
+		Dialogs.error(self, "Can't open this version", "Couldn't write %s." % copy)
+		return
+	file.store_string(SceneText.without_own_uid(bytes.get_string_from_utf8()))
+	file.close()
+	if path.get_extension() == "tscn":
+		EditorInterface.open_scene_from_path(copy)
+	else:
+		EditorInterface.edit_resource(ResourceLoader.load(copy, "", ResourceLoader.CACHE_MODE_REPLACE))
+	EditorInterface.get_editor_toaster().push_toast("Godit: %s as of %s is a copy; saving it doesn't change your project." % [path.get_file(), short])
+
+
 func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_index: int) -> void:
 	if mouse_button_index != MOUSE_BUTTON_RIGHT:
 		return
@@ -723,6 +748,9 @@ func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_in
 		_file_menu.popup()
 		return
 	_add_web_item(_file_menu, ID_FILE_OPEN_ON_WEB, _detail_oid)
+	if _file_context_path.get_extension() in ["tscn", "tres"]:
+		_file_menu.add_item("Open This Version (a copy)", ID_FILE_OPEN_VERSION)
+		_file_menu.set_item_tooltip(_file_menu.get_item_index(ID_FILE_OPEN_VERSION), "Opens the file as it was in this commit, as a copy outside the project's files: saving it changes nothing")
 	_file_menu.add_separator()
 	_file_menu.add_item("Restore File to This Commit's Version…", ID_FILE_RESTORE_THIS)
 	_file_menu.add_item("Restore File to Before This Commit…", ID_FILE_RESTORE_BEFORE)
@@ -737,6 +765,8 @@ func _on_file_menu_id_pressed(id: int) -> void:
 	match id:
 		ID_FILE_OPEN:
 			_open_historical_file(path)
+		ID_FILE_OPEN_VERSION:
+			_open_version(path)
 		ID_FILE_HISTORY:
 			set_path_filter(path)
 		ID_FILE_COPY_PATH:
