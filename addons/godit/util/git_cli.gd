@@ -118,6 +118,14 @@ static func record(args: Array, exit_code: int, text: String) -> void:
 	command_log_revision += 1
 
 
+## The last logged command if it failed in the last few seconds, else {}: an error dialog then offers to show it in the Console.
+static func recent_failure(seconds := 10) -> Dictionary:
+	if command_log.is_empty():
+		return {}
+	var last: Dictionary = command_log[-1]
+	return last if last["exit_code"] != 0 and Time.get_unix_time_from_system() - last["time"] <= seconds else {}
+
+
 ## Splits git output into non-empty lines.
 static func lines(text: String) -> PackedStringArray:
 	var result := PackedStringArray()

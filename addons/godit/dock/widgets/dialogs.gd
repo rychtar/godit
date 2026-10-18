@@ -1,8 +1,13 @@
 ## Awaitable one-off dialogs built in code, so every new git action doesn't need its own node in a .tscn. Each call creates the dialog under `parent`, pops it up, and frees it once answered. No class_name: internal helper, addressed via preload.
 extends RefCounted
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
+const GitCli := preload("res://addons/godit/util/git_cli.gd")
 
 const TEXT_WIDTH := 420
+const CONSOLE_ACTION := "godit_show_console"
+
+## Set by plugin.gd: brings the Console to front.
+static var show_console: Callable
 
 
 ## Plain error/info message.
@@ -10,7 +15,23 @@ static func error(parent: Node, title: String, message: String) -> void:
 	var dialog := AcceptDialog.new()
 	dialog.title = title
 	dialog.add_child(_message_label(message))
+	add_console_button(dialog)
 	await _run(parent, dialog)
+
+
+## "Show in Console" on an error dialog while the git command that just failed is there; a reused dialog gets it shown or hidden again.
+static func add_console_button(dialog: AcceptDialog) -> void:
+	var button: Button = dialog.get_meta(CONSOLE_ACTION, null)
+	if button == null:
+		button = dialog.add_button("Show in Console", true, CONSOLE_ACTION)
+		dialog.set_meta(CONSOLE_ACTION, button)
+		dialog.custom_action.connect(func(action: StringName) -> void:
+			if action == CONSOLE_ACTION:
+				dialog.hide()
+				if show_console.is_valid():
+					show_console.call()
+		)
+	button.visible = show_console.is_valid() and not GitCli.recent_failure().is_empty()
 
 
 ## true on OK, false on Cancel/close.

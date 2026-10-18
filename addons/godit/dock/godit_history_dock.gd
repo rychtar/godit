@@ -65,6 +65,11 @@ func reattach_panels() -> void:
 
 
 ## Brings the Log tab to front with oid selected.
+func show_console() -> void:
+	if _tabs != null and _console.get_parent() == _tabs:
+		_tabs.current_tab = _console.get_index()
+
+
 func show_commit(oid: String) -> void:
 	if _repo == null:
 		return

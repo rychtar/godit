@@ -1085,4 +1085,5 @@ func _on_reset_dialog_confirmed() -> void:
 func _show_error(title: String, message: String) -> void:
 	_error_dialog.title = title
 	_error_dialog.dialog_text = message
+	Dialogs.add_console_button(_error_dialog)
 	_error_dialog.popup_centered()

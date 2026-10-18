@@ -21,6 +21,7 @@ const GoditScreenScript := preload("res://addons/godit/dock/godit_screen.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 const HeadInspectorScript := preload("res://addons/godit/dock/inspector/head_inspector.gd")
+const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -190,6 +191,7 @@ func _enter_tree() -> void:
 		DiffViewScript.expander = _expand_diff
 		DiffViewScript.collapser = _leave_main_screen
 	main_screen_changed.connect(_on_main_screen_changed)
+	Dialogs.show_console = _show_console
 	head_inspector = HeadInspectorScript.new()
 	head_inspector.enabled = Settings.get_value(INSPECTOR_SETTING_KEY, true)
 	add_inspector_plugin(head_inspector)
@@ -221,6 +223,7 @@ func _exit_tree() -> void:
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
 	DiffViewScript.expander = Callable()
 	DiffViewScript.collapser = Callable()
+	Dialogs.show_console = Callable()
 	remove_inspector_plugin(head_inspector)
 	if main_screen != null:
 		main_screen.release() # back into its panel before the panels go
@@ -332,6 +335,16 @@ func _reveal_history() -> void:
 		combined_dock.show_view("history")
 	else:
 		_reveal(history_dock_instance)
+
+
+## Brings the Console (Git Log's tab, or the combined dock's view) to front.
+func _show_console() -> void:
+	if combined_dock != null:
+		_reveal(combined_dock)
+		combined_dock.show_view("console")
+	else:
+		_reveal(history_dock_instance)
+		history_dock_instance.show_console()
 
 
 ## Brings Changes (in whichever layout) to front.
