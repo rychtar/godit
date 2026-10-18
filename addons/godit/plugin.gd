@@ -17,6 +17,9 @@ const FilesystemMenuScript := preload("res://addons/godit/dock/filesystem/filesy
 const CombinedDockScript := preload("res://addons/godit/dock/godit_combined_dock.gd")
 const RepoWatcherScript := preload("res://addons/godit/util/repo_watcher.gd")
 const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
+const GoditScreenScript := preload("res://addons/godit/dock/godit_screen.gd")
+const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
+const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -45,6 +48,10 @@ var filesystem_menu: EditorContextMenuPlugin
 var watcher: Node
 ## Project > Tools > Godit submenu, holding the auto-reload toggle.
 var tools_menu: PopupMenu
+## The Godit tab next to 2D/3D/Script showing a diff full size, or null when turned off.
+var main_screen: Control
+## Where "Back to the panel" returns to.
+var _last_main_screen := "Script"
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
@@ -80,6 +87,10 @@ const ID_CONFIRM_SHORTCUT_COMMIT := 5
 const ID_SAVE_BEFORE_GIT := 6
 const ID_FAST_STATUS := 9
 
+const MAIN_SCREEN_SETTING_KEY := "diff_main_screen"
+const ID_MAIN_SCREEN := 10
+const MAIN_SCREEN_NAME := "Godit"
+
 
 func _enter_tree() -> void:
 	GitCli.prepare_environment()
@@ -99,6 +110,8 @@ func _enter_tree() -> void:
 	tools_menu.add_check_item("Save open files before git operations without asking", ID_SAVE_BEFORE_GIT)
 	tools_menu.add_check_item("Faster git status for large projects (file system monitor)", ID_FAST_STATUS)
 	tools_menu.set_item_tooltip(tools_menu.get_item_index(ID_FAST_STATUS), "Git's built-in fsmonitor daemon and untracked cache, set in this repo's config:\n`git status` asks what changed instead of scanning every file.")
+	tools_menu.add_check_item("Godit tab next to 2D/3D/Script for full-size diffs", ID_MAIN_SCREEN)
+	tools_menu.set_item_checked(tools_menu.get_item_index(ID_MAIN_SCREEN), _has_main_screen())
 	tools_menu.add_separator("Layout")
 	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (default; can float on a second monitor)", ID_LAYOUT_COMBINED)
 	tools_menu.add_radio_check_item("Git dock + Git Log at bottom", ID_LAYOUT_SEPARATE)
@@ -161,6 +174,14 @@ func _enter_tree() -> void:
 		dock_instance.reveal_change(path, 1)
 	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_FILESYSTEM, filesystem_menu)
 	history_dock_instance.changes_requested.connect(_show_changes)
+	if _has_main_screen():
+		main_screen = GoditScreenScript.new()
+		main_screen.default_view = func() -> Control: return dock_instance.changes_diff_view() if dock_instance.has_repo() else null
+		main_screen.back_requested.connect(_leave_main_screen)
+		EditorInterface.get_editor_main_screen().add_child(main_screen)
+		DiffViewScript.expander = _expand_diff
+		DiffViewScript.collapser = _leave_main_screen
+	main_screen_changed.connect(_on_main_screen_changed)
 	# Saves show up right away; the panels' polling still catches changes made outside the editor.
 	resource_saved.connect(func(_r: Resource) -> void: _queue_poll())
 	scene_saved.connect(func(_p: String) -> void: _queue_poll())
@@ -187,6 +208,12 @@ func _exit_tree() -> void:
 	GitCli.shutdown()
 	remove_tool_menu_item("Godit")
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
+	DiffViewScript.expander = Callable()
+	DiffViewScript.collapser = Callable()
+	if main_screen != null:
+		main_screen.release() # back into its panel before the panels go
+		main_screen.free()
+		main_screen = null
 
 	# Only what's registered right now needs unregistering: the other layouts took dock_instance/history_dock_instance out already.
 	match _layout:
@@ -217,6 +244,43 @@ func _exit_tree() -> void:
 	watcher.free() # after the panels, which are subscribed to it
 
 	GitCli.restore_environment()
+
+
+func _has_main_screen() -> bool:
+	return Settings.get_value(MAIN_SCREEN_SETTING_KEY, true)
+
+
+func _get_plugin_name() -> String:
+	return MAIN_SCREEN_NAME
+
+
+func _get_plugin_icon() -> Texture2D:
+	var theme := EditorInterface.get_editor_theme()
+	return theme.get_icon(&"VcsBranches", &"EditorIcons") if theme.has_icon(&"VcsBranches", &"EditorIcons") else null
+
+
+func _make_visible(visible: bool) -> void:
+	if not is_instance_valid(main_screen):
+		return
+	main_screen.visible = visible
+	if visible:
+		main_screen.open()
+	else:
+		main_screen.release()
+
+
+func _expand_diff(view: Control) -> void:
+	main_screen.adopt(view)
+	EditorInterface.set_main_screen_editor(MAIN_SCREEN_NAME)
+
+
+func _leave_main_screen() -> void:
+	EditorInterface.set_main_screen_editor(_last_main_screen)
+
+
+func _on_main_screen_changed(screen_name: String) -> void:
+	if screen_name != MAIN_SCREEN_NAME:
+		_last_main_screen = screen_name
 
 
 func _show_commit(oid: String) -> void:
@@ -318,6 +382,9 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 		ID_AUTO_FETCH:
 			Settings.set_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, checked)
 			dock_instance.apply_auto_fetch_setting()
+		ID_MAIN_SCREEN:
+			Settings.set_value(MAIN_SCREEN_SETTING_KEY, checked)
+			RepoSetup.reload_plugin() # the editor asks for a plugin's main screen only when it's enabled
 
 
 ## Mirrors our own per-user Godit preference onto Godot's own (editor-wide) auto-reload setting — unchecking it restores the normal "reload externally modified file?" confirmation.

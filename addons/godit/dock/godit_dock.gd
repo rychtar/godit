@@ -130,6 +130,11 @@ func revert_paths(paths: Array) -> void:
 		await _changes_panel._revert_paths(paths)
 
 
+## The Changes diff, which the Godit tab shows when opened with nothing else.
+func changes_diff_view() -> Control:
+	return _changes_panel._diff_view
+
+
 ## Pulls Changes and Branches out of the tab bar together, so plugin.gd can dock both at the bottom instead.
 func detach_panels() -> Dictionary:
 	_tab_container.remove_child(_changes_panel)

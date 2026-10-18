@@ -194,6 +194,12 @@ func _ready() -> void:
 	# Changelists + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
 	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
 
+	_diff_view.expandable = true
+	# Back from the Godit tab, the Diff toggle decides again whether it shows.
+	_diff_view.expanded_changed.connect(func(expanded: bool) -> void:
+		if not expanded:
+			_diff_view.visible = _diff_toggle.button_pressed
+	)
 	_diff_view.hunk_action_requested.connect(_on_hunk_action_requested)
 	_diff_view.options_changed.connect(_show_selected_diff)
 	_diff_view.tab_selected.connect(_on_diff_tab_selected)
@@ -1482,7 +1488,8 @@ func _on_delete_changelist_button_pressed() -> void:
 
 
 func _on_diff_toggle_toggled(pressed: bool) -> void:
-	_diff_view.visible = pressed
+	if not _diff_view._expanded:
+		_diff_view.visible = pressed
 	Settings.set_value(DIFF_VISIBLE_SETTING_KEY, pressed)
 
 

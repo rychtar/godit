@@ -31,6 +31,16 @@ signal options_changed
 signal open_location_requested(path: String, new_line: int)
 ## One of the tabs set with set_tabs() was clicked.
 signal tab_selected(index: int)
+## Moved into the Godit tab (true) or back into its panel (false).
+signal expanded_changed(expanded: bool)
+
+## Set by plugin.gd while the Godit tab exists: expander(view) shows a view there, collapser() leaves the tab.
+static var expander: Callable
+static var collapser: Callable
+## The owner allows showing this view in the Godit tab.
+var expandable := false
+var _expanded := false
+var _expand_button: Button
 
 var _tabs: TabBar
 var _header_bar: PanelContainer
@@ -101,6 +111,19 @@ func _init() -> void:
 	)
 	header_row.add_child(_scene_toggle)
 
+	_expand_button = Button.new()
+	_expand_button.flat = true
+	_expand_button.toggle_mode = true
+	_expand_button.visible = false
+	_expand_button.toggled.connect(func(on: bool) -> void:
+		if on and expander.is_valid():
+			expander.call(self)
+		elif not on and collapser.is_valid():
+			collapser.call()
+	)
+	header_row.add_child(_expand_button)
+	_update_expand_button()
+
 	_options_button = MenuButton.new()
 	_options_button.text = "⋯"
 	_options_button.tooltip_text = "Diff options"
@@ -150,6 +173,27 @@ func _init() -> void:
 	)
 	_scroll.get_h_scroll_bar().value_changed.connect(func(_v: float) -> void: _rows_view.queue_redraw())
 	_scroll.get_v_scroll_bar().value_changed.connect(func(_v: float) -> void: _rows_view.queue_redraw())
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED and _expand_button != null:
+		_update_expand_button()
+
+
+## Called by the Godit tab when it takes this view or gives it back.
+func set_expanded(expanded: bool) -> void:
+	_expanded = expanded
+	_update_expand_button()
+	expanded_changed.emit(expanded)
+
+
+func _update_expand_button() -> void:
+	_expand_button.visible = expandable and expander.is_valid()
+	_expand_button.set_pressed_no_signal(_expanded)
+	_expand_button.tooltip_text = "Back to the panel" if _expanded else "Show in the Godit tab, next to 2D/3D/Script"
+	var icon_name := &"Back" if _expanded else &"DistractionFree"
+	_expand_button.icon = get_theme_icon(icon_name, &"EditorIcons") if has_theme_icon(icon_name, &"EditorIcons") else null
+	_expand_button.text = "" if _expand_button.icon != null else ("Back" if _expanded else "Expand")
 
 
 # --- options -----------------------------------------------------------------
@@ -260,6 +304,7 @@ func _rerender(keep_scroll: bool = false) -> void:
 	var note: String = _context.get("note", "")
 
 	_header_bar.visible = not path.is_empty()
+	_update_expand_button()
 	_header_label.text = path + ("   · " + note if not note.is_empty() else "")
 	_header_label.tooltip_text = path
 	_stats_added.text = ("+%d" % parsed["added"]) if parsed["added"] > 0 else ""

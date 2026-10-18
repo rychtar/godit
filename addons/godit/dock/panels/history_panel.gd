@@ -267,19 +267,26 @@ func _build_file_diff() -> void:
 	close.flat = true
 	close.tooltip_text = "Close the file diff"
 	close.pressed.connect(func() -> void:
-		_file_diff_box.visible = false
+		_hide_file_diff()
 		_files_tree.deselect_all()
 	)
 	header.add_child(close)
 	_file_diff_box.add_child(header)
 
 	_file_diff_view = DiffViewScript.new()
+	_file_diff_view.expandable = true
 	_file_diff_view.options_changed.connect(_on_files_tree_item_selected)
 	_file_diff_view.open_location_requested.connect(func(path: String, line: int) -> void:
 		_open_historical_file(path, line)
 	)
 	_file_diff_box.add_child(_file_diff_view)
 	_graph_split.add_child(_file_diff_box)
+
+
+## Also empties the diff, which may be showing in the Godit tab instead of the hidden box.
+func _hide_file_diff() -> void:
+	_file_diff_box.visible = false
+	_file_diff_view.clear_diff()
 
 
 ## split_offset is a pixel offset from the container's midpoint, not a
@@ -382,7 +389,7 @@ func refresh(status_entries: Variant = null) -> void:
 		_files_tree.clear()
 		_detail_label.text = ""
 		_detail_separator.visible = false
-		_file_diff_box.visible = false
+		_hide_file_diff()
 	elif _detail_oid == WORKTREE_OID:
 		var selected := _files_tree.get_selected()
 		var selected_path: String = selected.get_metadata(0).get("path", "") if selected != null and selected.get_metadata(0) is Dictionary else ""
@@ -525,7 +532,7 @@ func _on_commit_graph_commit_selected(oid: String) -> void:
 
 	if not same_commit:
 		_build_files_tree(oid)
-		_file_diff_box.visible = false
+		_hide_file_diff()
 	_detail_separator.visible = true
 
 	if oid == WORKTREE_OID:
