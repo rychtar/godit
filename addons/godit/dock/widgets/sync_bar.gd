@@ -9,6 +9,9 @@ const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.g
 const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
+const UiScale := preload("res://addons/godit/util/ui_scale.gd")
+## Narrower than this, Fetch/Pull/Push show only their icons and the upstream line goes into the branch button's tooltip.
+const COMPACT_WIDTH := 420
 
 ## Something this bar did (checkout, fetch, pull, push…) may have changed the repo — the owning panel should refresh.
 signal changed
@@ -32,6 +35,8 @@ var _push_menu: MenuButton
 var _pull_autostash := false
 ## Local branch names in the switcher popup, by item id.
 var _menu_branches: Array = []
+var _compact := false
+var _refresh_button: Button
 
 
 func _init() -> void:
@@ -80,9 +85,13 @@ func _init() -> void:
 	push_popup.id_pressed.connect(_on_push_menu_id_pressed)
 	push_popup.about_to_popup.connect(_update_pull_request_item.bind(push_popup))
 
-	var refresh := _button(row, "", "Refresh", func() -> void: changed.emit())
-	refresh.flat = true
-	refresh.set_meta("icon_name", &"Reload")
+	_refresh_button = _button(row, "", "Refresh", func() -> void: changed.emit())
+	_refresh_button.flat = true
+	_refresh_button.set_meta("icon_name", &"Reload")
+	resized.connect(func() -> void:
+		if _is_narrow() != _compact:
+			refresh()
+	)
 
 	operation_bar = OperationBar.new()
 	_own_operation_bar = operation_bar
@@ -180,8 +189,29 @@ func refresh() -> void:
 	_push_button.tooltip_text = "Push %s%s" % [s["branch"], " (%d commit%s)" % [s["ahead"], "" if s["ahead"] == 1 else "s"] if s["ahead"] > 0 else "" if not s["upstream"].is_empty() else " — publishes it, since it has no upstream yet"]
 	for control in [_pull_button, _pull_menu, _push_button, _push_menu]:
 		control.disabled = detached
+	_apply_compact()
 	if detached:
 		_push_button.tooltip_text = "HEAD is detached — checkout a branch to push"
+
+
+func _is_narrow() -> bool:
+	return size.x > 0 and size.x < UiScale.px(COMPACT_WIDTH)
+
+
+## Icons and counts only, and the branch name clipped, when the bar is narrow (a side dock).
+func _apply_compact() -> void:
+	_compact = _is_narrow()
+	_branch_button.clip_text = _compact
+	_branch_button.size_flags_horizontal = SIZE_EXPAND_FILL if _compact else SIZE_FILL
+	_branch_button.tooltip_text = _upstream_label.tooltip_text + "\nClick to switch branches" if _compact else "Current branch — click to switch"
+	_upstream_label.visible = not _compact or not _branch_button.visible # the toolbar's only branch name
+	_refresh_button.visible = not _compact
+	if _compact:
+		_fetch_button.text = ""
+		_pull_button.text = _pull_button.text.trim_prefix("Pull").strip_edges()
+		_push_button.text = _push_button.text.trim_prefix("Push").strip_edges()
+	elif _fetch_button.text.is_empty():
+		_fetch_button.text = "Fetch"
 
 
 func _fill_branch_menu() -> void:

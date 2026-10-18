@@ -30,6 +30,9 @@ const AUTO_ADD_SETTING_KEY := "auto_add_new_files"
 const AUTO_ADD_MASKS_SETTING_KEY := "auto_add_ignore_masks"
 const DEFAULT_AUTO_ADD_MASKS := ["*.tmp", "*.bak", "*.orig", "*~", ".DS_Store"]
 const LIST_PANE_RATIO := 0.4
+## Narrower than this, the diff next to the list is left out (the Godit tab still shows it).
+const NARROW_WIDTH := 480
+const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 
 const MENU_MOVE_TO_SUBMENU := "MoveToMenu"
 const ID_OPEN := 1
@@ -56,6 +59,7 @@ const ID_ADD_FOLDER_TO_VCS := 20
 const ID_IGNORE_FOLDER := 21
 const ID_DONT_AUTO_ADD_EXT := 22
 const ID_MOVE_ALL_TO := 23
+const ID_SHOW_DIFF_TAB := 24
 
 const OPT_AUTO_STAGE := 0
 const OPT_AUTO_ADD := 1
@@ -98,6 +102,8 @@ const CHECKBOX_COLUMN_WIDTH := 28
 
 ## Set by godit_dock.gd; a git_cli_repo.gd instance.
 var _repo: RefCounted
+## Too narrow for the diff next to the list (see NARROW_WIDTH).
+var _narrow := false
 
 ## {"names": Array[String], "assignments": Dictionary[path, name], "active": String}.
 ## Pure local bookkeeping (git has no concept of changelists) — see
@@ -195,11 +201,9 @@ func _ready() -> void:
 	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
 
 	_diff_view.expandable = true
-	# Back from the Godit tab, the Diff toggle decides again whether it shows.
-	_diff_view.expanded_changed.connect(func(expanded: bool) -> void:
-		if not expanded:
-			_diff_view.visible = _diff_toggle.button_pressed
-	)
+	_diff_view.expanded_changed.connect(func(_expanded: bool) -> void: _apply_diff_visibility())
+	resized.connect(_update_narrow)
+	_update_narrow.call_deferred() # a dock that starts out narrow never resizes into it
 	_diff_view.hunk_action_requested.connect(_on_hunk_action_requested)
 	_diff_view.options_changed.connect(_show_selected_diff)
 	_diff_view.tab_selected.connect(_on_diff_tab_selected)
@@ -1157,6 +1161,8 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_context_menu.add_item("Revert %d Files..." % n, ID_REVERT_ALL)
 			else:
 				_context_menu.add_item("Open", ID_OPEN)
+				if DiffViewScript.expander.is_valid():
+					_context_menu.add_item("Show Diff in the Godit Tab", ID_SHOW_DIFF_TAB)
 				_context_menu.add_item("Stage" if not meta["staged"] else "Unstage", ID_TOGGLE_STAGE)
 				_context_menu.add_submenu_item("Move to Changelist", MENU_MOVE_TO_SUBMENU)
 				_fill_move_to_menu([meta["path"]])
@@ -1189,6 +1195,8 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 		"untracked_file":
 			_context_menu.add_item("Add to Git", ID_ADD_TO_VCS)
 			_context_menu.add_item("Open", ID_OPEN)
+			if DiffViewScript.expander.is_valid():
+				_context_menu.add_item("Show Diff in the Godit Tab", ID_SHOW_DIFF_TAB)
 			_context_menu.add_separator()
 			_context_menu.add_item("Ignore", ID_IGNORE)
 			var ext: String = meta["path"].get_extension()
@@ -1315,6 +1323,9 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			DisplayServer.clipboard_set(_context_target["path"])
 		ID_RESOLVE:
 			_open_conflict_resolver(_context_target["path"])
+		ID_SHOW_DIFF_TAB:
+			_show_selected_diff() # the right-clicked row is the selected one
+			DiffViewScript.expander.call(_diff_view)
 		ID_SHOW_HISTORY:
 			file_history_requested.emit(_context_target["path"])
 		ID_ACCEPT_OURS, ID_ACCEPT_THEIRS:
@@ -1488,9 +1499,22 @@ func _on_delete_changelist_button_pressed() -> void:
 
 
 func _on_diff_toggle_toggled(pressed: bool) -> void:
-	if not _diff_view._expanded:
-		_diff_view.visible = pressed
 	Settings.set_value(DIFF_VISIBLE_SETTING_KEY, pressed)
+	_apply_diff_visibility()
+
+
+func _update_narrow() -> void:
+	var narrow := size.x > 0 and size.x < UiScale.px(NARROW_WIDTH)
+	if narrow != _narrow:
+		_narrow = narrow
+		_diff_toggle.visible = not narrow
+		_apply_diff_visibility()
+
+
+## The diff shows next to the list when it's toggled on and there's room; in the Godit tab it's the tab's.
+func _apply_diff_visibility() -> void:
+	if not _diff_view._expanded:
+		_diff_view.visible = _diff_toggle.button_pressed and not _narrow
 
 
 func _open_new_changelist_dialog(and_move_selected_file: bool = false) -> void:
