@@ -10,6 +10,7 @@ const Settings := preload("res://addons/godit/util/settings.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const SceneText := preload("res://addons/godit/util/scene_text.gd")
+const RebaseDialog := preload("res://addons/godit/dock/widgets/rebase_dialog.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
@@ -41,7 +42,7 @@ const PAGE_SIZE := 300
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT, ID_RESET_TO_HERE,
 	ID_CREATE_TAG, ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT, ID_REVERT_COMMIT, ID_COMPARE_WORKTREE,
-	ID_COMPARE_SELECTED, ID_EDIT_COMMIT, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES, ID_OPEN_ON_WEB,
+	ID_COMPARE_SELECTED, ID_EDIT_COMMIT, ID_INTERACTIVE_REBASE, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES, ID_OPEN_ON_WEB,
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
@@ -840,6 +841,9 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 		m.set_item_disabled(m.get_item_index(ID_EDIT_COMMIT), has_merges_after)
 		m.set_item_tooltip(m.get_item_index(ID_EDIT_COMMIT), "A merge commit lies after it — rewriting through merges would flatten them" if has_merges_after
 				else "Change its message and fold the staged changes into it")
+		m.add_item("Interactive Rebase from Here…", ID_INTERACTIVE_REBASE)
+		m.set_item_disabled(m.get_item_index(ID_INTERACTIVE_REBASE), has_merges_after)
+		m.set_item_tooltip(m.get_item_index(ID_INTERACTIVE_REBASE), "Reorder, reword, squash, fixup or drop this commit and the newer ones")
 		m.add_item("Squash This and Newer Commits into One…", ID_SQUASH)
 		m.set_item_disabled(m.get_item_index(ID_SQUASH), has_merges_after or not has_parent or oid == head)
 		m.add_item("Drop Commit…", ID_DROP)
@@ -898,7 +902,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 	var stash_ref: String = _commits_by_oid.get(_context_oid, {}).get("stash", "")
 	var verbs := {
 		ID_STASH_APPLY: "Apply", ID_STASH_POP: "Pop", ID_CHERRY_PICK: "Cherry-pick", ID_CHERRY_PICK_NO_COMMIT: "Cherry-pick",
-		ID_REVERT_COMMIT: "Revert", ID_EDIT_COMMIT: "Edit", ID_SQUASH: "Squash", ID_DROP: "Drop", ID_UNDO_LAST: "Undo",
+		ID_REVERT_COMMIT: "Revert", ID_EDIT_COMMIT: "Edit", ID_INTERACTIVE_REBASE: "Rebase", ID_SQUASH: "Squash", ID_DROP: "Drop", ID_UNDO_LAST: "Undo",
 		ID_CHECKOUT_COMMIT: "Checkout", ID_RESET_TO_HERE: "Reset",
 	}
 	if verbs.has(id) and not await SaveGuard.ensure_saved(self, verbs[id]):
@@ -962,6 +966,16 @@ func _on_context_menu_id_pressed(id: int) -> void:
 				_after_operation(_repo.revert_commit(_context_oid), "Revert")
 		ID_EDIT_COMMIT:
 			await _edit_commit(_context_oid)
+		ID_INTERACTIVE_REBASE:
+			var oid := _context_oid
+			var dialog := RebaseDialog.new(_repo.commits_since(oid), _pushed_warning(oid, true).strip_edges())
+			dialog.rebase_requested.connect(func(steps: Array) -> void: _after_operation(_repo.interactive_rebase(oid, steps), "Rebase"))
+			dialog.visibility_changed.connect(func() -> void:
+				if not dialog.visible:
+					dialog.queue_free()
+			)
+			add_child(dialog)
+			dialog.popup_centered()
 		ID_SQUASH:
 			var answer: Variant = await Dialogs.form(self, "Squash into One Commit", [
 				{ "type": "label", "label": "Combine %s and every newer commit on %s into a single commit.%s" % [_context_oid.substr(0, 7), _repo.get_current_branch(), _pushed_warning(_context_oid, true)] },

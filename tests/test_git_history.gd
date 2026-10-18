@@ -124,3 +124,57 @@ func test_undo_a_merge_with_keep() -> void:
 	var op := repo.last_head_operation()
 	check("something to undo", op.is_empty(), false)
 	check("undone", repo.undo_head_operation(op).ok, true)
+
+# c1..c4, each adding its own file, so any order replays cleanly
+func _four_files() -> GitCliRepo:
+	var repo := make_repo()
+	for i in range(1, 5):
+		commit_file(repo, "f%d.txt" % i, "%d\n" % i, "c%d" % i)
+	return repo
+
+func _step(repo: GitCliRepo, action: String, subject: String, message := "") -> Dictionary:
+	return { "action": action, "oid": _oid(repo, subject), "message": message }
+
+func test_commits_since() -> void:
+	var repo := _four_files()
+	var commits := repo.commits_since(_oid(repo, "c3"))
+	check("newest first", commits.map(func(c: Dictionary) -> String: return c.summary), ["c4", "c3"])
+	check("from the root", repo.commits_since(_oid(repo, "c1")).size(), 4)
+
+func test_interactive_rebase_reorders_and_drops() -> void:
+	var repo := _four_files()
+	var result := repo.interactive_rebase(_oid(repo, "c2"), [_step(repo, "pick", "c4"), _step(repo, "drop", "c3"), _step(repo, "pick", "c2")])
+	check("done", result.ok, true)
+	check("history", head_subjects(repo), ["c2", "c4", "c1"])
+	check("the dropped commit's file is gone", FileAccess.file_exists(repo.get_repo_root().path_join("f3.txt")), false)
+
+func test_interactive_rebase_squashes_fixes_and_rewords() -> void:
+	var repo := _four_files()
+	var result := repo.interactive_rebase(_oid(repo, "c1"), [
+		_step(repo, "reword", "c1", "first\n\nwith a body"), _step(repo, "fixup", "c2"), _step(repo, "pick", "c3"), _step(repo, "squash", "c4"),
+	])
+	check("done", result.ok, true)
+	check("history", head_subjects(repo), ["c3", "first"])
+	check("the reworded body", git(repo.get_repo_root(), ["log", "-1", "--format=%b", "HEAD~1"]), "with a body")
+	check("the squash keeps both messages", git(repo.get_repo_root(), ["log", "-1", "--format=%B", "HEAD"]).replace("\n", " "), "c3  c4")
+	check("every file is there", ["f1.txt", "f2.txt", "f3.txt", "f4.txt"].all(func(f: String) -> bool: return FileAccess.file_exists(repo.get_repo_root().path_join(f))), true)
+
+const RebaseDialog = preload("res://addons/godit/dock/widgets/rebase_dialog.gd")
+
+func test_rebase_dialog_steps_and_problems() -> void:
+	var commits := [
+		{ "oid": "c3c3c3c", "summary": "c3", "message": "c3" },
+		{ "oid": "c2c2c2c", "summary": "c2", "message": "c2" },
+		{ "oid": "c1c1c1c", "summary": "c1", "message": "c1" },
+	]
+	var dialog: ConfirmationDialog = track(RebaseDialog.new(commits))
+	check("nothing changed yet", dialog.problem(), "Nothing to change yet.")
+	dialog._commits[0]["action"] = "squash"
+	check("oldest first", dialog.steps().map(func(s: Dictionary) -> String: return "%s %s" % [s.action, s.oid]), ["pick c1c1c1c", "pick c2c2c2c", "squash c3c3c3c"])
+	check("fine", dialog.problem(), "")
+	dialog._commits[2]["action"] = "fixup"
+	check("the oldest can't fold down", dialog.problem(), "The lowest kept commit has nothing below it to fold into.")
+	dialog._commits[2]["action"] = "drop"
+	dialog._commits[1]["action"] = "reword"
+	dialog._commits[1]["message"] = " "
+	check("a reword needs a message", dialog.problem(), "A reworded commit needs a message.")

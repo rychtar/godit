@@ -1466,6 +1466,56 @@ func drop_commit(oid: String) -> Dictionary:
 	return _with_conflict_flag(_simple(["rebase", "--autostash", "--onto", oid + "^", oid]))
 
 
+## oid and every commit after it up to HEAD, newest first: [{"oid", "summary", "message"}], for the interactive rebase dialog.
+func commits_since(oid: String) -> Array:
+	var range_arg := "%s^..HEAD" % oid if has_parent(oid) else "HEAD"
+	var commits: Array = []
+	for record: String in GitCli.run(_repo_root, ["log", "--format=%H" + GitCli.US + "%B" + GitCli.RS, range_arg])["text"].split(GitCli.RS):
+		var fields := record.strip_edges().split(GitCli.US)
+		if fields.size() == 2:
+			var message := fields[1].strip_edges()
+			commits.append({ "oid": fields[0], "summary": message.get_slice("\n", 0), "message": message })
+	return commits
+
+
+## Replays oid and the commits after it as steps say, oldest first: [{"action": "pick" | "reword" | "squash" | "fixup" | "drop", "oid", "message" for reword}]; squash and fixup fold into the step before.
+func interactive_rebase(oid: String, steps: Array) -> Dictionary:
+	if has_merges_since(oid):
+		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
+	var stamp := Time.get_ticks_usec()
+	var todo := PackedStringArray()
+	for i in steps.size():
+		var step: Dictionary = steps[i]
+		if step["action"] == "reword":
+			var message_path := _temp_path("godit_reword_%d_%d.txt" % [stamp, i])
+			var message_file := FileAccess.open(message_path, FileAccess.WRITE)
+			if message_file == null:
+				return { "ok": false, "error": "Couldn't write %s." % message_path, "output": "" }
+			message_file.store_string(String(step["message"]).strip_edges() + "\n")
+			message_file.close()
+			todo.append("pick " + step["oid"])
+			todo.append("exec git commit --amend --allow-empty --quiet -F \"%s\"" % message_path)
+		else:
+			todo.append("%s %s" % [step["action"], step["oid"]])
+	var todo_path := _temp_path("godit_rebase_todo_%d.txt" % stamp)
+	var todo_file := FileAccess.open(todo_path, FileAccess.WRITE)
+	if todo_file == null:
+		return { "ok": false, "error": "Couldn't write %s." % todo_path, "output": "" }
+	todo_file.store_string("\n".join(todo) + "\n")
+	todo_file.close()
+	# git asks the sequence editor to edit its todo list; this one replaces it with ours (the environment variable beats any config).
+	var had_editor := OS.has_environment("GIT_SEQUENCE_EDITOR")
+	var editor := OS.get_environment("GIT_SEQUENCE_EDITOR")
+	OS.set_environment("GIT_SEQUENCE_EDITOR", "cp \"%s\"" % todo_path)
+	var result := _with_conflict_flag(_simple(["rebase", "--interactive", "--autostash", oid + "^" if has_parent(oid) else "--root"]))
+	if had_editor:
+		OS.set_environment("GIT_SEQUENCE_EDITOR", editor)
+	else:
+		OS.unset_environment("GIT_SEQUENCE_EDITOR")
+	DirAccess.remove_absolute(todo_path)
+	return result
+
+
 ## Messages of oid..HEAD (oldest first), for prefilling a squash message.
 func get_messages_since(oid: String) -> String:
 	var r := GitCli.run(_repo_root, ["log", "--reverse", "--format=%B" + GitCli.RS, "%s^..HEAD" % oid])
