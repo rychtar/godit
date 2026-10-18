@@ -6,21 +6,38 @@ on:
 
 jobs:
   test:
-    name: Godot ${{ matrix.godot }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }}, Godot ${{ matrix.godot }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        # the minimum supported version and the one the plugin is tested with
-        godot: ["4.4.1", "4.7.1"]
+        # every minor version on Linux, the oldest and newest on Windows and macOS
+        include:
+          - { os: Linux, runner: ubuntu-latest, godot: "4.4.1" }
+          - { os: Linux, runner: ubuntu-latest, godot: "4.5.2" }
+          - { os: Linux, runner: ubuntu-latest, godot: "4.6.3" }
+          - { os: Linux, runner: ubuntu-latest, godot: "4.7.2" }
+          - { os: Windows, runner: windows-latest, godot: "4.4.1" }
+          - { os: Windows, runner: windows-latest, godot: "4.7.2" }
+          - { os: macOS, runner: macos-latest, godot: "4.4.1" }
+          - { os: macOS, runner: macos-latest, godot: "4.7.2" }
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
       - name: Install Godot
         run: |
-          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${{ matrix.godot }}-stable/Godot_v${{ matrix.godot }}-stable_linux.x86_64.zip"
-          unzip -q godot.zip
-          sudo mv "Godot_v${{ matrix.godot }}-stable_linux.x86_64" /usr/local/bin/godot
+          base="https://github.com/godotengine/godot/releases/download/${{ matrix.godot }}-stable/Godot_v${{ matrix.godot }}-stable"
+          case "${{ matrix.os }}" in
+            Linux) curl -fsSL -o godot.zip "${base}_linux.x86_64.zip"; bin="Godot_v${{ matrix.godot }}-stable_linux.x86_64" ;;
+            Windows) curl -fsSL -o godot.zip "${base}_win64.exe.zip"; bin="Godot_v${{ matrix.godot }}-stable_win64_console.exe" ;;
+            macOS) curl -fsSL -o godot.zip "${base}_macos.universal.zip"; bin="Godot.app/Contents/MacOS/Godot" ;;
+          esac
+          dir="$(cd "$RUNNER_TEMP" && pwd)/godot" # a POSIX path on Windows too
+          unzip -q godot.zip -d "$dir"
+          echo "GODOT=$dir/$bin" >> "$GITHUB_ENV"
 
       - name: Run tests
-        run: godot --headless --path . --script tests/run_tests.gd
+        run: '"$GODOT" --headless --path . --script tests/run_tests.gd'
