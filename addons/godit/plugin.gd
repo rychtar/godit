@@ -21,6 +21,7 @@ const GoditScreenScript := preload("res://addons/godit/dock/godit_screen.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 const HeadInspectorScript := preload("res://addons/godit/dock/inspector/head_inspector.gd")
+const SceneDockColorsScript := preload("res://addons/godit/dock/inspector/scene_dock_colors.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
@@ -56,6 +57,8 @@ var main_screen: Control
 var _last_main_screen := "Script"
 ## "Last commit" rows under changed properties in the Inspector.
 var head_inspector: EditorInspectorPlugin
+## Changed nodes colored in the Scene dock.
+var scene_dock_colors: Node
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
@@ -119,7 +122,7 @@ func _enter_tree() -> void:
 	tools_menu.set_item_tooltip(tools_menu.get_item_index(ID_FAST_STATUS), "Git's built-in fsmonitor daemon and untracked cache, set in this repo's config:\n`git status` asks what changed instead of scanning every file.")
 	tools_menu.add_check_item("Godit tab next to 2D/3D/Script for full-size diffs", ID_MAIN_SCREEN)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_MAIN_SCREEN), _has_main_screen())
-	tools_menu.add_check_item("Show changes since the last commit in the Inspector", ID_INSPECTOR)
+	tools_menu.add_check_item("Show changes since the last commit in the Inspector and Scene dock", ID_INSPECTOR)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_INSPECTOR), Settings.get_value(INSPECTOR_SETTING_KEY, true))
 	tools_menu.add_separator("Layout")
 	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (default; can float on a second monitor)", ID_LAYOUT_COMBINED)
@@ -195,6 +198,10 @@ func _enter_tree() -> void:
 	head_inspector = HeadInspectorScript.new()
 	head_inspector.enabled = Settings.get_value(INSPECTOR_SETTING_KEY, true)
 	add_inspector_plugin(head_inspector)
+	scene_dock_colors = SceneDockColorsScript.new()
+	scene_dock_colors.enabled = head_inspector.enabled
+	add_child(scene_dock_colors)
+	scene_saved.connect(func(_path: String) -> void: scene_dock_colors.refresh.call_deferred())
 	# Saves show up right away; the panels' polling still catches changes made outside the editor.
 	resource_saved.connect(func(_r: Resource) -> void: _queue_poll())
 	scene_saved.connect(func(_p: String) -> void: _queue_poll())
@@ -225,6 +232,7 @@ func _exit_tree() -> void:
 	DiffViewScript.collapser = Callable()
 	Dialogs.show_console = Callable()
 	remove_inspector_plugin(head_inspector)
+	scene_dock_colors.free() # restores the dock's own colors
 	if main_screen != null:
 		main_screen.release() # back into its panel before the panels go
 		main_screen.free()
@@ -410,6 +418,7 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 		ID_INSPECTOR:
 			Settings.set_value(INSPECTOR_SETTING_KEY, checked)
 			head_inspector.enabled = checked
+			scene_dock_colors.enabled = checked
 			var inspected := EditorInterface.get_inspector().get_edited_object()
 			if inspected != null:
 				EditorInterface.inspect_object(inspected) # rebuilt with or without the rows

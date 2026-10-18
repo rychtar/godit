@@ -30,3 +30,10 @@ func test_same_as_head() -> void:
 	check("a resource by file", HeadValueProperty.same(texture, { "path": "res://art/tree.png" }), true)
 	check("none where HEAD had a file", HeadValueProperty.same(null, { "path": "res://art/tree.png" }), false)
 	check("none as before", HeadValueProperty.same(null, { "value": null }), true)
+
+const SceneDockColors = preload("res://addons/godit/dock/inspector/scene_dock_colors.gd")
+
+func test_changed_scene_nodes() -> void:
+	var old := "[gd_scene format=3]\n\n[node name=\"Main\" type=\"Node2D\"]\n\n[node name=\"A\" type=\"Node2D\" parent=\".\"]\nposition = Vector2(1, 1)\n\n[node name=\"Gone\" type=\"Node\" parent=\".\"]\n"
+	var new := "[gd_scene format=3]\n\n[node name=\"Main\" type=\"Node2D\"]\n\n[node name=\"A\" type=\"Node2D\" parent=\".\"]\nposition = Vector2(2, 1)\n\n[node name=\"B\" type=\"Node\" parent=\"A\"]\n"
+	check("changed and added, removed left out", SceneDockColors.changed_nodes(old, new), { "Main/A": "changed", "Main/A/B": "added" })
