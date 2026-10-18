@@ -550,7 +550,8 @@ static func _parse(diff_text: String, hide_noise: bool) -> Dictionary:
 	if diff_text.is_empty():
 		return result
 
-	var lines := diff_text.split("\n")
+	# The font draws tabs with no width, which would flatten indentation; 4 spaces is Godot's default indent.
+	var lines := diff_text.replace("\t", "    ").split("\n")
 	var n := lines.size()
 
 	var hunk_regex := RegEx.new()
