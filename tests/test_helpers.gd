@@ -6,6 +6,7 @@ const GitIcons = preload("res://addons/godit/util/git_icons.gd")
 const SyntaxColors = preload("res://addons/godit/util/syntax_colors.gd")
 const BlameGutter = preload("res://addons/godit/dock/gutter/blame_gutter.gd")
 const DiffGutter = preload("res://addons/godit/dock/gutter/diff_gutter.gd")
+const GutterPainter = preload("res://addons/godit/dock/gutter/gutter_painter.gd")
 
 func test_owner_of_a_sidecar() -> void:
 	check("uid", CompanionFiles.owner_of("scripts/player.gd.uid"), "scripts/player.gd")
@@ -38,11 +39,11 @@ func test_syntax_spans() -> void:
 
 func test_blame_age() -> void:
 	var now := int(Time.get_unix_time_from_system())
-	check("recent", BlameGutter.relative_age(now - 60), "now")
-	check("hours", BlameGutter.relative_age(now - 5 * 3600), "5h")
-	check("days", BlameGutter.relative_age(now - 3 * 86400), "3d")
-	check("weeks", BlameGutter.relative_age(now - 21 * 86400), "3w")
-	check("years", BlameGutter.relative_age(now - 800 * 86400), "2y")
+	check("recent", GutterPainter.relative_age(now - 60), "now")
+	check("hours", GutterPainter.relative_age(now - 5 * 3600), "5h")
+	check("days", GutterPainter.relative_age(now - 3 * 86400), "3d")
+	check("weeks", GutterPainter.relative_age(now - 21 * 86400), "3w")
+	check("years", GutterPainter.relative_age(now - 800 * 86400), "2y")
 
 func test_gutter_flags_and_text_normalizing() -> void:
 	var regions := [

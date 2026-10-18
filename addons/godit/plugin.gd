@@ -254,7 +254,8 @@ func _exit_tree() -> void:
 		remove_control_from_bottom_panel(history_dock_instance)
 	history_dock_instance.free()
 
-	diff_gutter.disable()
+	if diff_gutter.has_method("disable"): # not while its script is being edited and doesn't compile
+		diff_gutter.disable()
 	diff_gutter.free()
 	script_menu.unhook_text_editors()
 	remove_context_menu_plugin(script_menu)
@@ -262,7 +263,8 @@ func _exit_tree() -> void:
 	remove_context_menu_plugin(filesystem_menu)
 	filesystem_menu = null
 	filesystem_colors.free() # restores the dock's own colors on the way out
-	blame_gutter.disable()
+	if blame_gutter.has_method("disable"):
+		blame_gutter.disable()
 	blame_gutter.free()
 	watcher.free() # after the panels, which are subscribed to it
 
