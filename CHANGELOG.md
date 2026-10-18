@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.3.0 - 2026-10-18
+
+### Added
+
+- **Godit tab**: the expand button in a diff (Changes, Git Log) shows it full size in a Godit tab next to 2D, 3D and Script; opening the tab shows the Changes diff. Staging hunks and lines, the diff options and double-click to open work there as in the panel, and leaving the tab puts the diff back. Tools > Godit can turn the tab off.
+- **Script editor**: the changed words of a changed line are highlighted, compared with the line it most likely came from, and recomputed after a short pause in typing.
+- **Inspector**: a property of a node or `.tres` that changed since the last commit gets a "Last commit" row with the old value and Revert (undoable); a node added since then is marked.
+- **Scene dock**: nodes of the edited scene added or changed since the last commit are colored green or yellow (comparing the saved scene). Tools > Godit turns this and the Inspector rows off.
+- **Commit check**: before committing, staged scenes, resources, scripts and `project.godot` are searched for `res://` (and `uid://`) references to files the commit won't contain: not added to git, deleted, or in git with different letter case (works on Windows and macOS, breaks on Linux). "Add and Commit" adds the ones that exist. Ignored files are left out.
+- **Image diff**: besides side by side, Swipe (drag a line between Before and After) and Onion Skin (fade After over Before), both over a checkerboard.
+- **Git Log**: Interactive Rebase from Here reorders, rewords, squashes, fixes up or drops the commit and the newer ones in one dialog. Open This Version opens a scene or resource as it was in a commit, from a copy in `.godot` (saving it changes nothing).
+- **Console**: error dialogs offer Show in Console when a git command just failed. The console asks before `reset --hard`, `clean`, force or delete pushes, `branch -D`, `stash drop/clear`, discarding checkouts and restores, `config --global` writes and shell aliases, and saves open files before commands that change them.
+- **FileSystem dock**: changed files show git's letter (M, A, D, R, ?, !) next to the name.
+- **Narrow docks**: Changes works in a side dock down to 200 px: its rows wrap, the diff is left out below 480 px ("Show Diff in the Godit Tab" in the file menu), and Fetch/Pull/Push shrink to icons.
+- The tests run on Windows and macOS too (Godot 4.4 and 4.7), and on Linux with every minor version from 4.4 to 4.7.
+
+### Changed
+
+- Git Log: Reword and Fixup are one Edit Commit… dialog: a new message and the staged changes folded in, in one rewrite.
+
+### Fixed
+
+- Changes: right-clicking a folder, a changelist or New Files did nothing, so their menus (Ignore Folder, Add New Files, Rename, Shelve…) never opened. Right-clicking a checkbox opens its file's menu too.
+- Ignore wrote the path as a pattern: ignoring `icon.png` at the top also ignored every `icon.png` in subfolders, `build/` every `build` folder, and `[`, `*` or `?` in a name made a wildcard. Rules are anchored to the repository root (`/icon.png`) and escaped now, and a `.gitignore` with CRLF line endings keeps them without duplicates.
+- Diff view: lines indented with tabs showed no indentation.
+
 ## 1.2.0 - 2026-10-02
 
 ### Added

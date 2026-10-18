@@ -8,15 +8,19 @@ A git client inside the Godot editor. Stage, commit, switch branches and browse 
 
 ## Features
 
-- **Changes panel**: stage files, folders or single lines with a checkbox, then commit or push.
+- **Changes panel**: stage files, folders or single lines with a checkbox, then commit or push. Fits a side dock down to 200 px.
 - **Changelists**: group changes and commit or shelve them separately.
-- **Diff view**: side-by-side or unified, with syntax colors and image previews.
+- **Diff view**: side by side or unified, with syntax colors. Images side by side, with a swipe line or as an onion skin.
+- **Godit tab**: any diff full size next to 2D, 3D and Script, with hunk and line staging.
+- **Script editor**: changed lines in the gutter with one-click rollback, the changed words highlighted, optional blame.
+- **Inspector and Scene dock**: a property changed since the last commit shows its old value with Revert; added and changed nodes are colored.
+- **Commit check**: a warning when a staged scene, resource or script references a file the commit won't contain (not added, deleted, or different letter case, which breaks on Linux).
 - **Branches**: switch, merge and rebase. Fetch, pull and push run in the background.
-- **Git Log**: commit graph with search, cherry-pick and history editing.
+- **Git Log**: commit graph with search and cherry-pick. Edit Commit and Interactive Rebase rewrite history; Open This Version shows a scene as it was.
+- **Console**: every git command Godit ran, and a prompt for your own. Risky commands ask first, and error dialogs jump to the command that failed.
 - **Conflict resolver**: pick Ours, Theirs or both, side by side.
-- **Script editor**: changed lines in the gutter with one-click rollback, plus optional blame.
+- **FileSystem dock**: changed files are colored and marked with git's letter (M, A, D, R, ?, !); right-click for history, revert, add or ignore.
 - **GitHub, GitLab, Bitbucket**: open a commit, file line or branch in the browser, or start a pull request.
-- **FileSystem dock**: changed, new and conflicted files are colored; right-click for history, revert, add or ignore.
 
 ## Install
 
@@ -29,17 +33,18 @@ For push and pull, git has to log in without asking: use a credential helper for
 
 ## Usage
 
-- **Where**: Godit opens as one SourceTree-style dock in the bottom panel: File Status, History and Console on the left with your branches under them. On Godot 4.6+ drag it to a side dock or make it floating, e.g. on a second monitor, and it stays there.
+- **Where**: Godit opens as one SourceTree-style dock in the bottom panel: File Status, History and Console on the left with your branches under them. On Godot 4.6+ drag it to a side dock or make it floating, e.g. on a second monitor, and it stays there. Narrower than 480 px, Changes leaves the diff out: right-click a file, Show Diff in the Godit Tab.
 - **Commit**: tick files in **File Status**, type a message and press `Ctrl/Cmd+Enter`. Add `Shift` to also push.
 - **Stage part of a file**: open its diff and stage a hunk or selected lines.
 - **Changelists**: double-click one to make it active and drag files between them.
 - **Branches**: double-click one to switch; right-click it to merge, rebase or push, or right-click a section header to add a branch, tag or remote.
-- **History**: the commit graph, with search, cherry-pick and history editing.
+- **History**: the commit graph, with search, cherry-pick and history editing. Right-click a commit to edit it or rebase from it, or a file to open its version from then.
+- **Big diffs**: the expand button above a diff, or the Godit tab next to 2D, 3D and Script.
 - **Everything else**: right-click a file, branch or commit.
 
 ## Settings
 
-Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, a faster `git status` for large projects (git's file system monitor), and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel.
+Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, a faster `git status` for large projects (git's file system monitor), the Godit tab, changes in the Inspector, and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel.
 
 The ⋮ menu in the Changes panel controls auto-staging, auto-adding new files and the masks for files to skip (for example `*.psd` source art). `.import` and `.uid` files are added with the file they belong to, since Godot needs them in the repo.
 
@@ -52,7 +57,7 @@ godot --headless --path . --script tests/run_tests.gd
 ```
 
 Every `tests/test_*.gd` file is a test file, every method starting with `test_` is a test. The exit code is 1 when a test fails.
-The git tests work in throwaway repositories in the temp folder, with git's own config set aside. They run on every push (see `.github/workflows/tests.yml`).
+The git tests work in throwaway repositories in the temp folder, with git's own config set aside. They run on every push on Linux with Godot 4.4, 4.5, 4.6 and 4.7, and on Windows and macOS with 4.4 and 4.7 (see `.github/workflows/tests.yml`).
 
 ## License
 
