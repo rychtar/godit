@@ -122,8 +122,7 @@ func add_paths(paths: Array) -> void:
 
 
 func ignore_paths(paths: Array) -> void:
-	for path in _changes_panel._with_companions(paths):
-		_changes_panel._ignore_path(path)
+	_changes_panel._ignore_paths(_changes_panel._with_companions(paths))
 
 
 func revert_paths(paths: Array) -> void:

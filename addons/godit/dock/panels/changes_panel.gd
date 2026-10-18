@@ -798,29 +798,44 @@ func _save_changelist_state() -> void:
 	ChangelistStore.save_state(_repo.get_repo_root(), _changelist_state)
 
 
-## Appends path to the repo's top-level .gitignore, creating it if needed; no-op if already listed.
-func _ignore_path(path: String) -> void:
+## Appends a rule for each repo-relative path to the repo's top-level .gitignore, creating it if needed; rules already listed aren't repeated.
+func _ignore_paths(paths: Array) -> void:
 	var gitignore_path: String = _repo.get_repo_root().path_join(".gitignore")
 	var existing := ""
 	if FileAccess.file_exists(gitignore_path):
 		var read_file := FileAccess.open(gitignore_path, FileAccess.READ)
+		if read_file == null:
+			Dialogs.error(self, "Can't ignore", "Couldn't read %s." % gitignore_path)
+			return
 		existing = read_file.get_as_text()
 		read_file.close()
-	if Array(existing.split("\n")).has(path):
+	var newline := "\r\n" if existing.contains("\r\n") else "\n"
+	var lines := Array(existing.split("\n")).map(func(line: String) -> String: return line.trim_suffix("\r"))
+	var added := ""
+	for path: String in paths:
+		var rule := ignore_rule(path)
+		if not lines.has(rule):
+			lines.append(rule)
+			added += rule + newline
+	if added.is_empty():
 		return
-
-	var new_content := existing
-	if not new_content.is_empty() and not new_content.ends_with("\n"):
-		new_content += "\n"
-	new_content += path + "\n"
 
 	var write_file := FileAccess.open(gitignore_path, FileAccess.WRITE)
 	if write_file == null:
 		Dialogs.error(self, "Can't ignore", "Couldn't write %s." % gitignore_path)
 		return
-	write_file.store_string(new_content)
+	write_file.store_string(existing + (newline if not existing.is_empty() and not existing.ends_with("\n") else "") + added)
 	write_file.close()
 	refresh()
+
+
+## The .gitignore line matching only this repo-relative path (a folder ends in "/"): anchored to the root, glob characters and trailing spaces escaped.
+static func ignore_rule(path: String) -> String:
+	var rule := "/"
+	for c in path:
+		rule += "\\" + c if c in ["\\", "*", "?", "["] else c
+	var trimmed := rule.rstrip(" ")
+	return trimmed + "\\ ".repeat(rule.length() - trimmed.length())
 
 
 ## Stages new files and assigns them to a changelist (the active one by default), which keeps them there instead of bouncing back to New Files if later unstaged.
@@ -1254,7 +1269,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_add_to_vcs(_context_target["new_paths"])
 			refresh.call_deferred()
 		ID_IGNORE_FOLDER:
-			_ignore_path(_context_target["dir"] + "/")
+			_ignore_paths([_context_target["dir"] + "/"])
 		ID_SET_ACTIVE:
 			_set_active_changelist(_context_target["name"])
 		ID_RENAME:
@@ -1289,9 +1304,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_revert_confirm_dialog.dialog_text = "Remove \"%s\"%s from Git and delete it from disk? This can't be undone." % [path.get_file(), _companions_note(path)]
 			_revert_confirm_dialog.popup_centered()
 		ID_IGNORE:
-			_ignore_path(_context_target["path"])
-			for path in _with_companions([_context_target["path"]]).slice(1):
-				_ignore_path(path)
+			_ignore_paths(_with_companions([_context_target["path"]]))
 		ID_COPY_PATH:
 			DisplayServer.clipboard_set(_context_target["path"])
 		ID_RESOLVE:
@@ -1711,7 +1724,7 @@ func _check_large_files() -> bool:
 		"ignore":
 			for path in paths:
 				_repo.unstage_file(path)
-				_ignore_path(path)
+			_ignore_paths(paths)
 		"commit":
 			pass
 		_:
