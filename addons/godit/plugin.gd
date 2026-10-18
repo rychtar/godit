@@ -20,6 +20,7 @@ const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
 const GoditScreenScript := preload("res://addons/godit/dock/godit_screen.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
+const HeadInspectorScript := preload("res://addons/godit/dock/inspector/head_inspector.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -52,6 +53,8 @@ var tools_menu: PopupMenu
 var main_screen: Control
 ## Where "Back to the panel" returns to.
 var _last_main_screen := "Script"
+## "Last commit" rows under changed properties in the Inspector.
+var head_inspector: EditorInspectorPlugin
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
@@ -91,6 +94,9 @@ const MAIN_SCREEN_SETTING_KEY := "diff_main_screen"
 const ID_MAIN_SCREEN := 10
 const MAIN_SCREEN_NAME := "Godit"
 
+const INSPECTOR_SETTING_KEY := "inspector_changes"
+const ID_INSPECTOR := 11
+
 
 func _enter_tree() -> void:
 	GitCli.prepare_environment()
@@ -112,6 +118,8 @@ func _enter_tree() -> void:
 	tools_menu.set_item_tooltip(tools_menu.get_item_index(ID_FAST_STATUS), "Git's built-in fsmonitor daemon and untracked cache, set in this repo's config:\n`git status` asks what changed instead of scanning every file.")
 	tools_menu.add_check_item("Godit tab next to 2D/3D/Script for full-size diffs", ID_MAIN_SCREEN)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_MAIN_SCREEN), _has_main_screen())
+	tools_menu.add_check_item("Show changes since the last commit in the Inspector", ID_INSPECTOR)
+	tools_menu.set_item_checked(tools_menu.get_item_index(ID_INSPECTOR), Settings.get_value(INSPECTOR_SETTING_KEY, true))
 	tools_menu.add_separator("Layout")
 	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (default; can float on a second monitor)", ID_LAYOUT_COMBINED)
 	tools_menu.add_radio_check_item("Git dock + Git Log at bottom", ID_LAYOUT_SEPARATE)
@@ -182,6 +190,9 @@ func _enter_tree() -> void:
 		DiffViewScript.expander = _expand_diff
 		DiffViewScript.collapser = _leave_main_screen
 	main_screen_changed.connect(_on_main_screen_changed)
+	head_inspector = HeadInspectorScript.new()
+	head_inspector.enabled = Settings.get_value(INSPECTOR_SETTING_KEY, true)
+	add_inspector_plugin(head_inspector)
 	# Saves show up right away; the panels' polling still catches changes made outside the editor.
 	resource_saved.connect(func(_r: Resource) -> void: _queue_poll())
 	scene_saved.connect(func(_p: String) -> void: _queue_poll())
@@ -210,6 +221,7 @@ func _exit_tree() -> void:
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
 	DiffViewScript.expander = Callable()
 	DiffViewScript.collapser = Callable()
+	remove_inspector_plugin(head_inspector)
 	if main_screen != null:
 		main_screen.release() # back into its panel before the panels go
 		main_screen.free()
@@ -382,6 +394,12 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 		ID_AUTO_FETCH:
 			Settings.set_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, checked)
 			dock_instance.apply_auto_fetch_setting()
+		ID_INSPECTOR:
+			Settings.set_value(INSPECTOR_SETTING_KEY, checked)
+			head_inspector.enabled = checked
+			var inspected := EditorInterface.get_inspector().get_edited_object()
+			if inspected != null:
+				EditorInterface.inspect_object(inspected) # rebuilt with or without the rows
 		ID_MAIN_SCREEN:
 			Settings.set_value(MAIN_SCREEN_SETTING_KEY, checked)
 			RepoSetup.reload_plugin() # the editor asks for a plugin's main screen only when it's enabled
