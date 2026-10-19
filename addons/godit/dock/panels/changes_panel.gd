@@ -20,6 +20,7 @@ const SceneText := preload("res://addons/godit/util/scene_text.gd")
 const CompanionFiles := preload("res://addons/godit/util/companion_files.gd")
 const OperationBanner := preload("res://addons/godit/dock/widgets/operation_banner.gd")
 const CommitMessageHistory := preload("res://addons/godit/util/commit_message_history.gd")
+const SplitMemory := preload("res://addons/godit/util/split_memory.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
 ## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
@@ -197,8 +198,8 @@ func _ready() -> void:
 		button.icon = get_theme_icon(&"Add" if button == %NewChangelistButton else &"Remove", &"EditorIcons")
 		button.text = ""
 
-	# Changelists + commit box take ~40% of the width, the diff the rest; re-applied on resize since split_offset is in pixels from the middle.
-	%Split.resized.connect(func() -> void: %Split.split_offset = int(%Split.size.x * (LIST_PANE_RATIO - 0.5)))
+	# Changelists + commit box take ~40% of the width and the diff the rest, until the divider is dragged.
+	SplitMemory.keep_ratio(%Split, "changes", LIST_PANE_RATIO)
 
 	_diff_view.expandable = true
 	_diff_view.expanded_changed.connect(func(_expanded: bool) -> void: _apply_diff_visibility())

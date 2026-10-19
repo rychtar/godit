@@ -17,6 +17,7 @@ const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 const ChangesetDialog := preload("res://addons/godit/dock/widgets/changeset_dialog.gd")
 const CommitGraph := preload("res://addons/godit/dock/widgets/commit_graph.gd")
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
+const SplitMemory := preload("res://addons/godit/util/split_memory.gd")
 const WORKTREE_OID := CommitGraph.WORKTREE_OID
 
 ## From the "Uncommitted changes" row; plugin.gd brings the Changes tab to front and runs action there ("", "commit", "stash", "revert").
@@ -118,8 +119,9 @@ func _ready() -> void:
 	if UiScale.is_in_edited_scene(self):
 		return # opened in the scene editor, not running in a dock
 	UiScale.scale_scene(self)
-	_split.resized.connect(_update_split_offset)
-	_update_split_offset()
+	SplitMemory.keep_ratio(_split, "history_details", 1.0 - DETAIL_PANE_RATIO)
+	SplitMemory.keep_ratio(_graph_split, "history_file_diff")
+	SplitMemory.keep_ratio(_detail_margin.get_node("DetailLayout"), "history_detail_files")
 	_files_tree.item_activated.connect(_on_files_tree_item_activated)
 	_files_tree.item_selected.connect(_on_files_tree_item_selected)
 	_files_tree.allow_rmb_select = true
@@ -291,16 +293,6 @@ func _build_file_diff() -> void:
 func _hide_file_diff() -> void:
 	_file_diff_box.visible = false
 	_file_diff_view.clear_diff()
-
-
-## split_offset is a pixel offset from the container's midpoint, not a
-## fraction, so it's recomputed on every resize to keep the detail pane at
-## a constant ~1/3 width.
-func _update_split_offset() -> void:
-	var total := _split.size.x
-	if total <= 0.0:
-		return
-	_split.split_offset = int(total * (0.5 - DETAIL_PANE_RATIO))
 
 
 func set_repo(repo: RefCounted) -> void:
