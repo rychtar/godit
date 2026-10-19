@@ -31,6 +31,8 @@ You need Godot 4.4+, `git` on your `PATH`, and a project inside a git repository
 
 For push and pull, git has to log in without asking: use a credential helper for HTTPS or `ssh-agent` for SSH. If `git push` works in a terminal without a prompt, it works in Godit.
 
+If `addons/godit/` is in your repository and a checkout, pull or reset changes it (a teammate updated Godit, or an older branch has an older version), Godit offers to restart the editor, since reloading its own scripts while it runs can crash Godot.
+
 ## Usage
 
 - **Where**: Godit opens as one SourceTree-style dock in the bottom panel: File Status, History and Console on the left with your branches under them. On Godot 4.6+ drag it to a side dock or make it floating, e.g. on a second monitor, and it stays there. The button at the left of its toolbar hides the sidebar, the one at the right switches the layout. Dividers stay where you drag them. The dock's title counts the changed files, "Godit (5)", and turns yellow while there are commits to pull and red on conflicts, so you see it behind other tabs too. Narrower than 480 px, Changes leaves the diff out: right-click a file, Show Diff in the Godit Tab.

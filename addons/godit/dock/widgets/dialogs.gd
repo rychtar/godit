@@ -35,10 +35,11 @@ static func add_console_button(dialog: AcceptDialog) -> void:
 
 
 ## true on OK, false on Cancel/close.
-static func confirm(parent: Node, title: String, message: String, ok_text: String = "OK") -> bool:
+static func confirm(parent: Node, title: String, message: String, ok_text: String = "OK", cancel_text: String = "Cancel") -> bool:
 	var dialog := ConfirmationDialog.new()
 	dialog.title = title
 	dialog.ok_button_text = ok_text
+	dialog.cancel_button_text = cancel_text
 	dialog.add_child(_message_label(message))
 	return await _run(parent, dialog) == true
 
@@ -162,6 +163,7 @@ static func _run(parent: Node, dialog: AcceptDialog) -> Variant:
 		dialog.hide()
 		waiter.finish(String(action))
 	)
+	dialog.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # English also under a parent outside Godit (see godit_dock.gd)
 	parent.add_child(dialog)
 	dialog.popup_centered(UiScale.size_i(TEXT_WIDTH + 40, 0))
 	var answer: Variant = await waiter.done

@@ -126,6 +126,7 @@ const TOOLS_TOGGLES := {ID_BLAME: [BLAME_SETTING_KEY, false], ID_AUTO_FETCH: [Go
 
 func _enter_tree() -> void:
 	GitCli.prepare_environment()
+	EditorOpen.remember_scene_state() # Godit's own files as loaded, for a git operation that changes them
 	watcher = RepoWatcherScript.new()
 	add_child(watcher)
 
