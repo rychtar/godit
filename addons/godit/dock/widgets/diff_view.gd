@@ -9,6 +9,7 @@ const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 const SceneText := preload("res://addons/godit/util/scene_text.gd")
 const ImageCompare := preload("res://addons/godit/dock/widgets/image_compare.gd")
+const EXPANDED_EMPTY_TEXT := "Select a changed file in Changes or a file in Git Log to see its diff here."
 const IMAGE_MODES := { "side": "Side by Side", "swipe": "Swipe", "onion": "Onion Skin" }
 
 const IMAGE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
@@ -36,8 +37,9 @@ signal tab_selected(index: int)
 ## Moved into the Godit tab (true) or back into its panel (false).
 signal expanded_changed(expanded: bool)
 
-## Set by plugin.gd while the Godit tab exists: expander(view) shows a view there, collapser() leaves the tab.
+## Set by plugin.gd while the Godit tab exists: expander(view) shows a view there, collapser() leaves the tab, follower(view) moves the view there only while the tab is open.
 static var expander: Callable
+static var follower: Callable
 static var collapser: Callable
 ## The owner allows showing this view in the Godit tab.
 var expandable := false
@@ -182,10 +184,17 @@ func _notification(what: int) -> void:
 		_update_expand_button()
 
 
+## The owner calls this when a click picked a file: while the Godit tab is open, the diff shows there.
+func follow_into_tab() -> void:
+	if expandable and follower.is_valid():
+		follower.call(self)
+
+
 ## Called by the Godit tab when it takes this view or gives it back.
 func set_expanded(expanded: bool) -> void:
 	_expanded = expanded
 	_update_expand_button()
+	_rerender(true) # the empty text differs there
 	expanded_changed.emit(expanded)
 
 
@@ -341,7 +350,12 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_scroll.visible = has_rows
 	_empty_label.visible = not has_rows and not show_image
 	if not has_rows and not show_image:
-		_empty_label.text = "Binary file changed." if parsed["binary"] else "No diff to show."
+		if parsed["binary"]:
+			_empty_label.text = "Binary file changed."
+		elif _expanded and _diff_text.is_empty():
+			_empty_label.text = EXPANDED_EMPTY_TEXT # the Godit tab, which has no file list of its own
+		else:
+			_empty_label.text = "No diff to show."
 
 	if not keep_scroll:
 		# Otherwise the previous file's scroll offset carries over and clips the top of the new diff.

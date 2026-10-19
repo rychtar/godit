@@ -4,6 +4,7 @@ extends VBoxContainer
 ## The Godit tab next to 2D/3D/Script: borrows a panel's DiffView at full editor size and gives it back when the tab is left.
 
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
+const DiffView := preload("res://addons/godit/dock/widgets/diff_view.gd")
 
 ## The placeholder's "Bring Back" button.
 signal back_requested
@@ -23,7 +24,7 @@ func _init() -> void:
 	size_flags_vertical = SIZE_EXPAND_FILL
 	visible = false
 	_empty = Label.new()
-	_empty.text = "Select a changed file in Changes or a file in Git Log."
+	_empty.text = DiffView.EXPANDED_EMPTY_TEXT
 	_empty.modulate.a = 0.6
 	_empty.size_flags_vertical = SIZE_EXPAND_FILL
 	_empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

@@ -38,7 +38,7 @@ For push and pull, git has to log in without asking: use a credential helper for
 - **Changelists**: double-click one to make it active and drag files between them.
 - **Branches**: double-click one to switch; right-click it to merge, rebase or push, or right-click a section header to add a branch, tag or remote.
 - **History**: the commit graph, with search, cherry-pick and history editing. Right-click a commit to edit it or rebase from it, or a file to open its version from then.
-- **Big diffs**: the expand button above a diff, or the Godit tab next to 2D, 3D and Script.
+- **Big diffs**: turn on the Godit tab in Godit Settings > Layout. It sits next to 2D, 3D and Script; the expand button above a diff opens the diff there, and while the tab is open, a file clicked in Changes or Git Log shows there.
 - **Everything else**: right-click a file, branch or commit.
 
 ## Settings

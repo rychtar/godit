@@ -193,6 +193,7 @@ func _enter_tree() -> void:
 		EditorInterface.get_editor_main_screen().add_child(main_screen)
 		DiffViewScript.expander = _expand_diff
 		DiffViewScript.collapser = _leave_main_screen
+		DiffViewScript.follower = _follow_diff
 	main_screen_changed.connect(_on_main_screen_changed)
 	Dialogs.show_console = _show_console
 	head_inspector = HeadInspectorScript.new()
@@ -234,6 +235,7 @@ func _exit_tree() -> void:
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
 	DiffViewScript.expander = Callable()
 	DiffViewScript.collapser = Callable()
+	DiffViewScript.follower = Callable()
 	Dialogs.show_console = Callable()
 	remove_inspector_plugin(head_inspector)
 	scene_dock_colors.free() # restores the dock's own colors
@@ -356,7 +358,7 @@ func _show_open_file_history() -> void:
 
 
 func _has_main_screen() -> bool:
-	return Settings.get_value(MAIN_SCREEN_SETTING_KEY, true)
+	return Settings.get_value(MAIN_SCREEN_SETTING_KEY, false)
 
 
 func _get_plugin_name() -> String:
@@ -381,6 +383,12 @@ func _make_visible(visible: bool) -> void:
 func _expand_diff(view: Control) -> void:
 	main_screen.adopt(view)
 	EditorInterface.set_main_screen_editor(MAIN_SCREEN_NAME)
+
+
+## A file picked in Changes or Git Log while the Godit tab is open: its diff goes there, the previous one back to its panel.
+func _follow_diff(view: Control) -> void:
+	if is_instance_valid(main_screen) and main_screen.visible and main_screen.current_view() != view:
+		main_screen.adopt(view)
 
 
 func _leave_main_screen() -> void:

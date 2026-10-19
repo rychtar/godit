@@ -659,6 +659,8 @@ func _on_files_tree_item_selected() -> void:
 		return
 	var path: String = meta["path"]
 	_file_diff_box.visible = true
+	if _files_tree.has_focus():
+		_file_diff_view.follow_into_tab() # a click or arrow key, not a refresh selecting the file again
 	if _detail_oid == WORKTREE_OID:
 		_file_diff_label.text = "%s  (uncommitted)" % path
 		var untracked: bool = _repo.is_untracked(path)

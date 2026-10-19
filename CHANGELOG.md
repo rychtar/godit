@@ -16,6 +16,8 @@
 - Preferences are kept for all projects (`godit_settings.cfg` next to the editor's own settings) instead of per project: the layout, the Godit tab, diff options, History columns, blame, the Inspector rows, auto-stage and auto-add, confirmations and the sync options. A value an earlier version saved in a project still applies there until it's changed. The auto-add ignore masks are saved in `project.godot`, so the team shares them. The open view, divider positions and Git Log's Remotes/Stashes filters stay per project.
 - Tools > Godit holds Settings…, blame, background fetch, the Inspector rows and the layout; the other switches are in Godit Settings.
 - A diff option changed in one diff applies to every open diff.
+- The Godit tab is off by default; Godit Settings > Layout turns it on. While it's open, a file clicked in Changes or Git Log shows its diff there.
+- The Godit tab, opened before any file is selected, says how to get a diff there instead of "No diff to show."
 
 ### Fixed
 

@@ -167,7 +167,10 @@ func _ready() -> void:
 	# item_mouse_selected never fires and the context menu can't open.
 	_tree.allow_rmb_select = true
 	_tree.select_mode = Tree.SELECT_MULTI
-	_tree.multi_selected.connect(func(_item: TreeItem, _column: int, _selected: bool) -> void: _queue_show_selected_diff())
+	_tree.multi_selected.connect(func(_item: TreeItem, _column: int, _selected: bool) -> void:
+		_queue_show_selected_diff()
+		_diff_view.follow_into_tab() # only a click or arrow key emits multi_selected
+	)
 	_tree.gui_input.connect(_on_tree_gui_input)
 	_tree.set_drag_forwarding(_get_tree_drag_data, _can_drop_tree_data, _drop_tree_data)
 

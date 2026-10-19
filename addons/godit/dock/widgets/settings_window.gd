@@ -114,8 +114,8 @@ func _entries() -> Array:
 		{ "section": "Layout", "key": "dock_layout", "kind": "choice", "label": "Panels", "choices": layouts,
 			"get": get_layout, "set": set_layout,
 			"help": "Where Changes, History, Branches and Console live. The Combined Dock can float on Godot 4.6+, e.g. on a second monitor." },
-		{ "section": "Layout", "key": "diff_main_screen", "kind": "bool", "default": true, "label": "Godit tab next to 2D, 3D and Script",
-			"help": "Full-size diffs: the expand button in a diff opens it there. Turning it on or off reloads Godit." },
+		{ "section": "Layout", "key": "diff_main_screen", "kind": "bool", "default": false, "label": "Godit tab next to 2D, 3D and Script",
+			"help": "Full-size diffs: the expand button in a diff opens it there, and while the tab is open a file clicked in Changes or Git Log shows there. Turning it on or off reloads Godit." },
 
 		{ "section": "Changes", "key": ChangesPanel.AUTO_STAGE_SETTING_KEY, "kind": "bool", "default": true, "label": "Auto-stage changes in the active changelist",
 			"help": "A file that starts changing is checked for the next commit right away." },
