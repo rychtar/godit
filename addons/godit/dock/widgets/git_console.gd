@@ -4,10 +4,14 @@ extends VBoxContainer
 
 const GitCli := preload("res://addons/godit/util/git_cli.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
+const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 
 const POLL_INTERVAL := 0.5
 ## Commands whose output can rewrite the working tree, so the editor reloads open files after them.
 const TREE_CHANGING := ["checkout", "switch", "reset", "merge", "rebase", "pull", "cherry-pick", "revert", "stash", "restore", "apply", "am", "clean", "rm", "mv"]
+## Options before the command that take the next argument as their value.
+const OPTIONS_WITH_VALUE := ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"]
 
 var _repo: RefCounted
 var _output: RichTextLabel
@@ -147,18 +151,99 @@ static func split_args(line: String) -> PackedStringArray:
 	return args
 
 
+## Index of the git command in args, after the options that come before it; -1 if there's none.
+static func command_index(args: PackedStringArray) -> int:
+	var i := 0
+	while i < args.size() and args[i].begins_with("-"):
+		i += 2 if args[i] in OPTIONS_WITH_VALUE else 1
+	return i if i < args.size() else -1
+
+
+## Why a typed command gets a confirmation first (it throws work away or rewrites what others see), or "". alias: what git config has for alias.<command>.
+static func risk(args: PackedStringArray, alias := "") -> String:
+	for i in args.size() - 1:
+		if args[i] == "-c" and args[i + 1].to_lower().begins_with("alias."):
+			return "It defines a git alias for this command, which can run anything."
+	var index := command_index(args)
+	if index == -1:
+		return ""
+	var rest := args.slice(index + 1)
+	var flags := rest.slice(0, rest.find("--")) if rest.has("--") else rest
+	match args[index]:
+		"reset":
+			if flags.has("--hard"):
+				return "It throws away uncommitted changes to tracked files."
+		"clean":
+			if not flags.has("--dry-run") and not _has_short_flag(flags, "n"):
+				return "It deletes untracked files for good."
+		"push":
+			if _has_short_flag(flags, "f") or _has_short_flag(flags, "d") or Array(flags).any(func(f: String) -> bool:
+					return f.begins_with("--force") or f in ["--mirror", "--delete", "--prune"] or f.begins_with("+") or (f.begins_with(":") and f.length() > 1)):
+				return "It can overwrite or delete branches and history on the remote."
+		"checkout", "switch":
+			if flags.has("-f") or flags.has("--force") or flags.has("--discard-changes") or rest.has("--") or rest.has("."):
+				return "It throws away uncommitted changes to files."
+		"restore":
+			if not (flags.has("--staged") or flags.has("-S")) or flags.has("--worktree") or flags.has("-W"):
+				return "It throws away uncommitted changes to files."
+		"branch":
+			if flags.has("-D") or ((flags.has("-d") or flags.has("--delete")) and (flags.has("-f") or flags.has("--force"))):
+				return "It deletes a branch even if its commits aren't merged anywhere."
+		"stash":
+			if not rest.is_empty() and rest[0] in ["drop", "clear"]:
+				return "It deletes stashed changes for good."
+		"rm":
+			if (flags.has("-f") or flags.has("--force")) and not flags.has("--cached"):
+				return "It deletes the files from disk, changes and all."
+		"filter-branch", "filter-repo":
+			return "It rewrites the whole history."
+		"config":
+			if (flags.has("--global") or flags.has("--system")) and not _is_config_read(flags):
+				return "It changes git settings outside this project."
+	if alias.begins_with("!"):
+		return "It's an alias that runs a shell command: " + alias.substr(1)
+	if not alias.is_empty():
+		var expanded := args.slice(0, index)
+		expanded.append_array(split_args(alias))
+		expanded.append_array(rest)
+		return risk(expanded)
+	return ""
+
+
+## Whether one of the single-dash flags ("-fd") has letter in it.
+static func _has_short_flag(flags: PackedStringArray, letter: String) -> bool:
+	return Array(flags).any(func(f: String) -> bool: return f.length() > 1 and f[0] == "-" and f[1] != "-" and letter in f)
+
+
+static func _is_config_read(flags: PackedStringArray) -> bool:
+	for f in flags:
+		if f in ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l", "get", "list"]:
+			return true
+		if f in ["--unset", "--unset-all", "--add", "--replace-all", "--rename-section", "--remove-section", "-e", "--edit", "set", "unset", "edit", "rename-section", "remove-section"]:
+			return false
+	return Array(flags).filter(func(f: String) -> bool: return not f.begins_with("-")).size() <= 1 # just a key: the old way of reading it
+
+
 func _run() -> void:
 	var line := _input.text.strip_edges()
 	if line.begins_with("git "):
 		line = line.substr(4)
-	if line.is_empty() or _repo == null or _repo.is_busy():
+	if line.is_empty() or _repo == null or _repo.is_busy() or not _input.editable:
+		return
+	var args := split_args(line)
+	var index := command_index(args)
+	var alias := "" if index == -1 else String(GitCli.run(_repo.get_repo_root(), ["config", "--get", "alias." + args[index]])["text"]).strip_edges()
+	var reason := risk(args, alias)
+	if not reason.is_empty() and not await Dialogs.confirm(self, "Run This Command?", "%s\n\ngit %s" % [reason, line], "Run"):
+		return
+	var changes_tree := index != -1 and TREE_CHANGING.has(args[index]) and not (args[index] == "stash" and args.size() > index + 1 and args[index + 1] in ["list", "show"])
+	if changes_tree and not await SaveGuard.ensure_saved(self, "Run git " + args[index]):
 		return
 	_history.append(line)
 	_history_index = _history.size()
 	_input.text = ""
 	_input.editable = false
 	_run_button.disabled = true
-	var args := split_args(line)
 	var job := GitCli.start(_repo.get_repo_root(), args)
 	_repo.current_job = job
 	await job.finished
@@ -167,7 +252,7 @@ func _run() -> void:
 	_input.editable = true
 	_run_button.disabled = false
 	_input.grab_focus()
-	if not args.is_empty() and TREE_CHANGING.has(args[0]):
+	if changes_tree:
 		EditorOpen.refresh_all_external_changes()
 
 

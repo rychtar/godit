@@ -2,6 +2,7 @@
 extends EditorContextMenuPlugin
 
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
+const LocalHistoryWindow := preload("res://addons/godit/dock/widgets/local_history_window.gd")
 
 ## Set by plugin.gd: filesystem_colors.gd (holds the latest status) and the Git dock (runs the actions).
 var colors: Node
@@ -14,7 +15,6 @@ var show_change: Callable
 func _popup_menu(paths: PackedStringArray) -> void:
 	if colors == null or colors.repo == null:
 		return
-	colors.refresh()
 	var files := _repo_paths(paths, false)
 	var changed := _changed_under(paths)
 	var untracked := changed.filter(func(p: String) -> bool: return GitStatusFlags.is_untracked(colors.status_by_path[p]))
@@ -23,12 +23,24 @@ func _popup_menu(paths: PackedStringArray) -> void:
 			add_context_menu_item("Git: Show History", func(_p: Variant) -> void: show_file_history.call(files[0]))
 		if changed.has(files[0]):
 			add_context_menu_item("Git: Show Change", func(_p: Variant) -> void: show_change.call(files[0]))
+	if paths.size() == 1:
+		_add_local_history_item(paths[0])
 	if not untracked.is_empty():
 		add_context_menu_item("Git: Add %s to Git" % _count(untracked), func(_p: Variant) -> void: dock.add_paths(untracked))
 		if untracked.size() == changed.size() and files.size() == paths.size():
 			add_context_menu_item("Git: Ignore %s" % _count(untracked), func(_p: Variant) -> void: dock.ignore_paths(untracked))
 	if not changed.is_empty():
 		add_context_menu_item("Git: Revert %s…" % _count(changed), func(_p: Variant) -> void: dock.revert_paths(changed))
+
+
+## "Git: Local History…" of one file or folder, res:// being the whole project.
+func _add_local_history_item(path: String) -> void:
+	var abs_path := ProjectSettings.globalize_path(path).trim_suffix("/")
+	var root: String = colors.repo.get_repo_root()
+	if abs_path != root and not abs_path.begins_with(root + "/"):
+		return
+	var rel := abs_path.trim_prefix(root).trim_prefix("/")
+	add_context_menu_item("Git: Local History…", func(_p: Variant) -> void: LocalHistoryWindow.open_for(rel, path.ends_with("/")))
 
 
 ## Repo-relative paths of the selected res:// files (folders too when with_folders, without their trailing "/").

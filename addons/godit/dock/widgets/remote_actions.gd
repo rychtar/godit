@@ -6,6 +6,9 @@ const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 
+## Set by plugin.gd: opens the setup check, offered when a remote refuses the login.
+static var open_setup_check: Callable
+
 
 static func fetch(parent: Control, repo: RefCounted, bar: Control, remote: String = "", prune: bool = false) -> bool:
 	if not _check_idle(parent, repo):
@@ -17,7 +20,7 @@ static func fetch(parent: Control, repo: RefCounted, bar: Control, remote: Strin
 		return true
 	bar.done("Fetch cancelled." if r["cancelled"] else "Fetch failed.", not r["cancelled"])
 	if not r["cancelled"]:
-		await Dialogs.error(parent, "Fetch failed", GitErrors.explain(r["error"]))
+		await _report(parent, "Fetch failed", r["error"])
 	return false
 
 
@@ -47,7 +50,7 @@ static func pull(parent: Control, repo: RefCounted, bar: Control, strategy: Stri
 			if choice == "autostash":
 				return await pull(parent, repo, bar, strategy, true)
 		_:
-			await Dialogs.error(parent, "Pull failed", GitErrors.explain(r["error"]))
+			await _report(parent, "Pull failed", r["error"])
 	return false
 
 
@@ -70,7 +73,7 @@ static func push(parent: Control, repo: RefCounted, bar: Control, options: Dicti
 			var branch: String = repo.get_current_branch()
 			var remote := default_remote(repo)
 			if branch.is_empty() or remote.is_empty():
-				await Dialogs.error(parent, "Push failed", GitErrors.explain(r["error"]))
+				await _report(parent, "Push failed", r["error"])
 				return false
 			if await Dialogs.confirm(parent, "Publish Branch",
 					"\"%s\" doesn't track a remote branch yet.\n\nPush it to %s/%s and track it from now on?" % [branch, remote, branch], "Push"):
@@ -90,8 +93,38 @@ static func push(parent: Control, repo: RefCounted, bar: Control, options: Dicti
 					next["force_with_lease"] = true
 					return await push(parent, repo, bar, next)
 		_:
-			await Dialogs.error(parent, "Push failed", GitErrors.explain(r["error"]))
+			await _report(parent, "Push failed", r["error"])
 	return false
+
+
+## Fetch, then pull the upstream's new commits (uncommitted changes stashed around it) and push the branch's own: one button for whichever is due. A branch without an upstream gets published.
+static func sync(parent: Control, repo: RefCounted, bar: Control) -> bool:
+	if repo.get_current_branch().is_empty():
+		await Dialogs.error(parent, "Sync", "HEAD is detached, so there's no branch to sync. Switch to a branch first.")
+		return false
+	if repo.get_upstream().is_empty():
+		return await push(parent, repo, bar) # asks to publish it
+	if not await fetch(parent, repo, bar):
+		return false
+	var pulled := false
+	if repo.get_sync_status()["behind"] > 0:
+		if not await pull(parent, repo, bar, "", true):
+			return false
+		pulled = true
+	var s: Dictionary = repo.get_sync_status()
+	if s["ahead"] > 0:
+		return await push(parent, repo, bar)
+	bar.done("Pulled; nothing to push." if pulled else "In sync with %s." % s["upstream"])
+	return true
+
+
+## Git's error, explained; when the remote refused the login, it also offers the setup check, which says how to fix that for this remote.
+static func _report(parent: Control, title: String, error: String) -> void:
+	if GitErrors.classify(error) in [GitErrors.AUTH, GitErrors.HOST_KEY] and open_setup_check.is_valid():
+		if await Dialogs.error_with_actions(parent, title, GitErrors.explain(error), { "setup": "Help Me Log In" }) == "setup":
+			open_setup_check.call()
+		return
+	await Dialogs.error(parent, title, GitErrors.explain(error))
 
 
 ## "origin" if it exists, otherwise the first configured remote, or "".

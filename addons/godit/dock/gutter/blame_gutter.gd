@@ -9,13 +9,14 @@ const DiffGutter := preload("res://addons/godit/dock/gutter/diff_gutter.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const PollTimer := preload("res://addons/godit/util/poll_timer.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
+const GutterPainter := preload("res://addons/godit/dock/gutter/gutter_painter.gd")
 
 const GUTTER_NAME := "godit_blame"
 ## Upper bound for the column, before editor scale; the actual width fits the longest label.
 const MAX_GUTTER_WIDTH := 260
 const REFRESH_INTERVAL := 2.0
 
-const META_BLAME := "godit_blame"
+const META_BLAME := GutterPainter.META_BLAME
 ## What the current blame was computed from (path, text, HEAD), so the timer only reruns git when one of them changes.
 const META_SIGNATURE := "godit_blame_signature"
 
@@ -112,22 +113,14 @@ func _fit_width(code_edit: CodeEdit) -> void:
 	if index == -1 or not _enabled:
 		return
 	var font := code_edit.get_theme_font("font")
-	var font_size := _label_font_size(code_edit)
+	var font_size := GutterPainter.blame_font_size(code_edit)
 	var lines: Array = code_edit.get_meta(META_BLAME, [])
 	var widest := 0.0
 	for i in lines.size():
 		if i == 0 or lines[i - 1]["oid"] != lines[i]["oid"]:
-			widest = maxf(widest, font.get_string_size(_label(lines[i]), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
+			widest = maxf(widest, font.get_string_size(GutterPainter.blame_label(lines[i]), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
 	var scale := EditorInterface.get_editor_scale()
 	code_edit.set_gutter_width(index, int(minf(widest + 14 * scale, MAX_GUTTER_WIDTH * scale)) if widest > 0 else 0)
-
-
-static func _label(entry: Dictionary) -> String:
-	return "not committed" if String(entry["oid"]).is_empty() else "%s · %s" % [entry["author"], relative_age(entry["time"])]
-
-
-static func _label_font_size(code_edit: CodeEdit) -> int:
-	return maxi(code_edit.get_theme_font_size("font_size") - 2, 8)
 
 
 func _install_gutter(code_edit: CodeEdit) -> void:
@@ -140,7 +133,7 @@ func _install_gutter(code_edit: CodeEdit) -> void:
 		code_edit.set_meta(META_BLAME, [])
 	_fit_width(code_edit)
 	# Re-bound every time, like the diff gutter: a plugin reload replaces this Node but not the CodeEdit.
-	code_edit.set_gutter_custom_draw(index, _draw_cell.bind(code_edit))
+	code_edit.set_gutter_custom_draw(index, GutterPainter.draw_blame.bind(code_edit))
 	code_edit.set_gutter_clickable(index, true)
 	if not _code_edits.has(code_edit):
 		_code_edits.append(code_edit)
@@ -156,40 +149,3 @@ func _on_gutter_clicked(line: int, gutter: int, code_edit: CodeEdit) -> void:
 	var lines: Array = code_edit.get_meta(META_BLAME, [])
 	if line < lines.size() and not String(lines[line]["oid"]).is_empty():
 		commit_clicked.emit(lines[line]["oid"])
-
-
-func _draw_cell(line: int, _gutter: int, region: Rect2, code_edit: CodeEdit) -> void:
-	if not _enabled:
-		return
-	var lines: Array = code_edit.get_meta(META_BLAME, [])
-	if line >= lines.size():
-		return
-	var entry: Dictionary = lines[line]
-	var starts_run: bool = line == 0 or lines[line - 1]["oid"] != entry["oid"]
-	if starts_run and line > 0:
-		# Hairline where a different commit's lines begin.
-		code_edit.draw_rect(Rect2(region.position + Vector2(4, 0), Vector2(region.size.x - 8, 1)), Color(1, 1, 1, 0.07))
-
-	var font := code_edit.get_theme_font("font")
-	var font_size := _label_font_size(code_edit)
-	var baseline := region.position.y + (region.size.y + font.get_ascent(font_size) - font.get_descent(font_size)) / 2.0
-	var color: Color = GitIcons.COLOR_MODIFIED if String(entry["oid"]).is_empty() else code_edit.get_theme_color("font_color")
-	# Every line is labelled; repeats of the line above are dimmed so each commit's first line still stands out.
-	color.a = 0.55 if starts_run else 0.22
-	code_edit.draw_string(font, Vector2(region.position.x + 4, baseline), _label(entry), HORIZONTAL_ALIGNMENT_LEFT, region.size.x - 10, font_size, color)
-
-
-## Compact age for the blame column: "now", "5h", "3d", "2w", "4mo", "1y".
-static func relative_age(unix_time: int) -> String:
-	var secs := int(Time.get_unix_time_from_system()) - unix_time
-	if secs < 3600:
-		return "now"
-	if secs < 86400:
-		return "%dh" % (secs / 3600)
-	if secs < 86400 * 14:
-		return "%dd" % (secs / 86400)
-	if secs < 86400 * 60:
-		return "%dw" % (secs / (86400 * 7))
-	if secs < 86400 * 365:
-		return "%dmo" % (secs / (86400 * 30))
-	return "%dy" % (secs / (86400 * 365))

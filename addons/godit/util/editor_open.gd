@@ -4,6 +4,8 @@
 ## addressed via preload (see git_status_flags.gd for why).
 extends RefCounted
 
+const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+
 
 ## The repo root isn't necessarily the Godot project root, so this resolves
 ## through an absolute path rather than assuming path is already
@@ -27,6 +29,27 @@ static func open_file(repo_root: String, path: String) -> String:
 
 	EditorInterface.edit_resource(resource)
 	return ""
+
+
+## Selects path in the FileSystem dock and brings the dock to front; a path that's gone selects the nearest folder still there. Returns an error message to show, or "" on success.
+static func show_in_filesystem(repo_root: String, path: String) -> String:
+	var res_path := filesystem_target(repo_root, path)
+	if res_path.is_empty():
+		return "This file is outside the current Godot project:\n%s" % repo_root.path_join(path)
+	EditorInterface.get_file_system_dock().navigate_to_path(res_path)
+	return ""
+
+
+## The res:// path show_in_filesystem() selects, or "" outside the project.
+static func filesystem_target(repo_root: String, path: String) -> String:
+	var res_path := ProjectSettings.localize_path(repo_root.path_join(path))
+	if not res_path.begins_with("res://"):
+		return ""
+	if res_path != "res://":
+		res_path = res_path.trim_suffix("/")
+	while res_path != "res://" and not FileAccess.file_exists(res_path) and not DirAccess.dir_exists_absolute(res_path):
+		res_path = res_path.get_base_dir()
+	return res_path
 
 
 ## Like open_file(), but for scripts/text also jumps to line (1-based).
@@ -57,6 +80,8 @@ static func refresh_external_change(repo_root: String, path: String) -> void:
 ## refresh_external_change() for several repo-relative paths at once.
 static func refresh_external_changes(repo_root: String, paths: Array) -> void:
 	# Also covers a file revert_file() just deleted outright.
+	if _godit_changed(func() -> void: refresh_external_changes(repo_root, paths)):
+		return
 	EditorInterface.get_resource_filesystem().scan()
 	var discarded := PackedStringArray()
 	for path: String in paths:
@@ -78,12 +103,35 @@ static func refresh_external_changes(repo_root: String, paths: Array) -> void:
 ## the whole working tree (checkout_commit, reset_branch_to, ...) rather
 ## than one known path.
 static func refresh_all_external_changes() -> void:
+	if _godit_changed(func() -> void: refresh_all_external_changes()):
+		return
 	EditorInterface.get_resource_filesystem().scan()
 	for scene_path in EditorInterface.get_open_scenes():
 		# Unsaved new scenes have no path, and a checkout may have deleted the file.
-		if not scene_path.is_empty() and FileAccess.file_exists(scene_path):
-			EditorInterface.reload_scene_from_path(scene_path)
+		if scene_path.is_empty() or not FileAccess.file_exists(scene_path):
+			continue
+		# A scene the operation left alone keeps its undo history and unsaved edits (a pull that brings nothing reloaded every open scene).
+		if _scene_hashes.get(scene_path, "") == FileAccess.get_md5(scene_path):
+			continue
+		EditorInterface.reload_scene_from_path(scene_path)
+	remember_scene_state()
 	sync_open_scripts()
+
+
+## md5 of every open scene file by path, as of now (see refresh_all_external_changes()).
+static var _scene_hashes := {}
+## md5 of Godit's own scripts and scenes by path, as of before the operation; {} until the plugin starts.
+static var _godit_hashes := {}
+const GODIT_DIR := "res://addons/godit/"
+
+
+## Called before a git operation (SaveGuard) and after each refresh above.
+static func remember_scene_state() -> void:
+	_godit_hashes = hash_scripts(GODIT_DIR)
+	_scene_hashes = {}
+	for scene_path in EditorInterface.get_open_scenes():
+		if not scene_path.is_empty() and FileAccess.file_exists(scene_path):
+			_scene_hashes[scene_path] = FileAccess.get_md5(scene_path)
 
 
 ## Script and text file tabs keep their own buffer, so reloading the resource doesn't change what's shown; this rewrites each open tab whose file changed on disk (one undoable edit, caret and scroll kept, tab stays "saved"). Tabs with unsaved edits are left alone unless listed in discarded.
@@ -105,6 +153,36 @@ static func sync_open_scripts(discarded := PackedStringArray()) -> void:
 		_replace_text_keeping_view(code_edit, disk)
 		if tab["script"] != null:
 			tab["script"].source_code = disk
+
+
+## res:// paths of the script and text file tabs with unsaved edits; ScriptEditor.get_unsaved_files() does the same, but only from Godot 4.7.
+static func unsaved_tab_paths(script_editor: ScriptEditor) -> PackedStringArray:
+	var paths := PackedStringArray()
+	for tab: Dictionary in _open_tabs(script_editor):
+		var code_edit := (tab["editor"] as ScriptEditorBase).get_base_editor() as CodeEdit
+		if code_edit != null and code_edit.get_version() != code_edit.get_saved_version():
+			paths.append(tab["path"])
+	return paths
+
+
+## Writes the unsaved script and text file tabs to disk; ScriptEditor.save_all_scripts() does the same, but only from Godot 4.7.
+static func save_unsaved_tabs(script_editor: ScriptEditor) -> void:
+	for tab: Dictionary in _open_tabs(script_editor):
+		var code_edit := (tab["editor"] as ScriptEditorBase).get_base_editor() as CodeEdit
+		if code_edit == null or code_edit.get_version() == code_edit.get_saved_version():
+			continue
+		var script: Script = tab["script"]
+		if script != null:
+			script.source_code = code_edit.text
+			if ResourceSaver.save(script, tab["path"]) != OK:
+				continue
+		else:
+			var file := FileAccess.open(tab["path"], FileAccess.WRITE)
+			if file == null:
+				continue
+			file.store_string(code_edit.text)
+			file.close()
+		code_edit.tag_saved_version()
 
 
 ## res:// path of the script editor's current tab, a script or a text file (.md, .json...); "" for help pages and built-in scripts.
@@ -162,3 +240,36 @@ static func _replace_text_keeping_view(code_edit: CodeEdit, text: String) -> voi
 	code_edit.set_caret_line(mini(caret_line, code_edit.get_line_count() - 1))
 	code_edit.set_caret_column(caret_column)
 	code_edit.scroll_vertical = scroll
+
+
+## md5 of the .gd and .tscn files under dir (res:// path ending in "/"), by path.
+static func hash_scripts(dir: String) -> Dictionary:
+	var out := {}
+	for file in DirAccess.get_files_at(dir):
+		if file.get_extension() in ["gd", "tscn"]:
+			out[dir + file] = FileAccess.get_md5(dir + file)
+	for sub in DirAccess.get_directories_at(dir):
+		out.merge(hash_scripts(dir + sub + "/"))
+	return out
+
+
+## A git operation changed Godit's own files: Godot would hot-reload the running plugin's scripts under it, which loses its state or crashes the editor. Instead of refreshing, offers a restart; "Later" refreshes as before (then). False when Godit's files are as they were.
+static func _godit_changed(then: Callable) -> bool:
+	if _godit_hashes.is_empty():
+		return false
+	var now := hash_scripts(GODIT_DIR)
+	if now == _godit_hashes:
+		return false
+	_godit_hashes = now # "Later" takes it as it is
+	_offer_restart(then)
+	return true
+
+
+static func _offer_restart(then: Callable) -> void:
+	var restart: bool = await Dialogs.confirm(EditorInterface.get_base_control(), "Godit Changed",
+			"This changed Godit's own files (%s). Reloading them while Godit runs can lose its state or crash the editor, so restart the editor to load the new version; open scenes are saved first." % GODIT_DIR.trim_prefix("res://"),
+			"Restart Now", "Later")
+	if restart:
+		EditorInterface.restart_editor(true)
+	else:
+		then.call()

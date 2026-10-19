@@ -4,6 +4,8 @@ extends RefCounted
 
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
+const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
+const LocalHistoryRecorder := preload("res://addons/godit/util/local_history_recorder.gd")
 
 const ALWAYS_SAVE_SETTING_KEY := "save_before_git"
 
@@ -11,12 +13,15 @@ const ALWAYS_SAVE_SETTING_KEY := "save_before_git"
 ## res:// paths of open scenes and scripts with unsaved edits (untitled scenes excluded: there's no file to save them to).
 static func unsaved_files() -> PackedStringArray:
 	var paths := PackedStringArray()
-	for path in EditorInterface.get_unsaved_scenes():
+	# Called by name: these exist from Godot 4.7, older versions can't list unsaved scenes (only scripts are offered there).
+	var scenes: PackedStringArray = EditorInterface.call("get_unsaved_scenes") if EditorInterface.has_method("get_unsaved_scenes") else PackedStringArray()
+	for path in scenes:
 		if not path.is_empty():
 			paths.append(path)
 	var script_editor := EditorInterface.get_script_editor()
 	if script_editor != null:
-		for path in script_editor.get_unsaved_files():
+		var scripts: PackedStringArray = script_editor.call("get_unsaved_files") if script_editor.has_method("get_unsaved_files") else EditorOpen.unsaved_tab_paths(script_editor)
+		for path in scripts:
 			if not path.is_empty() and not paths.has(path):
 				paths.append(path)
 	return paths
@@ -25,12 +30,24 @@ static func unsaved_files() -> PackedStringArray:
 static func save_all() -> void:
 	var script_editor := EditorInterface.get_script_editor()
 	if script_editor != null:
-		script_editor.save_all_scripts()
+		if script_editor.has_method("save_all_scripts"):
+			script_editor.call("save_all_scripts")
+		else:
+			EditorOpen.save_unsaved_tabs(script_editor)
 	EditorInterface.save_all_scenes()
 
 
-## Coroutine. verb names the operation ("Commit", "Checkout"...); for_commit says the risk is missing edits rather than overwritten ones. False = the user cancelled.
+## Coroutine. verb names the operation ("Commit", "Checkout"...); for_commit says the risk is missing edits rather than overwritten ones. False = the user cancelled. Otherwise Local History gets the files first (an operation that rewrites them may lose work).
 static func ensure_saved(parent: Node, verb: String, for_commit := false) -> bool:
+	var proceed: bool = await _ensure_saved(parent, verb, for_commit)
+	if proceed:
+		if not for_commit:
+			await LocalHistoryRecorder.before(verb)
+		EditorOpen.remember_scene_state() # what the open scenes look like on disk before the operation, to reload only those it changes
+	return proceed
+
+
+static func _ensure_saved(parent: Node, verb: String, for_commit: bool) -> bool:
 	var unsaved := unsaved_files()
 	if unsaved.is_empty():
 		return true

@@ -9,12 +9,17 @@ const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const WebLinks := preload("res://addons/godit/util/web_links.gd")
+const SceneText := preload("res://addons/godit/util/scene_text.gd")
+const RebaseDialog := preload("res://addons/godit/dock/widgets/rebase_dialog.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
+const LocalHistoryRecorder := preload("res://addons/godit/util/local_history_recorder.gd")
+const LocalHistoryWindow := preload("res://addons/godit/dock/widgets/local_history_window.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 const ChangesetDialog := preload("res://addons/godit/dock/widgets/changeset_dialog.gd")
 const CommitGraph := preload("res://addons/godit/dock/widgets/commit_graph.gd")
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
+const SplitMemory := preload("res://addons/godit/util/split_memory.gd")
 const WORKTREE_OID := CommitGraph.WORKTREE_OID
 
 ## From the "Uncommitted changes" row; plugin.gd brings the Changes tab to front and runs action there ("", "commit", "stash", "revert").
@@ -40,11 +45,13 @@ const PAGE_SIZE := 300
 enum {
 	ID_COPY_HASH = 1, ID_COPY_MESSAGE, ID_CREATE_BRANCH, ID_CHECKOUT_COMMIT, ID_RESET_TO_HERE,
 	ID_CREATE_TAG, ID_CHERRY_PICK, ID_CHERRY_PICK_NO_COMMIT, ID_REVERT_COMMIT, ID_COMPARE_WORKTREE,
-	ID_COMPARE_SELECTED, ID_REWORD, ID_FIXUP, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES, ID_OPEN_ON_WEB,
+	ID_COMPARE_SELECTED, ID_EDIT_COMMIT, ID_INTERACTIVE_REBASE, ID_SQUASH, ID_DROP, ID_UNDO_LAST, ID_SHOW_CHANGES, ID_OPEN_ON_WEB,
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
-enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB }
+enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB, ID_FILE_OPEN_VERSION, ID_FILE_LOCAL_HISTORY, ID_FILE_SHOW_IN_FILESYSTEM }
+## Where Open This Version puts its copies: inside .godot, which every Godot project's .gitignore leaves out.
+const HISTORY_COPIES := "res://.godot/godit/history"
 
 @onready var _search_edit: LineEdit = %SearchEdit
 var _search_mode: OptionButton
@@ -114,8 +121,9 @@ func _ready() -> void:
 	if UiScale.is_in_edited_scene(self):
 		return # opened in the scene editor, not running in a dock
 	UiScale.scale_scene(self)
-	_split.resized.connect(_update_split_offset)
-	_update_split_offset()
+	SplitMemory.keep_ratio(_split, "history_details", 1.0 - DETAIL_PANE_RATIO)
+	SplitMemory.keep_ratio(_graph_split, "history_file_diff")
+	SplitMemory.keep_ratio(_detail_margin.get_node("DetailLayout"), "history_detail_files")
 	_files_tree.item_activated.connect(_on_files_tree_item_activated)
 	_files_tree.item_selected.connect(_on_files_tree_item_selected)
 	_files_tree.allow_rmb_select = true
@@ -267,13 +275,14 @@ func _build_file_diff() -> void:
 	close.flat = true
 	close.tooltip_text = "Close the file diff"
 	close.pressed.connect(func() -> void:
-		_file_diff_box.visible = false
+		_hide_file_diff()
 		_files_tree.deselect_all()
 	)
 	header.add_child(close)
 	_file_diff_box.add_child(header)
 
 	_file_diff_view = DiffViewScript.new()
+	_file_diff_view.expandable = true
 	_file_diff_view.options_changed.connect(_on_files_tree_item_selected)
 	_file_diff_view.open_location_requested.connect(func(path: String, line: int) -> void:
 		_open_historical_file(path, line)
@@ -282,14 +291,10 @@ func _build_file_diff() -> void:
 	_graph_split.add_child(_file_diff_box)
 
 
-## split_offset is a pixel offset from the container's midpoint, not a
-## fraction, so it's recomputed on every resize to keep the detail pane at
-## a constant ~1/3 width.
-func _update_split_offset() -> void:
-	var total := _split.size.x
-	if total <= 0.0:
-		return
-	_split.split_offset = int(total * (0.5 - DETAIL_PANE_RATIO))
+## Also empties the diff, which may be showing in the Godit tab instead of the hidden box.
+func _hide_file_diff() -> void:
+	_file_diff_box.visible = false
+	_file_diff_view.clear_diff()
 
 
 func set_repo(repo: RefCounted) -> void:
@@ -382,7 +387,7 @@ func refresh(status_entries: Variant = null) -> void:
 		_files_tree.clear()
 		_detail_label.text = ""
 		_detail_separator.visible = false
-		_file_diff_box.visible = false
+		_hide_file_diff()
 	elif _detail_oid == WORKTREE_OID:
 		var selected := _files_tree.get_selected()
 		var selected_path: String = selected.get_metadata(0).get("path", "") if selected != null and selected.get_metadata(0) is Dictionary else ""
@@ -525,7 +530,7 @@ func _on_commit_graph_commit_selected(oid: String) -> void:
 
 	if not same_commit:
 		_build_files_tree(oid)
-		_file_diff_box.visible = false
+		_hide_file_diff()
 	_detail_separator.visible = true
 
 	if oid == WORKTREE_OID:
@@ -656,6 +661,8 @@ func _on_files_tree_item_selected() -> void:
 		return
 	var path: String = meta["path"]
 	_file_diff_box.visible = true
+	if _files_tree.has_focus():
+		_file_diff_view.follow_into_tab() # a click or arrow key, not a refresh selecting the file again
 	if _detail_oid == WORKTREE_OID:
 		_file_diff_label.text = "%s  (uncommitted)" % path
 		var untracked: bool = _repo.is_untracked(path)
@@ -699,6 +706,28 @@ func _open_historical_file(path: String, line := 0) -> void:
 		Dialogs.error(self, "Can't open file", error)
 
 
+## A scene or resource as it was in the selected commit, opened from a copy named "name@commit"; it uses today's versions of the files it references.
+func _open_version(path: String) -> void:
+	var bytes: PackedByteArray = _repo.get_file_bytes(_detail_oid, path)
+	if bytes.is_empty():
+		Dialogs.error(self, "Can't open this version", "\"%s\" isn't in %s." % [path, _detail_oid.substr(0, 7)])
+		return
+	var short := _detail_oid.substr(0, 7)
+	var copy := HISTORY_COPIES.path_join(short).path_join(path.get_base_dir()).path_join("%s@%s.%s" % [path.get_file().get_basename(), short, path.get_extension()])
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(copy.get_base_dir()))
+	var file := FileAccess.open(copy, FileAccess.WRITE)
+	if file == null:
+		Dialogs.error(self, "Can't open this version", "Couldn't write %s." % copy)
+		return
+	file.store_string(SceneText.without_own_uid(bytes.get_string_from_utf8()))
+	file.close()
+	if path.get_extension() == "tscn":
+		EditorInterface.open_scene_from_path(copy)
+	else:
+		EditorInterface.edit_resource(ResourceLoader.load(copy, "", ResourceLoader.CACHE_MODE_REPLACE))
+	EditorInterface.get_editor_toaster().push_toast("Godit: %s as of %s is a copy; saving it doesn't change your project." % [path.get_file(), short])
+
+
 func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_index: int) -> void:
 	if mouse_button_index != MOUSE_BUTTON_RIGHT:
 		return
@@ -709,6 +738,9 @@ func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_in
 	_file_menu.clear()
 	_file_menu.add_item("Open", ID_FILE_OPEN)
 	_file_menu.add_item("Show History of This File", ID_FILE_HISTORY)
+	if LocalHistoryWindow.opener.is_valid():
+		_file_menu.add_item("Local History of This File…", ID_FILE_LOCAL_HISTORY)
+	_file_menu.add_item("Show in FileSystem", ID_FILE_SHOW_IN_FILESYSTEM)
 	_file_menu.add_item("Copy Path", ID_FILE_COPY_PATH)
 	if _detail_oid == WORKTREE_OID:
 		_file_menu.position = _files_tree.get_screen_position() + mouse_position.round()
@@ -716,6 +748,9 @@ func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_in
 		_file_menu.popup()
 		return
 	_add_web_item(_file_menu, ID_FILE_OPEN_ON_WEB, _detail_oid)
+	if _file_context_path.get_extension() in ["tscn", "tres"]:
+		_file_menu.add_item("Open This Version (a copy)", ID_FILE_OPEN_VERSION)
+		_file_menu.set_item_tooltip(_file_menu.get_item_index(ID_FILE_OPEN_VERSION), "Opens the file as it was in this commit, as a copy outside the project's files: saving it changes nothing")
 	_file_menu.add_separator()
 	_file_menu.add_item("Restore File to This Commit's Version…", ID_FILE_RESTORE_THIS)
 	_file_menu.add_item("Restore File to Before This Commit…", ID_FILE_RESTORE_BEFORE)
@@ -730,17 +765,29 @@ func _on_file_menu_id_pressed(id: int) -> void:
 	match id:
 		ID_FILE_OPEN:
 			_open_historical_file(path)
+		ID_FILE_OPEN_VERSION:
+			_open_version(path)
 		ID_FILE_HISTORY:
 			set_path_filter(path)
+		ID_FILE_LOCAL_HISTORY:
+			var current: String = path if _detail_oid == WORKTREE_OID else _repo.current_path(_detail_oid, path)
+			LocalHistoryWindow.open_for(current if not current.is_empty() else path)
 		ID_FILE_COPY_PATH:
 			DisplayServer.clipboard_set(path)
+		ID_FILE_SHOW_IN_FILESYSTEM:
+			var current: String = path if _detail_oid == WORKTREE_OID else _repo.current_path(_detail_oid, path)
+			var error := EditorOpen.show_in_filesystem(_repo.get_repo_root(), current if not current.is_empty() else path) # a deleted file: its folder
+			if not error.is_empty():
+				Dialogs.error(self, "Can't show it", error)
 		ID_FILE_OPEN_ON_WEB:
 			OS.shell_open(WebLinks.file_url(WebLinks.site(_repo), _detail_oid, path))
 		ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE:
 			var rev := _detail_oid if id == ID_FILE_RESTORE_THIS else _detail_oid + "^"
 			var label := "as of %s" % _detail_oid.substr(0, 7) if id == ID_FILE_RESTORE_THIS else "as it was before %s" % _detail_oid.substr(0, 7)
+			var kept := "Local History keeps your current version." if LocalHistoryRecorder.is_on() else "your current edits to the file are lost."
 			if await Dialogs.confirm(self, "Restore File",
-					"Replace \"%s\" in your working tree with its version %s?\n\nThe result shows up as an uncommitted change; your current edits to the file are lost." % [path, label], "Restore"):
+					"Replace \"%s\" in your working tree with its version %s?\n\nThe result shows up as an uncommitted change; %s" % [path, label, kept], "Restore"):
+				await LocalHistoryRecorder.before("Restore")
 				var result: Dictionary = _repo.restore_file_from(rev, path)
 				if not result["ok"]:
 					await Dialogs.error(self, "Restore failed", result["error"])
@@ -798,15 +845,14 @@ func _on_commit_graph_commit_context_requested(oid: String, screen_position: Vec
 
 	if can_rewrite:
 		m.add_separator("Rewrite %s's history" % current)
-		m.add_item("Reword Message…", ID_REWORD)
-		m.add_item("Fixup: Fold Staged Changes into This Commit", ID_FIXUP)
-		m.set_item_disabled(m.get_item_index(ID_FIXUP), has_merges_after or not _repo.has_staged_changes())
-		# Both replay the commits after it with a rebase, which would flatten merges (the head commit is just amended).
-		m.set_item_disabled(m.get_item_index(ID_REWORD), has_merges_after)
-		if has_merges_after:
-			var no_merges := "A merge commit lies after it — rewriting through merges would flatten them"
-			m.set_item_tooltip(m.get_item_index(ID_REWORD), no_merges)
-			m.set_item_tooltip(m.get_item_index(ID_FIXUP), no_merges)
+		m.add_item("Edit Commit… (message, staged changes)", ID_EDIT_COMMIT)
+		# It replays the commits after it with a rebase, which would flatten merges (the head commit is just amended).
+		m.set_item_disabled(m.get_item_index(ID_EDIT_COMMIT), has_merges_after)
+		m.set_item_tooltip(m.get_item_index(ID_EDIT_COMMIT), "A merge commit lies after it — rewriting through merges would flatten them" if has_merges_after
+				else "Change its message and fold the staged changes into it")
+		m.add_item("Interactive Rebase from Here…", ID_INTERACTIVE_REBASE)
+		m.set_item_disabled(m.get_item_index(ID_INTERACTIVE_REBASE), has_merges_after)
+		m.set_item_tooltip(m.get_item_index(ID_INTERACTIVE_REBASE), "Reorder, reword, squash, fixup or drop this commit and the newer ones")
 		m.add_item("Squash This and Newer Commits into One…", ID_SQUASH)
 		m.set_item_disabled(m.get_item_index(ID_SQUASH), has_merges_after or not has_parent or oid == head)
 		m.add_item("Drop Commit…", ID_DROP)
@@ -865,7 +911,7 @@ func _on_context_menu_id_pressed(id: int) -> void:
 	var stash_ref: String = _commits_by_oid.get(_context_oid, {}).get("stash", "")
 	var verbs := {
 		ID_STASH_APPLY: "Apply", ID_STASH_POP: "Pop", ID_CHERRY_PICK: "Cherry-pick", ID_CHERRY_PICK_NO_COMMIT: "Cherry-pick",
-		ID_REVERT_COMMIT: "Revert", ID_REWORD: "Reword", ID_FIXUP: "Fixup", ID_SQUASH: "Squash", ID_DROP: "Drop", ID_UNDO_LAST: "Undo",
+		ID_REVERT_COMMIT: "Revert", ID_EDIT_COMMIT: "Edit", ID_INTERACTIVE_REBASE: "Rebase", ID_SQUASH: "Squash", ID_DROP: "Drop", ID_UNDO_LAST: "Undo",
 		ID_CHECKOUT_COMMIT: "Checkout", ID_RESET_TO_HERE: "Reset",
 	}
 	if verbs.has(id) and not await SaveGuard.ensure_saved(self, verbs[id]):
@@ -927,17 +973,18 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			if await Dialogs.confirm(self, "Revert Commit",
 					"Create a new commit that undoes %s \"%s\"?\n\nHistory isn't rewritten — safe for commits that were already pushed." % [_context_oid.substr(0, 7), _summary(_context_oid)], "Revert"):
 				_after_operation(_repo.revert_commit(_context_oid), "Revert")
-		ID_REWORD:
-			var old_message := String(_commits_by_oid.get(_context_oid, {}).get("message", "")).strip_edges()
-			var answer: Variant = await Dialogs.form(self, "Reword %s" % _context_oid.substr(0, 7), [
-				{ "key": "message", "label": "Commit message" + _pushed_warning(_context_oid, true), "type": "multiline", "default": old_message },
-			], "Reword")
-			if answer != null and not String(answer["message"]).strip_edges().is_empty() and String(answer["message"]).strip_edges() != old_message:
-				_after_operation(_repo.reword_commit(_context_oid, String(answer["message"]).strip_edges()), "Reword")
-		ID_FIXUP:
-			if await Dialogs.confirm(self, "Fixup",
-					"Fold the staged changes into %s \"%s\"?%s" % [_context_oid.substr(0, 7), _summary(_context_oid), _pushed_warning(_context_oid, true)], "Fixup"):
-				_after_operation(_repo.fixup_commit(_context_oid), "Fixup")
+		ID_EDIT_COMMIT:
+			await _edit_commit(_context_oid)
+		ID_INTERACTIVE_REBASE:
+			var oid := _context_oid
+			var dialog := RebaseDialog.new(_repo.commits_since(oid), _pushed_warning(oid, true).strip_edges())
+			dialog.rebase_requested.connect(func(steps: Array) -> void: _after_operation(_repo.interactive_rebase(oid, steps), "Rebase"))
+			dialog.visibility_changed.connect(func() -> void:
+				if not dialog.visible:
+					dialog.queue_free()
+			)
+			add_child(dialog)
+			dialog.popup_centered()
 		ID_SQUASH:
 			var answer: Variant = await Dialogs.form(self, "Squash into One Commit", [
 				{ "type": "label", "label": "Combine %s and every newer commit on %s into a single commit.%s" % [_context_oid.substr(0, 7), _repo.get_current_branch(), _pushed_warning(_context_oid, true)] },
@@ -991,6 +1038,30 @@ func _on_refs_dropped(refs: PackedStringArray, target_oid: String) -> void:
 		_after_operation(_repo.merge(other, MERGE_MODES[answer["mode"]]), "Merge")
 	else:
 		_after_operation(_repo.rebase(other), "Rebase")
+
+
+## Edit Commit: a new message, and the staged changes folded in when ticked.
+func _edit_commit(oid: String) -> void:
+	var old_message := String(_commits_by_oid.get(oid, {}).get("message", "")).strip_edges()
+	var staged: int = _repo.get_status().filter(func(e: Dictionary) -> bool: return GitStatusFlags.is_staged(e["status"])).size()
+	var fields: Array = [{ "key": "message", "label": "Commit message", "type": "multiline", "default": old_message }]
+	if staged > 0:
+		fields.append({ "key": "staged", "label": "Fold the %d staged file%s into this commit" % [staged, "" if staged == 1 else "s"], "type": "check", "default": true })
+	else:
+		fields.append({ "type": "label", "label": "Nothing is staged; stage changes in Changes to fold them into this commit too." })
+	var warning := _pushed_warning(oid, true).strip_edges()
+	if not warning.is_empty():
+		fields.append({ "type": "label", "label": warning })
+	var answer: Variant = await Dialogs.form(self, "Edit Commit %s" % oid.substr(0, 7), fields, "Save")
+	if answer == null:
+		return
+	var message := String(answer["message"]).strip_edges()
+	if message.is_empty():
+		return
+	if answer.get("staged", false):
+		_after_operation(_repo.edit_commit(oid, message), "Edit")
+	elif message != old_message:
+		_after_operation(_repo.reword_commit(oid, message), "Reword")
 
 
 func _summary(oid: String) -> String:
@@ -1067,4 +1138,5 @@ func _on_reset_dialog_confirmed() -> void:
 func _show_error(title: String, message: String) -> void:
 	_error_dialog.title = title
 	_error_dialog.dialog_text = message
+	Dialogs.add_console_button(_error_dialog)
 	_error_dialog.popup_centered()

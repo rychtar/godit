@@ -1,4 +1,4 @@
-## Colors changed, new and conflicted files in the editor's FileSystem dock by their git status, and folders that contain any.
+## Colors changed, new and conflicted files in the editor's FileSystem dock by their git status and marks them with git's letter (M, A, D, R, ?, !), and colors folders that contain any.
 @tool
 extends Node
 
@@ -13,6 +13,7 @@ const COLOR_CONFLICTED := Color(1.0, 0.4, 0.4)
 ## Folders get their strongest child's color, faded toward the normal text.
 const FOLDER_FADE := 0.35
 const META_ORIGINAL := &"godit_original_color"
+const META_ORIGINAL_SUFFIX := &"godit_original_suffix"
 
 ## Null when the project isn't in a git repo.
 var repo: RefCounted
@@ -24,6 +25,8 @@ var _list_colored := {}
 var _list_paint_queued := false
 ## res:// path (folders end in "/") -> Color, from the last status.
 var _colors := {}
+## res:// path of a changed file -> its status letter.
+var _letters := {}
 ## Repo-relative path -> status bits, from the last status (read by filesystem_menu.gd).
 var status_by_path := {}
 var _signature := ""
@@ -52,6 +55,7 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	_colors = {}
+	_letters = {}
 	if _tree != null and is_instance_valid(_tree):
 		_tree.draw.disconnect(_on_tree_draw)
 		_paint()
@@ -76,6 +80,7 @@ func refresh(entries: Variant = null) -> void:
 	_signature = signature
 	status_by_path = {}
 	_colors = {}
+	_letters = {}
 	var project_root := ProjectSettings.globalize_path("res://")
 	var folder_rank := {}
 	for entry in entries:
@@ -89,6 +94,7 @@ func refresh(entries: Variant = null) -> void:
 		var res_path := "res://" + abs_path.substr(project_root.length())
 		var color := color_for(status)
 		_colors[res_path] = color
+		_letters[res_path] = letter_for(status)
 		# Conflicts outrank changes, which outrank new files, in the folder's color.
 		var rank := 3 if status & GitStatusFlags.CONFLICTED else (1 if GitStatusFlags.is_untracked(status) else 2)
 		var dir := res_path.get_base_dir()
@@ -99,6 +105,10 @@ func refresh(entries: Variant = null) -> void:
 				_colors[key] = color.lerp(GitIcons.COLOR_DEFAULT, FOLDER_FADE)
 			dir = dir.get_base_dir()
 	_paint()
+
+
+static func letter_for(status: int) -> String:
+	return "!" if status & GitStatusFlags.CONFLICTED else GitIcons.status_letter(status)
 
 
 static func color_for(status: int) -> Color:
@@ -139,6 +149,15 @@ func _paint() -> void:
 				else:
 					item.set_custom_color(0, original)
 				item.remove_meta(META_ORIGINAL)
+			var letter: String = _letters.get(path, "")
+			if not letter.is_empty():
+				if not item.has_meta(META_ORIGINAL_SUFFIX):
+					item.set_meta(META_ORIGINAL_SUFFIX, item.get_suffix(0))
+				if item.get_suffix(0) != letter:
+					item.set_suffix(0, letter)
+			elif item.has_meta(META_ORIGINAL_SUFFIX):
+				item.set_suffix(0, item.get_meta(META_ORIGINAL_SUFFIX))
+				item.remove_meta(META_ORIGINAL_SUFFIX)
 		var child := item.get_first_child()
 		while child != null:
 			stack.append(child)

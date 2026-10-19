@@ -8,6 +8,9 @@ const SyntaxColors := preload("res://addons/godit/util/syntax_colors.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 const SceneText := preload("res://addons/godit/util/scene_text.gd")
+const ImageCompare := preload("res://addons/godit/dock/widgets/image_compare.gd")
+const EXPANDED_EMPTY_TEXT := "Select a changed file in Changes or a file in Git Log to see its diff here."
+const IMAGE_MODES := { "side": "Side by Side", "swipe": "Swipe", "onion": "Onion Skin" }
 
 const IMAGE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
 ## Godot rewrites these on save without any real change; with "Hide Godot noise" on, a -/+ pair differing only here is dimmed.
@@ -31,6 +34,17 @@ signal options_changed
 signal open_location_requested(path: String, new_line: int)
 ## One of the tabs set with set_tabs() was clicked.
 signal tab_selected(index: int)
+## Moved into the Godit tab (true) or back into its panel (false).
+signal expanded_changed(expanded: bool)
+
+## Set by plugin.gd while the Godit tab exists: expander(view) shows a view there, collapser() leaves the tab, follower(view) moves the view there only while the tab is open.
+static var expander: Callable
+static var follower: Callable
+static var collapser: Callable
+## The owner allows showing this view in the Godit tab.
+var expandable := false
+var _expanded := false
+var _expand_button: Button
 
 var _tabs: TabBar
 var _header_bar: PanelContainer
@@ -41,7 +55,7 @@ var _options_button: MenuButton
 var _empty_label: Label
 var _scroll: ScrollContainer
 var _rows_view: Control
-var _image_view: HBoxContainer
+var _image_view: VBoxContainer
 var _scene_toggle: Button
 ## Node-by-node view of a .tscn/.tres change, instead of the text diff.
 var _scene_tree: Tree
@@ -55,6 +69,7 @@ var _file_header := ""
 func _init() -> void:
 	size_flags_horizontal = SIZE_EXPAND_FILL
 	size_flags_vertical = SIZE_EXPAND_FILL
+	Settings.notifier().changed.connect(_on_setting_changed)
 
 	_tabs = TabBar.new()
 	_tabs.visible = false
@@ -97,9 +112,21 @@ func _init() -> void:
 	_scene_toggle.visible = false
 	_scene_toggle.toggled.connect(func(on: bool) -> void:
 		Settings.set_value("diff_scene_view", on)
-		_rerender(true)
 	)
 	header_row.add_child(_scene_toggle)
+
+	_expand_button = Button.new()
+	_expand_button.flat = true
+	_expand_button.toggle_mode = true
+	_expand_button.visible = false
+	_expand_button.toggled.connect(func(on: bool) -> void:
+		if on and expander.is_valid():
+			expander.call(self)
+		elif not on and collapser.is_valid():
+			collapser.call()
+	)
+	header_row.add_child(_expand_button)
+	_update_expand_button()
 
 	_options_button = MenuButton.new()
 	_options_button.text = "⋯"
@@ -120,7 +147,7 @@ func _init() -> void:
 	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(_empty_label)
 
-	_image_view = HBoxContainer.new()
+	_image_view = VBoxContainer.new()
 	_image_view.size_flags_vertical = SIZE_EXPAND_FILL
 	_image_view.visible = false
 	add_child(_image_view)
@@ -150,6 +177,34 @@ func _init() -> void:
 	)
 	_scroll.get_h_scroll_bar().value_changed.connect(func(_v: float) -> void: _rows_view.queue_redraw())
 	_scroll.get_v_scroll_bar().value_changed.connect(func(_v: float) -> void: _rows_view.queue_redraw())
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED and _expand_button != null:
+		_update_expand_button()
+
+
+## The owner calls this when a click picked a file: while the Godit tab is open, the diff shows there.
+func follow_into_tab() -> void:
+	if expandable and follower.is_valid():
+		follower.call(self)
+
+
+## Called by the Godit tab when it takes this view or gives it back.
+func set_expanded(expanded: bool) -> void:
+	_expanded = expanded
+	_update_expand_button()
+	_rerender(true) # the empty text differs there
+	expanded_changed.emit(expanded)
+
+
+func _update_expand_button() -> void:
+	_expand_button.visible = expandable and expander.is_valid()
+	_expand_button.set_pressed_no_signal(_expanded)
+	_expand_button.tooltip_text = "Back to the panel" if _expanded else "Show in the Godit tab, next to 2D/3D/Script"
+	var icon_name := &"Back" if _expanded else &"DistractionFree"
+	_expand_button.icon = get_theme_icon(icon_name, &"EditorIcons") if has_theme_icon(icon_name, &"EditorIcons") else null
+	_expand_button.text = "" if _expand_button.icon != null else ("Back" if _expanded else "Expand")
 
 
 # --- options -----------------------------------------------------------------
@@ -195,21 +250,25 @@ func _on_option_pressed(id: int) -> void:
 	match id:
 		OPT_SIDE_BY_SIDE:
 			Settings.set_value("diff_side_by_side", not _setting("side_by_side", false))
-			_rerender()
 		OPT_SYNTAX:
 			Settings.set_value("diff_syntax", not _setting("syntax", true))
-			_rerender()
 		OPT_HIDE_NOISE:
 			Settings.set_value("diff_hide_noise", not _setting("hide_noise", true))
-			_rerender()
 		OPT_IGNORE_WHITESPACE:
 			Settings.set_value("diff_ignore_whitespace", not _setting("ignore_whitespace", false))
-			options_changed.emit()
 		_:
 			if CONTEXT_BY_ID.has(id):
 				Settings.set_value("diff_context", CONTEXT_BY_ID[id])
-				options_changed.emit()
 	_sync_options_menu()
+
+
+## A diff option changed here, in another diff or in Godit Settings: every open diff follows.
+func _on_setting_changed(key: String) -> void:
+	match key:
+		"diff_side_by_side", "diff_syntax", "diff_hide_noise", "diff_scene_view", "diff_image_mode":
+			_rerender(true)
+		"diff_ignore_whitespace", "diff_context":
+			options_changed.emit() # the owner fetches the diff again with get_options()
 
 
 # --- content -----------------------------------------------------------------
@@ -260,6 +319,7 @@ func _rerender(keep_scroll: bool = false) -> void:
 	var note: String = _context.get("note", "")
 
 	_header_bar.visible = not path.is_empty()
+	_update_expand_button()
 	_header_label.text = path + ("   · " + note if not note.is_empty() else "")
 	_header_label.tooltip_text = path
 	_stats_added.text = ("+%d" % parsed["added"]) if parsed["added"] > 0 else ""
@@ -290,7 +350,12 @@ func _rerender(keep_scroll: bool = false) -> void:
 	_scroll.visible = has_rows
 	_empty_label.visible = not has_rows and not show_image
 	if not has_rows and not show_image:
-		_empty_label.text = "Binary file changed." if parsed["binary"] else "No diff to show."
+		if parsed["binary"]:
+			_empty_label.text = "Binary file changed."
+		elif _expanded and _diff_text.is_empty():
+			_empty_label.text = EXPANDED_EMPTY_TEXT # the Godit tab, which has no file list of its own
+		else:
+			_empty_label.text = "No diff to show."
 
 	if not keep_scroll:
 		# Otherwise the previous file's scroll offset carries over and clips the top of the new diff.
@@ -382,7 +447,7 @@ func _on_rows_action_pressed(action: String, hunk_index: int, selected: PackedIn
 	hunk_action_requested.emit(action, DiffHunks.build_patch(_file_header, _hunks[hunk_index], selected, reverse))
 
 
-## Before/after thumbnails for image files; returns whether it's showing.
+## Before/after of an image file: side by side, or on top of each other (swipe, onion skin) when both exist; returns whether it's showing.
 func _show_image_preview(path: String) -> bool:
 	for child in _image_view.get_children():
 		child.queue_free()
@@ -391,45 +456,106 @@ func _show_image_preview(path: String) -> bool:
 	_image_view.visible = is_image and repo != null and _context.has("new_rev")
 	if not _image_view.visible:
 		return false
-	var old_rev: String = _context.get("old_rev", "HEAD")
-	var new_rev: String = _context.get("new_rev", "")
-	var old_path: String = _context.get("old_path", path)
-	_image_view.add_child(_image_panel("Before", repo.get_file_bytes(old_rev, old_path), path.get_extension()))
-	_image_view.add_child(_image_panel("After", repo.get_file_bytes(new_rev, path), path.get_extension()))
+	var extension := path.get_extension()
+	var old_bytes: PackedByteArray = repo.get_file_bytes(_context.get("old_rev", "HEAD"), _context.get("old_path", path))
+	var new_bytes: PackedByteArray = repo.get_file_bytes(_context.get("new_rev", ""), path)
+	var old_image := decode_image(old_bytes, extension)
+	var new_image := decode_image(new_bytes, extension)
+	var mode: String = _setting("image_mode", "side") if old_image != null and new_image != null else "side"
+
+	if old_image != null and new_image != null:
+		var bar := HBoxContainer.new()
+		var group := ButtonGroup.new()
+		for key in IMAGE_MODES:
+			var button := Button.new()
+			button.text = IMAGE_MODES[key]
+			button.flat = true
+			button.toggle_mode = true
+			button.button_group = group
+			button.button_pressed = key == mode
+			button.pressed.connect(func() -> void:
+				Settings.set_value("diff_image_mode", key)
+			)
+			bar.add_child(button)
+		_image_view.add_child(bar)
+
+	if mode == "side":
+		var panels := HBoxContainer.new()
+		panels.size_flags_vertical = SIZE_EXPAND_FILL
+		panels.add_child(_image_panel("Before", old_bytes, old_image))
+		panels.add_child(_image_panel("After", new_bytes, new_image))
+		_image_view.add_child(panels)
+		return true
+
+	var compare := ImageCompare.new()
+	compare.old_texture = ImageTexture.create_from_image(old_image)
+	compare.new_texture = ImageTexture.create_from_image(new_image)
+	compare.mode = mode
+	compare.texture_filter = _filter_for(old_image.get_size().max(new_image.get_size()))
+	var captions := HBoxContainer.new()
+	for caption in [_image_caption("Before", old_bytes, old_image), _image_caption("After", new_bytes, new_image)]:
+		var label := Label.new()
+		label.text = caption
+		label.size_flags_horizontal = SIZE_EXPAND_FILL
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if captions.get_child_count() == 0 else HORIZONTAL_ALIGNMENT_RIGHT
+		captions.add_child(label)
+	_image_view.add_child(captions)
+	_image_view.add_child(compare)
+	if mode == "onion":
+		var slider := HSlider.new()
+		slider.max_value = 1.0
+		slider.step = 0.01
+		slider.value = compare.amount
+		slider.tooltip_text = "How much of After shows over Before"
+		slider.value_changed.connect(func(value: float) -> void: compare.amount = value)
+		_image_view.add_child(slider)
 	return true
 
 
-static func _image_panel(caption: String, bytes: PackedByteArray, extension: String) -> Control:
+## The image in bytes (by the file's extension), or null when there's none or it can't be read.
+static func decode_image(bytes: PackedByteArray, extension: String) -> Image:
+	if bytes.is_empty():
+		return null
+	var image := Image.new()
+	var err := ERR_FILE_UNRECOGNIZED
+	match extension.to_lower():
+		"png": err = image.load_png_from_buffer(bytes)
+		"jpg", "jpeg": err = image.load_jpg_from_buffer(bytes)
+		"webp": err = image.load_webp_from_buffer(bytes)
+		"svg": err = image.load_svg_from_buffer(bytes)
+		"bmp": err = image.load_bmp_from_buffer(bytes)
+		"tga": err = image.load_tga_from_buffer(bytes)
+	return image if err == OK else null
+
+
+static func _image_caption(caption: String, bytes: PackedByteArray, image: Image) -> String:
+	if bytes.is_empty():
+		return "%s — (none)" % caption
+	if image == null:
+		return "%s — can't preview (%s)" % [caption, String.humanize_size(bytes.size())]
+	return "%s — %d×%d, %s" % [caption, image.get_width(), image.get_height(), String.humanize_size(bytes.size())]
+
+
+## Pixel art stays crisp; anything bigger is smoothed when scaled.
+static func _filter_for(image_size: Vector2i) -> CanvasItem.TextureFilter:
+	return CanvasItem.TEXTURE_FILTER_NEAREST if maxi(image_size.x, image_size.y) < 128 else CanvasItem.TEXTURE_FILTER_LINEAR
+
+
+static func _image_panel(caption: String, bytes: PackedByteArray, image: Image) -> Control:
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = SIZE_EXPAND_FILL
 	var label := Label.new()
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.text = _image_caption(caption, bytes, image)
 	box.add_child(label)
-
-	var image := Image.new()
-	var err := ERR_FILE_UNRECOGNIZED
-	if not bytes.is_empty():
-		match extension.to_lower():
-			"png": err = image.load_png_from_buffer(bytes)
-			"jpg", "jpeg": err = image.load_jpg_from_buffer(bytes)
-			"webp": err = image.load_webp_from_buffer(bytes)
-			"svg": err = image.load_svg_from_buffer(bytes)
-			"bmp": err = image.load_bmp_from_buffer(bytes)
-			"tga": err = image.load_tga_from_buffer(bytes)
-	if bytes.is_empty():
-		label.text = "%s — (none)" % caption
+	if image == null:
 		return box
-	if err != OK:
-		label.text = "%s — can't preview (%s)" % [caption, String.humanize_size(bytes.size())]
-		return box
-
-	label.text = "%s — %d×%d, %s" % [caption, image.get_width(), image.get_height(), String.humanize_size(bytes.size())]
 	var rect := TextureRect.new()
 	rect.texture = ImageTexture.create_from_image(image)
 	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	rect.size_flags_vertical = SIZE_EXPAND_FILL
-	rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST if maxi(image.get_width(), image.get_height()) < 128 else CanvasItem.TEXTURE_FILTER_LINEAR
+	rect.texture_filter = _filter_for(image.get_size())
 	box.add_child(rect)
 	return box
 
@@ -441,7 +567,8 @@ static func _parse(diff_text: String, hide_noise: bool) -> Dictionary:
 	if diff_text.is_empty():
 		return result
 
-	var lines := diff_text.split("\n")
+	# The font draws tabs with no width, which would flatten indentation; 4 spaces is Godot's default indent.
+	var lines := diff_text.replace("\t", "    ").split("\n")
 	var n := lines.size()
 
 	var hunk_regex := RegEx.new()

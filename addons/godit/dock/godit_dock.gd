@@ -8,7 +8,8 @@ const RepoInitView := preload("res://addons/godit/dock/widgets/repo_init_view.gd
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 
 const AUTO_FETCH_SETTING_KEY := "auto_fetch"
-const AUTO_FETCH_INTERVAL_SECS := 600.0
+const AUTO_FETCH_MINUTES_KEY := "auto_fetch_minutes"
+const AUTO_FETCH_DEFAULT_MINUTES := 10
 
 ## Forwarded from the Changes panel; plugin.gd routes it to the Git Log panel.
 signal file_history_requested(path: String)
@@ -24,6 +25,10 @@ var plugin: EditorPlugin
 ## A git_cli_repo.gd instance, or null if this project isn't a git repo.
 var _repo: RefCounted
 var _auto_fetch_timer: Timer
+
+
+func _init() -> void:
+	auto_translate_mode = AUTO_TRANSLATE_MODE_DISABLED # the editor's catalog would translate only some words (Fetch, History, Amend…), leaving the dock half translated
 
 
 func _ready() -> void:
@@ -47,7 +52,6 @@ func _ready() -> void:
 	)
 
 	_auto_fetch_timer = Timer.new()
-	_auto_fetch_timer.wait_time = AUTO_FETCH_INTERVAL_SECS
 	_auto_fetch_timer.timeout.connect(_on_auto_fetch_timeout)
 	# On a panel, not this dock: in bottom-panel mode the dock is out of the tree and its timers wouldn't tick.
 	_changes_panel.add_child(_auto_fetch_timer)
@@ -58,13 +62,14 @@ func has_repo() -> bool:
 	return _repo != null
 
 
-## Called by plugin.gd when the Tools menu toggle changes.
+## Called by plugin.gd when the toggle or the interval changes.
 func apply_auto_fetch_setting() -> void:
 	if _auto_fetch_timer == null:
 		return
+	var interval := maxf(1.0, float(Settings.get_value(AUTO_FETCH_MINUTES_KEY, AUTO_FETCH_DEFAULT_MINUTES))) * 60.0
 	if Settings.get_value(AUTO_FETCH_SETTING_KEY, false):
-		if _auto_fetch_timer.is_stopped():
-			_auto_fetch_timer.start()
+		if _auto_fetch_timer.is_stopped() or not is_equal_approx(_auto_fetch_timer.wait_time, interval):
+			_auto_fetch_timer.start(interval)
 	else:
 		_auto_fetch_timer.stop()
 
@@ -108,6 +113,24 @@ func show_changes(action: String) -> void:
 	_changes_panel.run_action(action)
 
 
+## Brings the Branches tab to front within this dock.
+func show_branches() -> void:
+	if _branches_panel.get_parent() == _tab_container:
+		_tab_container.current_tab = _branches_panel.get_index()
+
+
+## Fetch, Pull or Push from the Changes header (see sync_bar.gd's press()).
+func press_sync(action: String) -> void:
+	if _repo != null:
+		_changes_panel._sync_bar.press(action)
+
+
+## Puts menu (plugin.gd's layout choice) behind the menu button at the end of the tab bar.
+func set_tab_menu(menu: PopupMenu) -> void:
+	_tab_container.add_child(menu, false, INTERNAL_MODE_FRONT)
+	_tab_container.set_popup(menu)
+
+
 ## Scrolls the Changes diff to path/line, e.g. from a click on the script editor's change gutter.
 func reveal_change(path: String, line: int) -> void:
 	if _changes_panel.get_parent() == _tab_container:
@@ -122,13 +145,22 @@ func add_paths(paths: Array) -> void:
 
 
 func ignore_paths(paths: Array) -> void:
-	for path in _changes_panel._with_companions(paths):
-		_changes_panel._ignore_path(path)
+	_changes_panel._ignore_paths(_changes_panel._with_companions(paths))
 
 
 func revert_paths(paths: Array) -> void:
 	if await SaveGuard.ensure_saved(_changes_panel, "Revert"):
 		await _changes_panel._revert_paths(paths)
+
+
+## The Changes panel, wherever the layout put it; the quick commit window drives it.
+func changes_panel() -> Control:
+	return _changes_panel
+
+
+## The Changes diff, which the Godit tab shows when opened with nothing else.
+func changes_diff_view() -> Control:
+	return _changes_panel._diff_view
 
 
 ## Pulls Changes and Branches out of the tab bar together, so plugin.gd can dock both at the bottom instead.

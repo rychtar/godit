@@ -28,11 +28,11 @@ layout_mode = 2
 size_flags_vertical = 3
 
 [node name="Left" type="VBoxContainer" parent="Layout/Split" unique_id=272277478]
-custom_minimum_size = Vector2(220, 0)
+custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="ChangelistRow" type="HBoxContainer" parent="Layout/Split/Left" unique_id=844172871]
+[node name="ChangelistRow" type="HFlowContainer" parent="Layout/Split/Left" unique_id=844172871]
 unique_name_in_owner = true
 layout_mode = 2
 
@@ -43,6 +43,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 tooltip_text = "Active changelist — Commit commits exactly this changelist's files"
 clip_text = true
+fit_to_longest_item = false
 
 [node name="NewChangelistButton" type="Button" parent="Layout/Split/Left/ChangelistRow" unique_id=1719083079]
 unique_name_in_owner = true
@@ -81,7 +82,7 @@ layout_mode = 2
 placeholder_text = "Commit message"
 wrap_mode = 1
 
-[node name="CommitRow" type="HBoxContainer" parent="Layout/Split/Left" unique_id=1646957090]
+[node name="CommitRow" type="HFlowContainer" parent="Layout/Split/Left" unique_id=1646957090]
 unique_name_in_owner = true
 layout_mode = 2
 

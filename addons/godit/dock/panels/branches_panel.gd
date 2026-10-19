@@ -335,7 +335,8 @@ func _push_branch_to(branch: String) -> void:
 
 
 func _on_tree_item_selected() -> void:
-	var meta: Variant = _tree.get_selected().get_metadata(0)
+	var selected := _tree.get_selected()
+	var meta: Variant = selected.get_metadata(0) if selected != null else null
 	if not meta is Dictionary:
 		return
 	var prefixes := { "local": "refs/heads/", "remote_branch": "refs/remotes/", "tag": "refs/tags/" }
@@ -363,9 +364,10 @@ func _on_branches_tree_item_activated() -> void:
 	match kind:
 		"local":
 			if not meta["is_head"]:
-				_checkout(meta["name"])
+				await _checkout(meta["name"])
 		"remote_branch":
-			_after(_repo.checkout_remote_branch(meta["name"]), "Checkout failed", true)
+			await SyncBar.switch_branch(self, _repo, meta["name"], true)
+			refresh()
 		"tag":
 			await _checkout_detached(meta["name"])
 		"stash":
@@ -374,8 +376,10 @@ func _on_branches_tree_item_activated() -> void:
 			await _edit_remote_url(meta["name"])
 
 
+## Through the sync bar's switcher, which offers to take uncommitted changes along.
 func _checkout(name: String) -> void:
-	_after(_repo.checkout_branch(name), "Checkout failed", true)
+	await SyncBar.switch_branch(self, _repo, name)
+	refresh()
 
 
 func _checkout_detached(ref: String) -> void:
@@ -494,8 +498,10 @@ func _on_context_menu_id_pressed(id: int) -> void:
 	match id:
 		ID_CHECKOUT:
 			match kind:
-				"local": _checkout(name)
-				"remote_branch": _after(_repo.checkout_remote_branch(name), "Checkout failed", true)
+				"local": await _checkout(name)
+				"remote_branch":
+					await SyncBar.switch_branch(self, _repo, name, true)
+					refresh()
 				"tag": await _checkout_detached(name)
 		ID_NEW_BRANCH_FROM:
 			await _new_branch_from(name if not name.is_empty() else "HEAD")

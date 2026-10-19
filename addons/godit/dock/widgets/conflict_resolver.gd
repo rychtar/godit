@@ -18,6 +18,8 @@ var _crlf := false
 var _segments: Array = []
 ## Per conflict segment index: the result CodeEdit.
 var _results := {}
+## Conflict segment indices whose chosen side is a single blank line, which an empty result must not be mistaken for.
+var _blank_choice := {}
 var _status_label: Label
 
 
@@ -239,6 +241,7 @@ func _apply_choice(idx: int, choice: String) -> void:
 			lines.append_array(segment["theirs"])
 			lines.append_array(segment["ours"])
 	(_results[idx] as CodeEdit).text = "\n".join(lines)
+	_blank_choice[idx] = lines.size() == 1 and lines[0].is_empty()
 	_update_status()
 
 
@@ -267,7 +270,7 @@ func _compose() -> String:
 			parts.append("\n".join(segment["text"]))
 		else:
 			var chosen: String = (_results[idx] as CodeEdit).text
-			if not chosen.is_empty(): # an emptied result removes the lines instead of leaving a blank one
+			if not chosen.is_empty() or _blank_choice.get(idx, false): # an emptied result removes the lines instead of leaving a blank one
 				parts.append(chosen)
 	var text := "\n".join(parts)
 	return text.replace("\n", "\r\n") if _crlf else text

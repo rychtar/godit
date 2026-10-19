@@ -125,7 +125,7 @@ func get_diff(path: String, staged: bool, options: Dictionary = {}) -> String:
 
 ## For a conflicted file: its working-tree content (with conflict markers) against "ours".
 func get_conflict_diff(path: String) -> String:
-	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--", path])["text"]
+	return GitCli.run(_repo_root, ["diff", "--ours", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "--", path])["text"]
 
 
 func is_untracked(path: String) -> bool:
@@ -189,11 +189,18 @@ func get_head_text(path: String) -> Variant:
 	return null
 
 
+## A path for a temp file in a godit folder of the cache directory, which is created if needed: a fresh Linux home has no ~/.cache, and writing there failed silently.
+static func _temp_path(file_name: String) -> String:
+	var dir := OS.get_cache_dir().path_join("godit")
+	DirAccess.make_dir_recursive_absolute(dir)
+	return dir.path_join(file_name)
+
+
 ## Zero-context diff between two texts (e.g. HEAD and the editor's unsaved buffer), for DiffHunks.parse_regions().
 func diff_texts(old_text: String, new_text: String) -> String:
 	var stamp := Time.get_ticks_usec()
-	var old_path := OS.get_cache_dir().path_join("godit_old_%d.tmp" % stamp)
-	var new_path := OS.get_cache_dir().path_join("godit_new_%d.tmp" % stamp)
+	var old_path := _temp_path("godit_old_%d.tmp" % stamp)
+	var new_path := _temp_path("godit_new_%d.tmp" % stamp)
 	for pair in [[old_path, old_text], [new_path, new_text]]:
 		var f := FileAccess.open(pair[0], FileAccess.WRITE)
 		if f == null:
@@ -201,7 +208,7 @@ func diff_texts(old_text: String, new_text: String) -> String:
 			return ""
 		f.store_string(pair[1])
 		f.close()
-	var r := GitCli.run(_repo_root, ["diff", "--no-index", "--no-color", "-U0", "--", old_path, new_path])
+	var r := GitCli.run(_repo_root, ["diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", "--", old_path, new_path])
 	DirAccess.remove_absolute(old_path)
 	DirAccess.remove_absolute(new_path)
 	return r["text"]
@@ -209,7 +216,7 @@ func diff_texts(old_text: String, new_text: String) -> String:
 
 ## Applies a patch built by DiffHunks.build_patch(). cached=true targets the index (stage/unstage), false the working tree (revert); reverse undoes the patch instead of applying it. --recount means partial-hunk patches needn't have exact line counts in their headers.
 func apply_patch(patch: String, cached: bool, reverse: bool, check_only := false) -> Dictionary:
-	var patch_path := OS.get_cache_dir().path_join("godit_patch_%d.patch" % Time.get_ticks_usec())
+	var patch_path := _temp_path("godit_patch_%d.patch" % Time.get_ticks_usec())
 	var patch_file := FileAccess.open(patch_path, FileAccess.WRITE)
 	if patch_file == null:
 		return { "ok": false, "error": "couldn't write a temp patch file at %s" % patch_path, "output": "" }
@@ -397,11 +404,38 @@ func list_branches(local_only: bool = true) -> Array:
 	return entries
 
 
+## Names HEAD was checked out on, newest first and each once, from HEAD's reflog (detached commits are in there too).
+func recent_checkouts(entries := 300) -> PackedStringArray:
+	var out := PackedStringArray()
+	var checkout := RegEx.create_from_string("^checkout: moving from (\\S+) to (\\S+)$")
+	for line in GitCli.lines(GitCli.run(_repo_root, ["reflog", "-n", str(entries), "--format=%gs"])["text"]):
+		var m := checkout.search(line)
+		if m == null:
+			continue
+		for name in [m.get_string(2), m.get_string(1)]:
+			if not out.has(name):
+				out.append(name)
+	return out
+
+
+## list_branches() entries with the current branch first, then local ones in recent_checkouts() order, then the rest as listed.
+static func recent_first(branches: Array, recent: PackedStringArray) -> Array:
+	var rank := {}
+	for i in branches.size():
+		var b: Dictionary = branches[i]
+		var at := -1 if b["is_remote"] else recent.find(b["name"])
+		rank[i] = -1 if b["is_head"] else (at if at != -1 else recent.size() + i)
+	var order := range(branches.size())
+	order.sort_custom(func(a: int, b: int) -> bool: return rank[a] < rank[b])
+	return order.map(func(i: int) -> Dictionary: return branches[i])
+
+
+## The count after word in "[ahead 1, behind 2]"; cut at the comma first, since to_int() joins every digit in a string ("1, behind 2" gave 12).
 static func _track_count(track: String, word: String) -> int:
 	var at := track.find(word + " ")
 	if at == -1:
 		return 0
-	return track.substr(at + word.length() + 1).to_int()
+	return track.substr(at + word.length() + 1).get_slice(",", 0).get_slice("]", 0).to_int()
 
 
 ## Array[{"name", "oid", "summary", "annotated"}], newest first.
@@ -922,6 +956,24 @@ func checkout_branch(name: String) -> Dictionary:
 	return _checkout(name)
 
 
+## Switches to a local branch, or a remote one as a new tracking branch, taking the uncommitted changes along (new files too): stash, checkout, pop. {"ok", "error", "switched", "conflicts"}: when putting them back conflicts, the switch has happened and the changes stay in the stash as well.
+func checkout_carrying_changes(branch: String, remote := false) -> Dictionary:
+	var stashed := stash_push("Godit: carried to %s" % branch, true)
+	if not stashed["ok"]:
+		return stashed
+	var had_changes: bool = not stashed["output"].contains("No local changes")
+	var result: Dictionary = checkout_remote_branch(branch) if remote else checkout_branch(branch)
+	if not had_changes:
+		return result
+	if not result["ok"]:
+		stash_apply("stash@{0}", true) # back as they were, on the branch that didn't change
+		return result
+	var popped := stash_apply("stash@{0}", true)
+	popped["switched"] = true
+	popped["conflicts"] = not popped["ok"] and get_status().any(func(e: Dictionary) -> bool: return e["status"] & GitStatusFlags.CONFLICTED)
+	return popped
+
+
 ## Checks out an arbitrary commit, leaving HEAD detached.
 func checkout_commit(oid: String) -> Dictionary:
 	return _checkout(oid)
@@ -1002,7 +1054,7 @@ var _search_job: RefCounted = null
 
 ## Per-line blame of path as it reads in contents (the editor's possibly unsaved text): [{"oid", "author", "time", "summary"}], 0-based by line; "oid" is "" for uncommitted lines. null if git failed. Coroutine (background thread).
 func blame(path: String, contents: String) -> Variant:
-	var tmp_path := OS.get_cache_dir().path_join("godit_blame_%d.tmp" % Time.get_ticks_usec())
+	var tmp_path := _temp_path("godit_blame_%d.tmp" % Time.get_ticks_usec())
 	var tmp := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if tmp == null:
 		return null
@@ -1129,9 +1181,10 @@ func read_snapshot(with_status := false) -> Dictionary:
 	return snapshot_of(_repo_root, get_git_dir(), get_common_dir(), with_status)
 
 
-## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved. Static and free of static vars, so RepoWatcher can run it on a worker thread.
+## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved; Local History's snapshots (refs/godit/) aren't history. Static and free of static vars, so RepoWatcher can run it on a worker thread.
 static func refs_signature_of(root: String, git_dir: String) -> String:
-	return GitCli.execute("git", GitCli.argv(root, REFS_ARGS))["out"].get_string_from_utf8() + read_text(git_dir.path_join("HEAD"))
+	var refs := Array(GitCli.execute("git", GitCli.argv(root, REFS_ARGS))["out"].get_string_from_utf8().split("\n")).filter(func(line: String) -> bool: return not line.begins_with("refs/godit/"))
+	return "\n".join(refs) + read_text(git_dir.path_join("HEAD"))
 
 
 ## {"status" (raw STATUS_ARGS output, "" without with_status), "refs", "config", "stash_log"}; worker-thread safe like refs_signature_of().
@@ -1209,6 +1262,77 @@ func large_staged_files(limit_bytes: int) -> Array:
 		if line.ends_with(": filter: lfs"):
 			lfs[GitCli.unquote(line.trim_suffix(": filter: lfs"))] = true
 	return large.filter(func(e: Dictionary) -> bool: return not lfs.has(e["path"]))
+
+
+## Text files whose res:// references the commit has to carry along.
+const REFERENCING_EXTENSIONS := ["tscn", "tres", "gd", "gdshader", "gdshaderinc", "godot"]
+## Bigger staged files aren't searched (a text mesh .tres can be huge, and its references are near the top anyway).
+const REFERENCES_MAX_BYTES := 20 * 1024 * 1024
+
+
+## Files the staged scenes, resources, scripts and project.godot reference that the commit won't contain: [{"from": staged file, "path": referenced file, "state": "untracked" | "missing" | "case" (in git with other letter case)}], repo-relative; ignored files are left out, as ignoring them was a choice (addons installed by a package manager). project_dir: where res:// is, relative to the repo root ("" at the root).
+func missing_references(project_dir: String) -> Array:
+	var prefix := project_dir + "/" if not project_dir.is_empty() else ""
+	var sources := Array(GitCli.paths(GitCli.run(_repo_root, ["diff", "--cached", "--name-only", "--diff-filter=ACMR"])["text"])).filter(func(path: String) -> bool:
+		return path.begins_with(prefix) and path.get_extension() in REFERENCING_EXTENSIONS)
+	if sources.is_empty():
+		return []
+	var in_index := {}
+	var by_lower_case := {}
+	for path in GitCli.paths(GitCli.run(_repo_root, ["ls-files"])["text"]):
+		in_index[path] = true
+		by_lower_case[path.to_lower()] = path
+	var unstaged := {}
+	for path in GitCli.paths(GitCli.run(_repo_root, ["diff", "--name-only"])["text"]):
+		unstaged[path] = true
+
+	var found: Array = []
+	var seen := {}
+	for source: String in sources:
+		var text := ""
+		if unstaged.has(source):
+			text = get_file_bytes(":", source).get_string_from_utf8() # what gets committed, not what's on disk
+		elif FileAccess.file_exists(_repo_root.path_join(source)):
+			var f := FileAccess.open(_repo_root.path_join(source), FileAccess.READ)
+			if f == null or f.get_length() > REFERENCES_MAX_BYTES:
+				continue
+			text = f.get_as_text()
+		for res_path in res_references(text):
+			var path := prefix + res_path.trim_prefix("res://")
+			if in_index.has(path) or seen.has(source + "|" + path) or DirAccess.dir_exists_absolute(_repo_root.path_join(path)):
+				continue
+			seen[source + "|" + path] = true
+			var state := "missing"
+			if by_lower_case.has(path.to_lower()):
+				state = "case"
+			elif FileAccess.file_exists(_repo_root.path_join(path)):
+				state = "untracked"
+			found.append({ "from": source, "path": path, "state": state })
+
+	var untracked := found.filter(func(e: Dictionary) -> bool: return e["state"] == "untracked").map(func(e: Dictionary) -> String: return e["path"])
+	if not untracked.is_empty():
+		var ignored := {}
+		for path in GitCli.paths(GitCli.run(_repo_root, ["check-ignore", "--no-index", "--"] + untracked)["text"]):
+			ignored[path] = true
+		found = found.filter(func(e: Dictionary) -> bool: return not ignored.has(e["path"]))
+	return found
+
+
+## The res:// files a scene, resource, script or project.godot names in quotes (uid:// ones resolved when the project knows them); folders, the .godot cache and built paths ("res://levels/%s.tscn") are left out.
+static func res_references(text: String) -> PackedStringArray:
+	var found := PackedStringArray()
+	for m in RegEx.create_from_string("[\"']\\*?((?:res|uid)://[^\"'\\n]*)[\"']").search_all(text):
+		var path := m.get_string(1).get_slice("::", 0)
+		if path.begins_with("uid://"):
+			var id := ResourceUID.text_to_id(path)
+			if id == ResourceUID.INVALID_ID or not ResourceUID.has_id(id):
+				continue
+			path = ResourceUID.get_id_path(id)
+		if path.length() <= "res://".length() or path.ends_with("/") or path.begins_with("res://.godot/") or "%" in path or "{" in path or "*" in path:
+			continue
+		if not found.has(path):
+			found.append(path)
+	return found
 
 
 ## Tracks every file with the same extension as one of paths with Git LFS ("*.png"), and re-stages paths so they're stored as LFS pointers.
@@ -1342,18 +1466,19 @@ func reword_commit(oid: String, message: String) -> Dictionary:
 	return _autosquash_onto(oid, original)
 
 
-## Folds the currently staged changes into commit oid (rewrites everything after it).
-func fixup_commit(oid: String) -> Dictionary:
+## Gives commit oid a new message and folds the staged changes into it in one go (rewrites everything after it); with nothing staged it's reword_commit().
+func edit_commit(oid: String, message: String) -> Dictionary:
 	if not has_staged_changes():
-		return { "ok": false, "error": "Nothing is staged — stage the changes to fold in first.", "output": "" }
+		return reword_commit(oid, message)
 	if oid == get_head_oid():
-		return _simple(["commit", "--amend", "--no-edit"])
+		return _simple(["commit", "--amend", "-m", message])
 	if has_merges_since(oid):
 		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
 	var original := get_head_oid()
-	var fixup := _simple(["commit", "--fixup=" + oid])
-	if not fixup["ok"]:
-		return fixup
+	# What `git commit --fixup=amend:` makes, naming the commit by hash since two commits can share a subject.
+	var helper := _simple(["commit", "-m", "amend! " + oid, "-m", message])
+	if not helper["ok"]:
+		return helper
 	return _autosquash_onto(oid, original)
 
 
@@ -1385,6 +1510,56 @@ func drop_commit(oid: String) -> Dictionary:
 	if not has_parent(oid):
 		return { "ok": false, "error": "Can't drop the very first commit.", "output": "" }
 	return _with_conflict_flag(_simple(["rebase", "--autostash", "--onto", oid + "^", oid]))
+
+
+## oid and every commit after it up to HEAD, newest first: [{"oid", "summary", "message"}], for the interactive rebase dialog.
+func commits_since(oid: String) -> Array:
+	var range_arg := "%s^..HEAD" % oid if has_parent(oid) else "HEAD"
+	var commits: Array = []
+	for record: String in GitCli.run(_repo_root, ["log", "--format=%H" + GitCli.US + "%B" + GitCli.RS, range_arg])["text"].split(GitCli.RS):
+		var fields := record.strip_edges().split(GitCli.US)
+		if fields.size() == 2:
+			var message := fields[1].strip_edges()
+			commits.append({ "oid": fields[0], "summary": message.get_slice("\n", 0), "message": message })
+	return commits
+
+
+## Replays oid and the commits after it as steps say, oldest first: [{"action": "pick" | "reword" | "squash" | "fixup" | "drop", "oid", "message" for reword}]; squash and fixup fold into the step before.
+func interactive_rebase(oid: String, steps: Array) -> Dictionary:
+	if has_merges_since(oid):
+		return { "ok": false, "error": "A merge commit lies after it — rewriting through merges would flatten them.", "output": "" }
+	var stamp := Time.get_ticks_usec()
+	var todo := PackedStringArray()
+	for i in steps.size():
+		var step: Dictionary = steps[i]
+		if step["action"] == "reword":
+			var message_path := _temp_path("godit_reword_%d_%d.txt" % [stamp, i])
+			var message_file := FileAccess.open(message_path, FileAccess.WRITE)
+			if message_file == null:
+				return { "ok": false, "error": "Couldn't write %s." % message_path, "output": "" }
+			message_file.store_string(String(step["message"]).strip_edges() + "\n")
+			message_file.close()
+			todo.append("pick " + step["oid"])
+			todo.append("exec git commit --amend --allow-empty --quiet -F \"%s\"" % message_path)
+		else:
+			todo.append("%s %s" % [step["action"], step["oid"]])
+	var todo_path := _temp_path("godit_rebase_todo_%d.txt" % stamp)
+	var todo_file := FileAccess.open(todo_path, FileAccess.WRITE)
+	if todo_file == null:
+		return { "ok": false, "error": "Couldn't write %s." % todo_path, "output": "" }
+	todo_file.store_string("\n".join(todo) + "\n")
+	todo_file.close()
+	# git asks the sequence editor to edit its todo list; this one replaces it with ours (the environment variable beats any config).
+	var had_editor := OS.has_environment("GIT_SEQUENCE_EDITOR")
+	var editor := OS.get_environment("GIT_SEQUENCE_EDITOR")
+	OS.set_environment("GIT_SEQUENCE_EDITOR", "cp \"%s\"" % todo_path)
+	var result := _with_conflict_flag(_simple(["rebase", "--interactive", "--autostash", oid + "^" if has_parent(oid) else "--root"]))
+	if had_editor:
+		OS.set_environment("GIT_SEQUENCE_EDITOR", editor)
+	else:
+		OS.unset_environment("GIT_SEQUENCE_EDITOR")
+	DirAccess.remove_absolute(todo_path)
+	return result
 
 
 ## Messages of oid..HEAD (oldest first), for prefilling a squash message.

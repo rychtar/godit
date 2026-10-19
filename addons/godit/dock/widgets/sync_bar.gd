@@ -9,6 +9,10 @@ const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.g
 const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
+const UiScale := preload("res://addons/godit/util/ui_scale.gd")
+const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
+## Narrower than this, Fetch/Pull/Push show only their icons and the upstream line goes into the branch button's tooltip.
+const COMPACT_WIDTH := 420
 
 ## Something this bar did (checkout, fetch, pull, push…) may have changed the repo — the owning panel should refresh.
 signal changed
@@ -24,6 +28,7 @@ var _own_operation_bar: HBoxContainer
 var _repo: RefCounted
 var _branch_button: MenuButton
 var _upstream_label: Label
+var _sync_button: Button
 var _fetch_button: Button
 var _pull_button: Button
 var _pull_menu: MenuButton
@@ -32,6 +37,12 @@ var _push_menu: MenuButton
 var _pull_autostash := false
 ## Local branch names in the switcher popup, by item id.
 var _menu_branches: Array = []
+var _compact := false
+## The width the full-size bar needs, taken when it last turned compact: it stays compact until it has that much room again.
+var _full_width := 0.0
+## The nearest ancestor that isn't a container (the panel), whose width is the room the bar really has.
+var _holder: Control
+var _refresh_button: Button
 
 
 func _init() -> void:
@@ -54,6 +65,7 @@ func _init() -> void:
 	_upstream_label.mouse_filter = Control.MOUSE_FILTER_PASS
 	row.add_child(_upstream_label)
 
+	_sync_button = _button(row, "⇅ Sync", "", _on_sync_pressed)
 	_fetch_button = _button(row, "Fetch", "Fetch all remotes — updates remote branches and tags, never touches your files", _on_fetch_pressed)
 
 	_pull_button = _button(row, "Pull", "", _on_pull_pressed)
@@ -80,9 +92,10 @@ func _init() -> void:
 	push_popup.id_pressed.connect(_on_push_menu_id_pressed)
 	push_popup.about_to_popup.connect(_update_pull_request_item.bind(push_popup))
 
-	var refresh := _button(row, "", "Refresh", func() -> void: changed.emit())
-	refresh.flat = true
-	refresh.set_meta("icon_name", &"Reload")
+	_refresh_button = _button(row, "", "Refresh", func() -> void: changed.emit())
+	_refresh_button.flat = true
+	_refresh_button.set_meta("icon_name", &"Reload")
+	resized.connect(_on_resized)
 
 	operation_bar = OperationBar.new()
 	_own_operation_bar = operation_bar
@@ -90,6 +103,8 @@ func _init() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_ENTER_TREE:
+		_watch_holder()
 	if what == NOTIFICATION_THEME_CHANGED:
 		# Editor icons are only reachable once the bar is in the editor's theme.
 		_set_icon(_branch_button, &"GuiTreeArrowDown")
@@ -129,9 +144,17 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 
 
+## "fetch", "pull" or "push" as if its button was clicked (command palette, shortcuts); nothing while the button is disabled.
+func press(action: String) -> void:
+	var button: Button = {"sync": _sync_button, "fetch": _fetch_button, "pull": _pull_button, "push": _push_button}.get(action)
+	if button != null and not button.disabled:
+		button.pressed.emit()
+
+
 ## The combined dock's window-wide toolbar: no branch switcher (the sidebar lists and switches branches) and Fetch/Pull/Push at the left instead of far off at the right.
 func set_toolbar_mode(on: bool) -> void:
 	var row := get_child(0)
+	_full_width = 0.0 # measured with the other set of buttons
 	_branch_button.visible = not on
 	row.move_child(_upstream_label, row.get_child_count() - 1 if on else 1)
 	refresh()
@@ -178,10 +201,73 @@ func refresh() -> void:
 	_pull_button.tooltip_text = "Fetch and integrate %s's upstream%s" % [s["branch"], " (%d new commit%s)" % [s["behind"], "" if s["behind"] == 1 else "s"] if s["behind"] > 0 else ""]
 	_push_button.text = "Push ↑%d" % s["ahead"] if s["ahead"] > 0 else "Push"
 	_push_button.tooltip_text = "Push %s%s" % [s["branch"], " (%d commit%s)" % [s["ahead"], "" if s["ahead"] == 1 else "s"] if s["ahead"] > 0 else "" if not s["upstream"].is_empty() else " — publishes it, since it has no upstream yet"]
-	for control in [_pull_button, _pull_menu, _push_button, _push_menu]:
+	_sync_button.tooltip_text = "Fetch, pull the new commits (keeping your uncommitted changes) and push yours"
+	if not detached and s["upstream"].is_empty():
+		_sync_button.tooltip_text = "Publish %s: push it and track the remote branch" % s["branch"]
+	elif s["ahead"] > 0 or s["behind"] > 0:
+		_sync_button.tooltip_text += "\n%d to pull, %d to push" % [s["behind"], s["ahead"]]
+	for control in [_sync_button, _pull_button, _pull_menu, _push_button, _push_menu]:
 		control.disabled = detached
+	_apply_compact()
 	if detached:
 		_push_button.tooltip_text = "HEAD is detached — checkout a branch to push"
+
+
+func _on_resized() -> void:
+	if _wants_compact() != _compact:
+		refresh()
+
+
+## Containers grow past their panel to fit the full-size bar, so its own width never drops below COMPACT_WIDTH once its labels need more (after a layout switch, or with longer translated labels): the panel's width decides too.
+func _watch_holder() -> void:
+	var holder := get_parent_control()
+	while holder is Container:
+		holder = holder.get_parent_control()
+	if holder == _holder:
+		return
+	if is_instance_valid(_holder):
+		_holder.resized.disconnect(_on_resized)
+	_holder = holder
+	_full_width = 0.0
+	if _holder != null:
+		_holder.resized.connect(_on_resized)
+
+
+## Icons only below COMPACT_WIDTH or while the full-size bar sticks out of its panel; back to labels once there's room for them.
+func _wants_compact() -> bool:
+	if size.x <= 0:
+		return _compact
+	if _compact:
+		return size.x < maxf(UiScale.px(COMPACT_WIDTH), _full_width)
+	return size.x < UiScale.px(COMPACT_WIDTH) or _overflows()
+
+
+func _overflows() -> bool:
+	if not is_instance_valid(_holder) or _holder.size.x <= 0:
+		return false
+	var bar := get_global_rect()
+	var room := _holder.get_global_rect()
+	return bar.position.x < room.position.x - 1 or bar.end.x > room.end.x + 1
+
+
+## Icons and counts only, and the branch name clipped, when the bar is narrow (a side dock).
+func _apply_compact() -> void:
+	var compact := _wants_compact()
+	if compact and not _compact:
+		_full_width = get_combined_minimum_size().x # what the labels need; size.x can still be the last layout's
+	_compact = compact
+	_branch_button.clip_text = _compact
+	_branch_button.size_flags_horizontal = SIZE_EXPAND_FILL if _compact else SIZE_FILL
+	_branch_button.tooltip_text = _upstream_label.tooltip_text + "\nClick to switch branches" if _compact else "Current branch — click to switch"
+	_upstream_label.visible = not _compact or not _branch_button.visible # the toolbar's only branch name
+	_refresh_button.visible = not _compact
+	_sync_button.text = "⇅" if _compact else "⇅ Sync"
+	if _compact:
+		_fetch_button.text = ""
+		_pull_button.text = _pull_button.text.trim_prefix("Pull").strip_edges()
+		_push_button.text = _push_button.text.trim_prefix("Push").strip_edges()
+	elif _fetch_button.text.is_empty():
+		_fetch_button.text = "Fetch"
 
 
 func _fill_branch_menu() -> void:
@@ -189,7 +275,7 @@ func _fill_branch_menu() -> void:
 	popup.clear()
 	_menu_branches.clear()
 	popup.add_separator("Switch to branch")
-	for b in _repo.list_branches(true):
+	for b in GitCliRepo.recent_first(_repo.list_branches(true), _repo.recent_checkouts()):
 		var id := _menu_branches.size()
 		_menu_branches.append(b["name"])
 		popup.add_radio_check_item(b["name"], id)
@@ -204,31 +290,61 @@ func _on_branch_menu_id_pressed(id: int) -> void:
 	if id == ID_NEW_BRANCH:
 		await new_branch_dialog("HEAD")
 		return
-	if id < 0 or id >= _menu_branches.size() or not await SaveGuard.ensure_saved(self, "Checkout"):
+	if id < 0 or id >= _menu_branches.size():
 		return
-	var result: Dictionary = _repo.checkout_branch(_menu_branches[id])
-	EditorOpen.refresh_all_external_changes()
-	if not result["ok"]:
-		await Dialogs.error(self, "Checkout failed", GitErrors.explain(result["error"]))
-	else:
+	if await switch_branch(self, _repo, _menu_branches[id]):
 		operation_bar.done("Switched to %s." % _menu_branches[id])
 	_finish()
 
 
 ## Shared with the Branches panel's "New Branch…".
 func new_branch_dialog(start_point: String) -> void:
-	var answer: Variant = await Dialogs.form(self, "New Branch", [
-		{ "key": "name", "label": "Name", "placeholder": "feature/my-branch" },
+	await create_branch_dialog(self, _repo, start_point)
+	_finish()
+
+
+## Checks out a local branch, or a remote one as a new branch tracking it, after saving open files; when uncommitted changes are in the way, offers to take them along. False when it didn't switch. Also the editor toolbar's switcher and Branches.
+static func switch_branch(parent: Node, repo: RefCounted, branch: String, remote := false) -> bool:
+	if not await SaveGuard.ensure_saved(parent, "Checkout"):
+		return false
+	var result: Dictionary = repo.checkout_remote_branch(branch) if remote else repo.checkout_branch(branch)
+	if not result["ok"] and GitErrors.classify(result["error"]) == GitErrors.DIRTY:
+		var choice: String = await Dialogs.error_with_actions(parent, "Uncommitted Changes in the Way",
+				"%s\n\nGodit can stash them, switch to %s and put them back there." % [GitErrors.explain(result["error"]), branch],
+				{ "carry": "Stash, Switch, Re-apply" })
+		if choice != "carry":
+			return false
+		result = repo.checkout_carrying_changes(branch, remote)
+	EditorOpen.refresh_all_external_changes()
+	if result.get("switched", false) and not result["ok"]:
+		await Dialogs.error(parent, "Switched, Changes Conflicted" if result.get("conflicts", false) else "Switched, Changes Not Re-applied",
+				"You're on %s now, but putting your changes back %s. They're also kept in the stash (Branches > Stashes)." % [branch,
+				"conflicted: resolve the files in Changes" if result.get("conflicts", false) else "failed:\n" + GitErrors.explain(result["error"])])
+		return true
+	if not result["ok"]:
+		await Dialogs.error(parent, "Checkout failed", GitErrors.explain(result["error"]))
+	return result["ok"]
+
+
+## Asks for a name (prefilled with branch_name) and creates the branch; false when cancelled or it failed. Also the editor toolbar's switcher.
+static func create_branch_dialog(parent: Node, repo: RefCounted, start_point: String, branch_name := "") -> bool:
+	var answer: Variant = await Dialogs.form(parent, "New Branch", [
+		{ "key": "name", "label": "Name", "placeholder": "feature/my-branch", "default": branch_name },
 		{ "key": "start", "label": "Start point", "default": start_point },
 		{ "key": "checkout", "label": "Switch to it (uncommitted changes come along)", "type": "check", "default": true },
 	], "Create")
 	if answer == null or String(answer["name"]).strip_edges().is_empty():
-		return
-	var result: Dictionary = _repo.create_branch(String(answer["name"]).strip_edges(), String(answer["start"]).strip_edges(), answer["checkout"])
+		return false
+	var result: Dictionary = repo.create_branch(String(answer["name"]).strip_edges(), String(answer["start"]).strip_edges(), answer["checkout"])
 	if not result["ok"]:
-		await Dialogs.error(self, "Create branch failed", GitErrors.explain(result["error"]))
+		await Dialogs.error(parent, "Create branch failed", GitErrors.explain(result["error"]))
 	elif answer["checkout"]:
 		EditorOpen.refresh_all_external_changes()
+	return result["ok"]
+
+
+func _on_sync_pressed() -> void:
+	await RemoteActions.sync(self, _repo, operation_bar)
 	_finish()
 
 

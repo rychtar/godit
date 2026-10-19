@@ -92,9 +92,9 @@ static func _read_all(pipe: FileAccess) -> PackedByteArray:
 	return bytes
 
 
-## Full argv for `git <args>` in repo_root; quotePath off so non-ASCII paths come out as UTF-8, not "\304\215" escapes.
+## Full argv for `git <args>` in repo_root; quotePath off so non-ASCII paths come out as UTF-8, not "\304\215" escapes, and no gpg lines (log.showSignature) in the middle of `git log --format` output.
 static func argv(repo_root: String, args: Array) -> PackedStringArray:
-	var full_args := PackedStringArray(["-C", repo_root, "-c", "core.quotePath=false"])
+	var full_args := PackedStringArray(["-C", repo_root, "-c", "core.quotePath=false", "-c", "log.showSignature=false"])
 	full_args.append_array(PackedStringArray(args))
 	return full_args
 
@@ -116,6 +116,14 @@ static func record(args: Array, exit_code: int, text: String) -> void:
 	if command_log.size() > LOG_LIMIT:
 		command_log = command_log.slice(command_log.size() - LOG_LIMIT)
 	command_log_revision += 1
+
+
+## The last logged command if it failed in the last few seconds, else {}: an error dialog then offers to show it in the Console.
+static func recent_failure(seconds := 10) -> Dictionary:
+	if command_log.is_empty():
+		return {}
+	var last: Dictionary = command_log[-1]
+	return last if last["exit_code"] != 0 and Time.get_unix_time_from_system() - last["time"] <= seconds else {}
 
 
 ## Splits git output into non-empty lines.
@@ -220,6 +228,7 @@ class Job:
 		cancel()
 		if _thread != null and _thread.is_started():
 			_thread.wait_to_finish()
+		_thread = null
 		is_running = false
 
 
@@ -301,5 +310,9 @@ class Job:
 		if _abandoned:
 			return
 		_thread.wait_to_finish()
+		_thread = null # the Thread holds a Callable back to this Job, which would keep both alive forever
 		is_running = false
 		finished.emit(result)
+		# GitCli.start()'s listener captures this Job, which would keep it (and its Mutex and RegExes) alive; nothing is emitted after this.
+		for connection in finished.get_connections():
+			finished.disconnect(connection["callable"])
