@@ -26,6 +26,7 @@
 - **Shortcuts**: `Ctrl/Cmd+1` to `4` open File Status, History, Branches and Console in any layout (by the key's place, so they work on layouts where the digits need Shift), `Alt+G` shows or hides the Godit dock like `Alt+O` the Output. On Godot 4.5+ they're in Editor Settings > Shortcuts > Godit, where the other commands can get keys too.
 - **Keys in File Status**: `Space` stages or unstages the selected files (new files are added), `Delete` or `Ctrl/Cmd+Backspace` reverts them after asking, `Ctrl/Cmd+C` copies their paths, `Ctrl/Cmd+F` goes to the filter.
 - **Filter in File Status**: next to the changelist, it shows only the files whose path contains what you type. `Esc` clears it, `Down` or `Enter` goes to the first file. Conflicts always show, the dock title still counts every change, and Commit takes every checked file, shown or not.
+- **Show in FileSystem** in the right-click menu of files and folders in Changes and of files in Git Log: selects it in the FileSystem dock, or the nearest folder when the file is gone.
 - **Layout menu** in the combined dock's toolbar and in the tab bars of the Git dock, Git Log and the bottom tabs; switching shows where the panels went.
 - **Combined dock**: the toolbar button hides the sidebar (remembered); the view buttons move into the toolbar and Branches becomes a view.
 - Dividers remember where they were dragged, across resizes and restarts: Changes list and diff, Git Log graph, details and file diff, the combined dock's sidebar.

@@ -65,6 +65,7 @@ const ID_DONT_AUTO_ADD_EXT := 22
 const ID_MOVE_ALL_TO := 23
 const ID_SHOW_DIFF_TAB := 24
 const ID_LOCAL_HISTORY := 25
+const ID_SHOW_IN_FILESYSTEM := 26
 ## Pause after typing in the filter before the list is rebuilt.
 const FILTER_DELAY := 0.15
 
@@ -1318,6 +1319,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_context_menu.add_separator()
 				_context_menu.add_item("Show History", ID_SHOW_HISTORY)
 				_add_local_history_item()
+				_context_menu.add_item("Show in FileSystem", ID_SHOW_IN_FILESYSTEM)
 				_context_menu.add_item("Copy Path", ID_COPY_PATH)
 				_context_menu.add_separator()
 				_context_menu.add_item("Stash...", ID_STASH_GROUP)
@@ -1343,12 +1345,14 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_context_menu.add_submenu_item("Move %d File%s to Changelist" % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], MENU_MOVE_TO_SUBMENU)
 				_fill_move_to_menu(folder_paths)
 			_add_local_history_item()
+			_context_menu.add_item("Show in FileSystem", ID_SHOW_IN_FILESYSTEM)
 		"untracked_file":
 			_context_menu.add_item("Add to Git", ID_ADD_TO_VCS)
 			_context_menu.add_item("Open", ID_OPEN)
 			if DiffViewScript.expander.is_valid():
 				_context_menu.add_item("Show Diff in the Godit Tab", ID_SHOW_DIFF_TAB)
 			_add_local_history_item()
+			_context_menu.add_item("Show in FileSystem", ID_SHOW_IN_FILESYSTEM)
 			_context_menu.add_separator()
 			_context_menu.add_item("Ignore", ID_IGNORE)
 			var ext: String = meta["path"].get_extension()
@@ -1367,6 +1371,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 			_context_menu.add_item("Accept Theirs (%s)" % theirs, ID_ACCEPT_THEIRS)
 			_context_menu.add_item("Mark Resolved (as edited)", ID_MARK_RESOLVED)
 			_context_menu.add_separator()
+			_context_menu.add_item("Show in FileSystem", ID_SHOW_IN_FILESYSTEM)
 			_context_menu.add_item("Copy Path", ID_COPY_PATH)
 		"untracked_group":
 			_context_menu.add_item("Add All to Git", ID_ADD_ALL_TO_VCS)
@@ -1479,6 +1484,10 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_ignore_paths(_with_companions([_context_target["path"]]))
 		ID_COPY_PATH:
 			DisplayServer.clipboard_set(_context_target["path"])
+		ID_SHOW_IN_FILESYSTEM:
+			var error := EditorOpen.show_in_filesystem(_repo.get_repo_root(), _context_target["dir"] if _context_target.get("kind", "") == "folder" else _context_target["path"])
+			if not error.is_empty():
+				_show_error("Can't show it", error)
 		ID_RESOLVE:
 			_open_conflict_resolver(_context_target["path"])
 		ID_SHOW_DIFF_TAB:

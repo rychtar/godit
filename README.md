@@ -47,7 +47,7 @@ If `addons/godit/` is in your repository and a checkout, pull or reset changes i
 - **Branches**: double-click one to switch; right-click it to merge, rebase or push, or right-click a section header to add a branch, tag or remote. Or click the branch in the editor's toolbar, type a few letters and press Enter. When uncommitted changes are in the way, Godit offers to take them along to the other branch.
 - **History**: the commit graph, with search, cherry-pick and history editing. Right-click a commit to edit it or rebase from it, or a file to open its version from then.
 - **Big diffs**: turn on the Godit tab in Godit Settings > Layout. It sits next to 2D, 3D and Script; the expand button above a diff opens the diff there, and while the tab is open, a file clicked in Changes or Git Log shows there.
-- **Everything else**: right-click a file, branch or commit.
+- **Everything else**: right-click a file, branch or commit. Show in FileSystem finds a file from Changes or Git Log in the FileSystem dock.
 
 ## Settings
 

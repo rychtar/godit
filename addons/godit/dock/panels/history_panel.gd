@@ -49,7 +49,7 @@ enum {
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
-enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB, ID_FILE_OPEN_VERSION, ID_FILE_LOCAL_HISTORY }
+enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB, ID_FILE_OPEN_VERSION, ID_FILE_LOCAL_HISTORY, ID_FILE_SHOW_IN_FILESYSTEM }
 ## Where Open This Version puts its copies: inside .godot, which every Godot project's .gitignore leaves out.
 const HISTORY_COPIES := "res://.godot/godit/history"
 
@@ -740,6 +740,7 @@ func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_in
 	_file_menu.add_item("Show History of This File", ID_FILE_HISTORY)
 	if LocalHistoryWindow.opener.is_valid():
 		_file_menu.add_item("Local History of This File…", ID_FILE_LOCAL_HISTORY)
+	_file_menu.add_item("Show in FileSystem", ID_FILE_SHOW_IN_FILESYSTEM)
 	_file_menu.add_item("Copy Path", ID_FILE_COPY_PATH)
 	if _detail_oid == WORKTREE_OID:
 		_file_menu.position = _files_tree.get_screen_position() + mouse_position.round()
@@ -773,6 +774,11 @@ func _on_file_menu_id_pressed(id: int) -> void:
 			LocalHistoryWindow.open_for(current if not current.is_empty() else path)
 		ID_FILE_COPY_PATH:
 			DisplayServer.clipboard_set(path)
+		ID_FILE_SHOW_IN_FILESYSTEM:
+			var current: String = path if _detail_oid == WORKTREE_OID else _repo.current_path(_detail_oid, path)
+			var error := EditorOpen.show_in_filesystem(_repo.get_repo_root(), current if not current.is_empty() else path) # a deleted file: its folder
+			if not error.is_empty():
+				Dialogs.error(self, "Can't show it", error)
 		ID_FILE_OPEN_ON_WEB:
 			OS.shell_open(WebLinks.file_url(WebLinks.site(_repo), _detail_oid, path))
 		ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE:

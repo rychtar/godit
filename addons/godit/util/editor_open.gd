@@ -31,6 +31,27 @@ static func open_file(repo_root: String, path: String) -> String:
 	return ""
 
 
+## Selects path in the FileSystem dock and brings the dock to front; a path that's gone selects the nearest folder still there. Returns an error message to show, or "" on success.
+static func show_in_filesystem(repo_root: String, path: String) -> String:
+	var res_path := filesystem_target(repo_root, path)
+	if res_path.is_empty():
+		return "This file is outside the current Godot project:\n%s" % repo_root.path_join(path)
+	EditorInterface.get_file_system_dock().navigate_to_path(res_path)
+	return ""
+
+
+## The res:// path show_in_filesystem() selects, or "" outside the project.
+static func filesystem_target(repo_root: String, path: String) -> String:
+	var res_path := ProjectSettings.localize_path(repo_root.path_join(path))
+	if not res_path.begins_with("res://"):
+		return ""
+	if res_path != "res://":
+		res_path = res_path.trim_suffix("/")
+	while res_path != "res://" and not FileAccess.file_exists(res_path) and not DirAccess.dir_exists_absolute(res_path):
+		res_path = res_path.get_base_dir()
+	return res_path
+
+
 ## Like open_file(), but for scripts/text also jumps to line (1-based).
 static func open_file_at_line(repo_root: String, path: String, line: int) -> String:
 	var res_path := ProjectSettings.localize_path(repo_root.path_join(path))
