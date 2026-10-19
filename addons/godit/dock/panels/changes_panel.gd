@@ -129,6 +129,8 @@ var _confirm_dialog_action := "revert"
 
 ## Changed + new files at the last refresh (see changes_counted).
 var change_count := 0
+## Conflicted files at the last refresh; the dock title turns red with any.
+var conflicts := 0
 var _operation_bar: HBoxContainer
 
 ## Merge/rebase/cherry-pick/revert-in-progress strip above the toolbar.
@@ -441,6 +443,7 @@ func refresh(status_entries: Variant = null) -> void:
 
 	_update_commit_buttons_enabled(any_staged)
 	change_count = tracked_count + untracked_count
+	conflicts = conflict_count
 	changes_counted.emit(change_count)
 
 

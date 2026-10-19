@@ -29,6 +29,10 @@ func test_shows_the_branch_and_the_commits_to_push() -> void:
 	var button := _button(repo)
 	check("branch and one to push", button.text, "main ↑1")
 	check_contains("the upstream in the tooltip", button.tooltip_text, "main → origin/main")
+	var counts: Array = []
+	button.synced.connect(func(ahead: int, behind: int) -> void: counts.append([ahead, behind]))
+	button.refresh()
+	check("ahead and behind for the dock title", counts, [[1, 0]])
 
 func test_lists_local_then_remote_branches_and_filters_them() -> void:
 	var repo := _published_repo()

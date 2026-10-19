@@ -71,6 +71,10 @@ var _settings_window: SettingsWindowScript
 var branch_toolbar: BranchToolbarScript
 ## The quick commit window, created the first time it's opened.
 var _quick_commit: QuickCommitScript
+## What the dock title shows: changed files, and its color for conflicts or commits to pull.
+var _title_state := {"count": 0, "conflicts": 0, "behind": 0}
+## Bottom panel buttons on Godot < 4.6, where docks have no EditorDock to title: control -> Button.
+var _bottom_buttons := {}
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
@@ -166,7 +170,21 @@ func _enter_tree() -> void:
 		branch_toolbar = BranchToolbarScript.new()
 		branch_toolbar.visible = Settings.get_value(TOOLBAR_BRANCH_SETTING_KEY, true)
 		add_control_to_container(CONTAINER_TOOLBAR, branch_toolbar)
+		branch_toolbar.synced.connect(func(_ahead: int, behind: int) -> void:
+			_title_state["behind"] = behind
+			_update_dock_title()
+		)
 		branch_toolbar.set_repo(toolbar_repo)
+	if dock_instance.has_repo():
+		var changes: Control = dock_instance.changes_panel()
+		changes.changes_counted.connect(func(count: int) -> void:
+			_title_state["count"] = count
+			_title_state["conflicts"] = changes.conflicts
+			_update_dock_title()
+		)
+		_title_state["count"] = changes.change_count
+		_title_state["conflicts"] = changes.conflicts
+		_update_dock_title()
 
 	diff_gutter = DiffGutterScript.new()
 	add_child(diff_gutter)
@@ -665,7 +683,7 @@ func _apply_dock_layout() -> void:
 			var menu := _layout_menu(PopupMenu.new())
 			bottom_dock_container.add_child(menu, false, Node.INTERNAL_MODE_FRONT)
 			bottom_dock_container.set_popup(menu)
-			add_control_to_bottom_panel(bottom_dock_container, "Git Changes", commands.shortcut("toggle_dock"))
+			_bottom_buttons[bottom_dock_container] = add_control_to_bottom_panel(bottom_dock_container, "Git Changes", commands.shortcut("toggle_dock"))
 		LAYOUT_COMBINED:
 			remove_control_from_docks(dock_instance)
 			remove_control_from_bottom_panel(history_dock_instance)
@@ -680,12 +698,45 @@ func _apply_dock_layout() -> void:
 			combined_dock.use_shortcuts(commands.shortcuts())
 			_add_combined_dock()
 	_layout = want
+	_update_dock_title() # a dock of the new layout starts with its plain title
+
+
+## "Godit (5)" on whichever dock holds Changes, like the editor's "Debugger (2)": red with conflicts, yellow with commits to pull. Side docks of Godot < 4.6 are titled by their node name and stay as they are.
+func _update_dock_title() -> void:
+	var control: Control = dock_instance
+	var title := "Git"
+	if combined_dock != null:
+		control = combined_dock
+		title = "Godit"
+	elif bottom_dock_container != null:
+		control = bottom_dock_container
+		title = "Git Changes"
+	if _title_state["count"] > 0:
+		title += " (%d)" % _title_state["count"]
+	var color := Color(0, 0, 0, 0) # the editor's own
+	var theme := EditorInterface.get_editor_theme()
+	if _title_state["conflicts"] > 0:
+		color = theme.get_color(&"error_color", &"Editor")
+	elif _title_state["behind"] > 0:
+		color = theme.get_color(&"warning_color", &"Editor")
+	var dock := _editor_dock_of(control)
+	if dock != null:
+		dock.set("title", title)
+		dock.set("title_color", color)
+		return
+	var button: Button = _bottom_buttons.get(control)
+	if is_instance_valid(button):
+		button.text = title
+		if color.a > 0.0:
+			button.add_theme_color_override(&"font_color", color)
+		else:
+			button.remove_theme_color_override(&"font_color")
 
 
 ## Bottom panel by default. On 4.6+ as an EditorDock the user can move to a side dock or make floating, and the editor remembers where; older versions can only put it in the bottom panel.
 func _add_combined_dock() -> void:
 	if not ClassDB.class_exists("EditorDock"):
-		add_control_to_bottom_panel(combined_dock, "Godit", commands.shortcut("toggle_dock"))
+		_bottom_buttons[combined_dock] = add_control_to_bottom_panel(combined_dock, "Godit", commands.shortcut("toggle_dock"))
 		return
 	# Through ClassDB and call(): EditorDock, add_dock() and DOCK_SLOT_BOTTOM don't exist before 4.6, and naming them would break parsing there.
 	_combined_editor_dock = ClassDB.instantiate("EditorDock")

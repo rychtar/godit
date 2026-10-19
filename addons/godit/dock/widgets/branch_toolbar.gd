@@ -9,6 +9,9 @@ const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 ## Longer branch names are cut short on the button; the tooltip has the whole name.
 const MAX_NAME_LENGTH := 28
 
+## After every refresh, for the dock title's color.
+signal synced(ahead: int, behind: int)
+
 var _repo: RefCounted
 ## Refs and config the button was last drawn for; a poll that changes neither leaves it alone.
 var _drawn_for := ""
@@ -65,6 +68,7 @@ func refresh() -> void:
 		lines.append("%d to push, %d to pull." % [s["ahead"], s["behind"]] if s["ahead"] > 0 or s["behind"] > 0 else "Up to date with the last fetch.")
 	lines.append("Click to switch branches.")
 	tooltip_text = "\n".join(lines)
+	synced.emit(s["ahead"], s["behind"])
 
 
 ## The branch list under the button, or centered while the button is hidden.
