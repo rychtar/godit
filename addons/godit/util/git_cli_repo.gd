@@ -404,6 +404,32 @@ func list_branches(local_only: bool = true) -> Array:
 	return entries
 
 
+## Names HEAD was checked out on, newest first and each once, from HEAD's reflog (detached commits are in there too).
+func recent_checkouts(entries := 300) -> PackedStringArray:
+	var out := PackedStringArray()
+	var checkout := RegEx.create_from_string("^checkout: moving from (\\S+) to (\\S+)$")
+	for line in GitCli.lines(GitCli.run(_repo_root, ["reflog", "-n", str(entries), "--format=%gs"])["text"]):
+		var m := checkout.search(line)
+		if m == null:
+			continue
+		for name in [m.get_string(2), m.get_string(1)]:
+			if not out.has(name):
+				out.append(name)
+	return out
+
+
+## list_branches() entries with the current branch first, then local ones in recent_checkouts() order, then the rest as listed.
+static func recent_first(branches: Array, recent: PackedStringArray) -> Array:
+	var rank := {}
+	for i in branches.size():
+		var b: Dictionary = branches[i]
+		var at := -1 if b["is_remote"] else recent.find(b["name"])
+		rank[i] = -1 if b["is_head"] else (at if at != -1 else recent.size() + i)
+	var order := range(branches.size())
+	order.sort_custom(func(a: int, b: int) -> bool: return rank[a] < rank[b])
+	return order.map(func(i: int) -> Dictionary: return branches[i])
+
+
 static func _track_count(track: String, word: String) -> int:
 	var at := track.find(word + " ")
 	if at == -1:

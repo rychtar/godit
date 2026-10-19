@@ -10,6 +10,7 @@ const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
+const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
 ## Narrower than this, Fetch/Pull/Push show only their icons and the upstream line goes into the branch button's tooltip.
 const COMPACT_WIDTH := 420
 
@@ -274,7 +275,7 @@ func _fill_branch_menu() -> void:
 	popup.clear()
 	_menu_branches.clear()
 	popup.add_separator("Switch to branch")
-	for b in _repo.list_branches(true):
+	for b in GitCliRepo.recent_first(_repo.list_branches(true), _repo.recent_checkouts()):
 		var id := _menu_branches.size()
 		_menu_branches.append(b["name"])
 		popup.add_radio_check_item(b["name"], id)

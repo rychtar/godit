@@ -3,6 +3,7 @@
 extends Button
 
 const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
+const GitCliRepo := preload("res://addons/godit/util/git_cli_repo.gd")
 const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 
@@ -20,6 +21,8 @@ var _filter: LineEdit
 var _list: ItemList
 ## Per list item: {"kind": "local" | "remote" | "new", "name", "current"}.
 var _items: Array = []
+## Recently checked out branches, newest first, read when the list opens.
+var _recent := PackedStringArray()
 
 
 func _init() -> void:
@@ -76,6 +79,7 @@ func open_switcher() -> void:
 	if _repo == null:
 		return
 	_filter.text = ""
+	_recent = _repo.recent_checkouts()
 	_fill()
 	var popup_size := UiScale.size_i(340, 360)
 	if is_visible_in_tree():
@@ -124,12 +128,12 @@ func _on_filter_gui_input(event: InputEvent) -> void:
 	_filter.accept_event()
 
 
-## Local branches, then remote ones without a local branch of that name, then New Branch…; only those containing the filter.
+## Local branches (the current one, then the recently used ones), then remote ones without a local branch of that name, then New Branch…; only those containing the filter.
 func _fill() -> void:
 	_list.clear()
 	_items.clear()
 	var query := _filter.text.strip_edges().to_lower()
-	var branches: Array = _repo.list_branches(false)
+	var branches: Array = GitCliRepo.recent_first(_repo.list_branches(false), _recent)
 	var local_names := {}
 	for b: Dictionary in branches:
 		if not b["is_remote"]:

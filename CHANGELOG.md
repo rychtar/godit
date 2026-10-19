@@ -41,6 +41,7 @@
 - A diff option changed in one diff applies to every open diff.
 - The Godit tab is off by default; Godit Settings > Layout turns it on. While it's open, a file clicked in Changes or Git Log shows its diff there.
 - The Godit tab, opened before any file is selected, says how to get a diff there instead of "No diff to show."
+- The branch switcher in the toolbar and the sync bar's branch menu list the current branch first, then the ones checked out most recently, so `Enter` right away goes back to the previous branch.
 
 ### Fixed
 

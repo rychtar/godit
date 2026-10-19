@@ -42,10 +42,25 @@ func test_lists_local_then_remote_branches_and_filters_them() -> void:
 	git(root, ["fetch", "-q", "origin"])
 	var button := _button(repo)
 	button._fill()
-	check("locals, the remote one without a local branch, New Branch", _names(button), ["local:feature/login", "local:main", "remote:origin/shared", "new:"])
-	check("the first one to switch to is selected", Array(button._list.get_selected_items()), [0])
-	check_contains("the current one is marked", button._list.get_item_text(1), "(current)")
+	check("locals (the current one first), the remote one without a local branch, New Branch", _names(button), ["local:main", "local:feature/login", "remote:origin/shared", "new:"])
+	check("the first one to switch to is selected", Array(button._list.get_selected_items()), [1])
+	check_contains("the current one is marked", button._list.get_item_text(0), "(current)")
 	button._filter.text = "sha"
 	button._fill()
 	check("filtered", _names(button), ["remote:origin/shared", "new:sha"])
 	check("New Branch takes the typed name", button._list.get_item_text(1), "New Branch \"sha\"…")
+
+func test_recently_used_branches_come_first() -> void:
+	await tree.process_frame # the root isn't in the tree yet while the runner starts
+	var repo := _published_repo()
+	var root := repo.get_repo_root()
+	for branch in ["a", "b", "c"]:
+		git(root, ["branch", branch])
+	for branch in ["c", "a", "main"]:
+		git(root, ["checkout", "-q", branch])
+	check("newest first, each once", Array(repo.recent_checkouts()), ["main", "a", "c"])
+	var button := _button(repo)
+	button.open_switcher()
+	button._popup.hide()
+	check("the current one, the recent ones, then the rest", _names(button), ["local:main", "local:a", "local:c", "local:b", "new:"])
+	check("Enter goes back to the previous one", Array(button._list.get_selected_items()), [1])
