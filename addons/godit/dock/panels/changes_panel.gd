@@ -65,6 +65,8 @@ const ID_DONT_AUTO_ADD_EXT := 22
 const ID_MOVE_ALL_TO := 23
 const ID_SHOW_DIFF_TAB := 24
 const ID_LOCAL_HISTORY := 25
+## Pause after typing in the filter before the list is rebuilt.
+const FILTER_DELAY := 0.15
 
 const OPT_AUTO_STAGE := 0
 const OPT_AUTO_ADD := 1
@@ -160,6 +162,12 @@ var _last_content_signature := ""
 ## path -> status at the last refresh, so auto-stage/auto-add only touch changes that just appeared (never undoing a manual uncheck).
 var _known_status := {}
 var _known_ready := false
+## The status the tree was last built from, rebuilt from as the filter changes.
+var _last_entries: Array = []
+## Shows only the files whose path contains its text; conflicts always show.
+var _filter: LineEdit
+## Bumped by every filter edit, so only the last one rebuilds the list.
+var _filter_edits := 0
 
 
 func _ready() -> void:
@@ -205,6 +213,7 @@ func _ready() -> void:
 	stash_button.pressed.connect(_on_stash_button_pressed)
 	%DeleteChangelistButton.add_sibling(stash_button)
 	stash_button.add_sibling(_build_options_button())
+	_build_filter()
 	for button: Button in [%NewChangelistButton, %DeleteChangelistButton]:
 		button.icon = get_theme_icon(&"Add" if button == %NewChangelistButton else &"Remove", &"EditorIcons")
 		button.text = ""
@@ -313,6 +322,7 @@ func refresh(status_entries: Variant = null) -> void:
 	if status_entries == null and _repo.status_header.is_empty():
 		return # git failed, see _on_polled()
 	entries = _auto_track(entries)
+	_last_entries = entries
 	_last_status_signature = _status_signature(entries)
 	_last_content_signature = _content_signature(entries)
 	_follow_branch_switch()
@@ -381,6 +391,8 @@ func refresh(status_entries: Variant = null) -> void:
 	var file_items := {}
 	var ordered_entries: Array = entries.filter(func(e: Dictionary) -> bool: return not _nests_under_owner(e["path"]))
 	ordered_entries.append_array(entries.filter(func(e: Dictionary) -> bool: return _nests_under_owner(e["path"])))
+	# path -> its changelist ("" for New Files), filtered out or not: the filter leaves the dock title's count and the changelist menu's alone.
+	var list_of := {}
 	for entry in ordered_entries:
 		var path: String = entry["path"]
 		var status: int = entry["status"]
@@ -396,6 +408,10 @@ func refresh(status_entries: Variant = null) -> void:
 		# it as untracked again, but it shouldn't vanish into New Files.
 		var assignments: Dictionary = _changelist_state["assignments"]
 		var is_new: bool = GitStatusFlags.is_untracked(status) and not assignments.has(path)
+		var owner_list: Variant = list_of.get(CompanionFiles.owner_of(path))
+		list_of[path] = owner_list if owner_list != null else ("" if is_new else _changelist_for_path(path))
+		if not _matches_filter(path):
+			continue
 		var owner_item: TreeItem = file_items.get(CompanionFiles.owner_of(path))
 		if owner_item != null:
 			file_items[path] = _add_file_item(null, {}, path, status, staged, not is_new, owner_item)
@@ -408,14 +424,15 @@ func refresh(status_entries: Variant = null) -> void:
 
 	var tracked_count := 0
 	var counts := {}
+	for list_name: String in list_of.values():
+		counts[list_name] = counts.get(list_name, 0) + 1
 	for name in _changelist_state["names"]:
 		var is_active: bool = name == _changelist_state["active"]
 		var group: TreeItem = changelist_groups[name]
 		var agg := _aggregate_files(group)
 		var count: int = agg["count"]
 		tracked_count += count
-		counts[name] = count
-		group.set_text(TEXT_COLUMN, "%s %s%s  %d %s" % ["●" if is_active else "○", name, "  ⎇" if name == current_branch else "", count, "file" if count == 1 else "files"])
+		group.set_text(TEXT_COLUMN, "%s %s%s  %s %s" % ["●" if is_active else "○", name, "  ⎇" if name == current_branch else "", _count_label(count, counts.get(name, 0)), "file" if counts.get(name, 0) == 1 else "files"])
 		group.set_custom_color(TEXT_COLUMN, Color(0.68, 0.85, 1.0) if is_active else Color(0.75, 0.75, 0.78))
 		_set_tristate(group, count, agg["staged"], agg["touched"])
 		group.collapsed = count == 0
@@ -430,7 +447,7 @@ func refresh(status_entries: Variant = null) -> void:
 
 	var untracked_agg := _aggregate_files(untracked_group)
 	var untracked_count: int = untracked_agg["count"]
-	untracked_group.set_text(TEXT_COLUMN, "New Files  %d — not in Git yet, check to add to \"%s\"" % [untracked_count, _changelist_state["active"]])
+	untracked_group.set_text(TEXT_COLUMN, "New Files  %s — not in Git yet, check to add to \"%s\"" % [_count_label(untracked_count, counts.get("", 0)), _changelist_state["active"]])
 	untracked_group.collapsed = untracked_count == 0
 	untracked_group.set_visible(untracked_count > 0)
 	spacer.set_visible(untracked_count > 0)
@@ -442,7 +459,9 @@ func refresh(status_entries: Variant = null) -> void:
 		_commit_message.text = _repo.get_merge_message()
 
 	if Time.get_ticks_msec() >= _note_until: # else a _notify() note is still up
-		_status_label.text = "No changes." if untracked_count == 0 and tracked_count == 0 else ""
+		_status_label.text = ""
+		if untracked_count == 0 and tracked_count == 0:
+			_status_label.text = "No changed file matches \"%s\"." % _filter.text.strip_edges() if not list_of.is_empty() else "No changes."
 		if not overlap.is_empty():
 			_status_label.text = "⚠ %d file%s you changed %s also changed on %s — pull to merge now, while it's small." % [
 					overlap.size(), "" if overlap.size() == 1 else "s", "is" if overlap.size() == 1 else "are", _repo.get_upstream()]
@@ -450,9 +469,14 @@ func refresh(status_entries: Variant = null) -> void:
 	_update_commit_buttons_enabled(any_staged)
 	suggestion = CommitSuggestion.suggest(entries)
 	_commit_message.placeholder_text = "Commit message" if suggestion.is_empty() else "Commit message (Tab: %s)" % suggestion
-	change_count = tracked_count + untracked_count
+	change_count = list_of.size()
 	conflicts = conflict_count
 	changes_counted.emit(change_count)
+
+
+## "3", or "1 of 3" while the filter hides some.
+static func _count_label(shown: int, total: int) -> String:
+	return str(shown) if shown == total else "%d of %d" % [shown, total]
 
 
 ## Flags rows whose file the upstream changed too (pulling may conflict); returns incoming_overlap() for the status line.
@@ -599,6 +623,57 @@ func _build_options_button() -> MenuButton:
 	return button
 
 
+## In the changelist row before the Diff switch; on a narrow dock it wraps to a line of its own.
+func _build_filter() -> void:
+	_filter = LineEdit.new()
+	_filter.placeholder_text = "Filter files"
+	_filter.tooltip_text = "Show only the files whose path contains this (Ctrl/Cmd+F in the list, Esc clears it). Commit still takes every checked file, shown or not."
+	_filter.clear_button_enabled = true
+	_filter.custom_minimum_size.x = UiScale.px(110)
+	_filter.size_flags_horizontal = SIZE_EXPAND_FILL
+	if has_theme_icon(&"Search", &"EditorIcons"):
+		_filter.right_icon = get_theme_icon(&"Search", &"EditorIcons")
+	_filter.text_changed.connect(func(_t: String) -> void: _refilter())
+	_filter.gui_input.connect(_on_filter_gui_input)
+	%ChangelistRow.add_child(_filter)
+	%ChangelistRow.move_child(_filter, _diff_toggle.get_index())
+
+
+func _matches_filter(path: String) -> bool:
+	var needle := _filter.text.strip_edges().to_lower()
+	return needle.is_empty() or path.to_lower().contains(needle) # contains("") is false
+
+
+## Rebuilds the list from the last status once typing pauses.
+func _refilter() -> void:
+	_filter_edits += 1
+	var edit := _filter_edits
+	await get_tree().create_timer(FILTER_DELAY).timeout
+	if edit == _filter_edits and _repo != null:
+		refresh(_last_entries)
+
+
+## Esc clears the filter; Down or Enter moves to the first file in the list.
+func _on_filter_gui_input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key == null or not key.pressed:
+		return
+	if key.keycode == KEY_ESCAPE and not _filter.text.is_empty():
+		_filter.text = ""
+		_refilter()
+		_filter.accept_event()
+	elif key.keycode in [KEY_DOWN, KEY_ENTER, KEY_KP_ENTER]:
+		_tree.grab_focus()
+		var item := _tree.get_root().get_next_visible() if _tree.get_root() != null else null
+		while item != null and not (item.get_metadata(0) is Dictionary and item.get_metadata(0).has("path")):
+			item = item.get_next_visible()
+		if item != null:
+			_tree.deselect_all()
+			item.select(TEXT_COLUMN)
+			_tree.scroll_to_item(item)
+		_filter.accept_event()
+
+
 func _edit_auto_add_masks() -> void:
 	var masks: Array = Settings.get_value(AUTO_ADD_MASKS_SETTING_KEY, DEFAULT_AUTO_ADD_MASKS)
 	var answer: Variant = await Dialogs.form(self, "Auto-add Ignore Masks", [
@@ -658,6 +733,11 @@ func _queue_show_selected_diff() -> void:
 
 ## Cells that can't be selected (folders, group headers, checkboxes) get neither item_activated nor item_mouse_selected: a double click on a changelist header makes it active, a right click opens the menu.
 func _on_tree_gui_input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key != null:
+		if key.pressed and _on_tree_key(key):
+			_tree.accept_event()
+		return
 	var mb := event as InputEventMouseButton
 	if mb == null or not mb.pressed:
 		return
@@ -672,6 +752,58 @@ func _on_tree_gui_input(event: InputEvent) -> void:
 	elif mb.double_click and mb.button_index == MOUSE_BUTTON_LEFT and item.get_metadata(0).get("kind", "") == "changelist_group":
 		_set_active_changelist(item.get_metadata(0)["name"])
 		_tree.accept_event()
+
+
+## Space stages or unstages the selected files (adds new ones), Delete or Ctrl/Cmd+Backspace reverts them, Ctrl/Cmd+C copies their paths, Ctrl/Cmd+F goes to the filter; false for any other key.
+func _on_tree_key(key: InputEventKey) -> bool:
+	var command := key.is_command_or_control_pressed()
+	if key.keycode == KEY_F and command:
+		_filter.grab_focus()
+		_filter.select_all()
+		return true
+	var items: Array[TreeItem] = []
+	var item := _tree.get_next_selected(null)
+	while item != null:
+		if item.get_metadata(0) is Dictionary and item.get_metadata(0).has("path"):
+			items.append(item)
+		item = _tree.get_next_selected(item)
+	if items.is_empty():
+		return false
+	var changed := items.filter(func(i: TreeItem) -> bool: return i.get_metadata(0)["kind"] != "conflict_file") # staging one would mark it resolved
+	if key.keycode == KEY_SPACE and not command:
+		if not key.echo and not changed.is_empty():
+			_toggle_staged(changed)
+	elif key.keycode == KEY_DELETE or (key.keycode == KEY_BACKSPACE and command):
+		if not key.echo and not changed.is_empty():
+			_revert_rows(changed)
+	elif key.keycode == KEY_C and command:
+		var paths := items.map(func(i: TreeItem) -> String: return i.get_metadata(0)["path"])
+		DisplayServer.clipboard_set("\n".join(paths))
+		_notify("Copied %s." % ("the path" if paths.size() == 1 else "%d paths" % paths.size()))
+	else:
+		return false
+	return true
+
+
+## Unstages the rows when every one is fully staged, else stages them; new files are added to Git.
+func _toggle_staged(rows: Array) -> void:
+	var tracked := rows.filter(func(i: TreeItem) -> bool: return i.get_metadata(0)["kind"] == "file")
+	var new_paths := rows.filter(func(i: TreeItem) -> bool: return i.get_metadata(0)["kind"] == "untracked_file").map(func(i: TreeItem) -> String: return i.get_metadata(0)["path"])
+	var all_staged := tracked.all(func(i: TreeItem) -> bool: return i.is_checked(CHECKBOX_COLUMN))
+	if not tracked.is_empty():
+		_set_staged(tracked.map(func(i: TreeItem) -> String: return i.get_metadata(0)["path"]), not all_staged)
+	if not new_paths.is_empty() and (tracked.is_empty() or not all_staged):
+		_add_to_vcs(_with_companions(new_paths))
+	refresh.call_deferred()
+
+
+## One file gets the same question as its menu's Revert..., several the list of them.
+func _revert_rows(rows: Array) -> void:
+	if rows.size() == 1:
+		_context_target = rows[0].get_metadata(0)
+		_on_context_menu_id_pressed(ID_REVERT)
+	else:
+		await _revert_paths(rows.map(func(i: TreeItem) -> String: return i.get_metadata(0)["path"]))
 
 
 func _get_tree_drag_data(at_position: Vector2) -> Variant:
@@ -751,6 +883,8 @@ func _reselect(root: TreeItem, path: String, scroll_y: float) -> void:
 
 ## Selects path's row (showing its unstaged diff when it has one) and scrolls the diff to line.
 func reveal(path: String, line: int) -> void:
+	if not _matches_filter(path):
+		_filter.text = ""
 	refresh()
 	var item := _find_item_by_path(_tree.get_root(), path)
 	if item == null:
@@ -982,7 +1116,7 @@ func _add_file_item(group_root: TreeItem, folder_cache: Dictionary, path: String
 	item.set_custom_color(TEXT_COLUMN, GitIcons.status_color(status))
 	var meta := { "kind": "file" if in_changelist else "untracked_file", "path": path, "status": status, "staged": staged }
 	item.set_metadata(0, meta)
-	var hint := "Check to stage, uncheck to unstage. Double-click to open." if in_changelist else "Check to add to Git. Right-click to ignore. Double-click to open."
+	var hint := "Check or press Space to stage, uncheck to unstage, Delete to revert. Double-click to open." if in_changelist else "Check or press Space to add to Git. Right-click to ignore. Double-click to open."
 	item.set_tooltip_text(TEXT_COLUMN, "%s — %s\n%s" % [path, GitStatusFlags.short_label(status), hint])
 	if parent_item != null:
 		parent_item.collapsed = true
