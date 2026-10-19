@@ -302,12 +302,24 @@ func new_branch_dialog(start_point: String) -> void:
 	_finish()
 
 
-## Checks out a local branch, or a remote one as a new branch tracking it, after saving open files; false when it didn't happen. Also the editor toolbar's switcher.
+## Checks out a local branch, or a remote one as a new branch tracking it, after saving open files; when uncommitted changes are in the way, offers to take them along. False when it didn't switch. Also the editor toolbar's switcher and Branches.
 static func switch_branch(parent: Node, repo: RefCounted, branch: String, remote := false) -> bool:
 	if not await SaveGuard.ensure_saved(parent, "Checkout"):
 		return false
 	var result: Dictionary = repo.checkout_remote_branch(branch) if remote else repo.checkout_branch(branch)
+	if not result["ok"] and GitErrors.classify(result["error"]) == GitErrors.DIRTY:
+		var choice: String = await Dialogs.error_with_actions(parent, "Uncommitted Changes in the Way",
+				"%s\n\nGodit can stash them, switch to %s and put them back there." % [GitErrors.explain(result["error"]), branch],
+				{ "carry": "Stash, Switch, Re-apply" })
+		if choice != "carry":
+			return false
+		result = repo.checkout_carrying_changes(branch, remote)
 	EditorOpen.refresh_all_external_changes()
+	if result.get("switched", false) and not result["ok"]:
+		await Dialogs.error(parent, "Switched, Changes Conflicted" if result.get("conflicts", false) else "Switched, Changes Not Re-applied",
+				"You're on %s now, but putting your changes back %s. They're also kept in the stash (Branches > Stashes)." % [branch,
+				"conflicted: resolve the files in Changes" if result.get("conflicts", false) else "failed:\n" + GitErrors.explain(result["error"])])
+		return true
 	if not result["ok"]:
 		await Dialogs.error(parent, "Checkout failed", GitErrors.explain(result["error"]))
 	return result["ok"]

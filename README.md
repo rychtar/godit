@@ -42,7 +42,7 @@ If `addons/godit/` is in your repository and a checkout, pull or reset changes i
 - **Commit**: tick files in **File Status**, type a message and press `Ctrl/Cmd+Enter`. Add `Shift` to also push. From anywhere else, `Alt+C` opens the same in a small window.
 - **Stage part of a file**: open its diff and stage a hunk or selected lines.
 - **Changelists**: double-click one to make it active and drag files between them.
-- **Branches**: double-click one to switch; right-click it to merge, rebase or push, or right-click a section header to add a branch, tag or remote. Or click the branch in the editor's toolbar, type a few letters and press Enter.
+- **Branches**: double-click one to switch; right-click it to merge, rebase or push, or right-click a section header to add a branch, tag or remote. Or click the branch in the editor's toolbar, type a few letters and press Enter. When uncommitted changes are in the way, Godit offers to take them along to the other branch.
 - **History**: the commit graph, with search, cherry-pick and history editing. Right-click a commit to edit it or rebase from it, or a file to open its version from then.
 - **Big diffs**: turn on the Godit tab in Godit Settings > Layout. It sits next to 2D, 3D and Script; the expand button above a diff opens the diff there, and while the tab is open, a file clicked in Changes or Git Log shows there.
 - **Everything else**: right-click a file, branch or commit.

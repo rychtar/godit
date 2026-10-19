@@ -929,6 +929,24 @@ func checkout_branch(name: String) -> Dictionary:
 	return _checkout(name)
 
 
+## Switches to a local branch, or a remote one as a new tracking branch, taking the uncommitted changes along (new files too): stash, checkout, pop. {"ok", "error", "switched", "conflicts"}: when putting them back conflicts, the switch has happened and the changes stay in the stash as well.
+func checkout_carrying_changes(branch: String, remote := false) -> Dictionary:
+	var stashed := stash_push("Godit: carried to %s" % branch, true)
+	if not stashed["ok"]:
+		return stashed
+	var had_changes: bool = not stashed["output"].contains("No local changes")
+	var result: Dictionary = checkout_remote_branch(branch) if remote else checkout_branch(branch)
+	if not had_changes:
+		return result
+	if not result["ok"]:
+		stash_apply("stash@{0}", true) # back as they were, on the branch that didn't change
+		return result
+	var popped := stash_apply("stash@{0}", true)
+	popped["switched"] = true
+	popped["conflicts"] = not popped["ok"] and get_status().any(func(e: Dictionary) -> bool: return e["status"] & GitStatusFlags.CONFLICTED)
+	return popped
+
+
 ## Checks out an arbitrary commit, leaving HEAD detached.
 func checkout_commit(oid: String) -> Dictionary:
 	return _checkout(oid)
