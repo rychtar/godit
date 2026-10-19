@@ -1703,24 +1703,25 @@ func _on_commit_push_button_pressed() -> void:
 	_do_commit(true)
 
 
-func _do_commit(push_after: bool) -> void:
+## True once committed (the quick commit window closes then).
+func _do_commit(push_after: bool) -> bool:
 	var message := _commit_message.text.strip_edges()
 	if message.is_empty():
 		_show_error("Commit failed", "Commit message can't be empty.")
-		return
+		return false
 	if not SaveGuard.unsaved_files().is_empty():
 		if not await SaveGuard.ensure_saved(self, "Commit", true):
-			return
+			return false
 		refresh() # auto-stages what was just saved
 	if not await _check_large_files():
-		return
+		return false
 	if not await _check_references():
-		return
+		return false
 
 	var result: Dictionary = _repo.commit(message, _amend_check.button_pressed)
 	if not result["ok"]:
 		_show_error("Commit failed", result["error"])
-		return
+		return false
 
 	_commit_message.text = ""
 	_amend_check.button_pressed = false
@@ -1731,6 +1732,7 @@ func _do_commit(push_after: bool) -> void:
 
 	if push_after:
 		_do_push()
+	return true
 
 
 const REFERENCE_STATES := {

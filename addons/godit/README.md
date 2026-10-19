@@ -7,6 +7,7 @@ A git client inside the Godot editor. Stage, commit, switch branches and browse 
 ## Features
 
 - **Changes panel**: stage files, folders or single lines with a checkbox, then commit or push. Fits a side dock down to 200 px.
+- **Quick commit**: `Alt+C` opens a small commit window from anywhere, with the dock closed: tick the files, type the message, Commit or Commit and Push.
 - **Changelists**: group changes and commit or shelve them separately.
 - **Diff view**: side by side or unified, with syntax colors. Images side by side, with a swipe line or as an onion skin.
 - **Godit tab**: any diff full size next to 2D, 3D and Script, with hunk and line staging.
@@ -33,8 +34,8 @@ For push and pull, git has to log in without asking: use a credential helper for
 ## Usage
 
 - **Where**: Godit opens as one SourceTree-style dock in the bottom panel: File Status, History and Console on the left with your branches under them. On Godot 4.6+ drag it to a side dock or make it floating, e.g. on a second monitor, and it stays there. The button at the left of its toolbar hides the sidebar, the one at the right switches the layout. Dividers stay where you drag them. Narrower than 480 px, Changes leaves the diff out: right-click a file, Show Diff in the Godit Tab.
-- **Keyboard**: `Ctrl/Cmd+1` to `4` open File Status, History, Branches and Console, `Alt+G` shows or hides the Godit dock. Every Godit command is in the Command Palette (`Ctrl/Cmd+Shift+P`, type "godit"): commit, fetch, pull, push, switch branch, the layouts, blame, settings, history of the open scene or script. On Godot 4.5+ bind or change their keys in Editor Settings > Shortcuts > Godit.
-- **Commit**: tick files in **File Status**, type a message and press `Ctrl/Cmd+Enter`. Add `Shift` to also push.
+- **Keyboard**: `Ctrl/Cmd+1` to `4` open File Status, History, Branches and Console, `Alt+G` shows or hides the Godit dock, `Alt+C` opens the quick commit window. Every Godit command is in the Command Palette (`Ctrl/Cmd+Shift+P`, type "godit"): commit, fetch, pull, push, switch branch, the layouts, blame, settings, history of the open scene or script. On Godot 4.5+ bind or change their keys in Editor Settings > Shortcuts > Godit.
+- **Commit**: tick files in **File Status**, type a message and press `Ctrl/Cmd+Enter`. Add `Shift` to also push. From anywhere else, `Alt+C` opens the same in a small window.
 - **Stage part of a file**: open its diff and stage a hunk or selected lines.
 - **Changelists**: double-click one to make it active and drag files between them.
 - **Branches**: double-click one to switch; right-click it to merge, rebase or push, or right-click a section header to add a branch, tag or remote. Or click the branch in the editor's toolbar, type a few letters and press Enter.

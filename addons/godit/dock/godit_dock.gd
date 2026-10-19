@@ -153,6 +153,11 @@ func revert_paths(paths: Array) -> void:
 		await _changes_panel._revert_paths(paths)
 
 
+## The Changes panel, wherever the layout put it; the quick commit window drives it.
+func changes_panel() -> Control:
+	return _changes_panel
+
+
 ## The Changes diff, which the Godit tab shows when opened with nothing else.
 func changes_diff_view() -> Control:
 	return _changes_panel._diff_view

@@ -26,6 +26,7 @@ const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const SettingsWindowScript := preload("res://addons/godit/dock/widgets/settings_window.gd")
 const BranchToolbarScript := preload("res://addons/godit/dock/widgets/branch_toolbar.gd")
 const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
+const QuickCommitScript := preload("res://addons/godit/dock/widgets/quick_commit.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -68,6 +69,8 @@ var commands: RefCounted
 var _settings_window: SettingsWindowScript
 ## The current branch in the editor's main toolbar, or null outside a repository.
 var branch_toolbar: BranchToolbarScript
+## The quick commit window, created the first time it's opened.
+var _quick_commit: QuickCommitScript
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
@@ -244,6 +247,8 @@ func _exit_tree() -> void:
 	if branch_toolbar != null:
 		remove_control_from_container(CONTAINER_TOOLBAR, branch_toolbar)
 		branch_toolbar.free()
+	if _quick_commit != null:
+		_quick_commit.free()
 	remove_tool_menu_item("Godit")
 	commands.clear()
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
@@ -304,7 +309,7 @@ func _add_commands() -> void:
 	commands.add("show_history", "Show History", _reveal_history, [EditorCommands.command_digit(KEY_2)])
 	commands.add("show_branches", "Show Branches", _reveal_branches, [EditorCommands.command_digit(KEY_3)])
 	commands.add("show_console", "Show Console", _show_console, [EditorCommands.command_digit(KEY_4)])
-	commands.add("commit", "Commit…", _show_changes.bind("commit"))
+	commands.add("commit", "Commit…", open_quick_commit, [EditorCommands.alt_key(KEY_C)])
 	commands.add("fetch", "Fetch", func() -> void: dock_instance.press_sync("fetch"))
 	commands.add("pull", "Pull", func() -> void: dock_instance.press_sync("pull"))
 	commands.add("push", "Push", func() -> void: dock_instance.press_sync("push"))
@@ -542,6 +547,16 @@ func _on_setting_changed(key: String) -> void:
 		TOOLBAR_BRANCH_SETTING_KEY:
 			if branch_toolbar != null:
 				branch_toolbar.visible = Settings.get_value(TOOLBAR_BRANCH_SETTING_KEY, true)
+
+
+## Commit from anywhere without opening the dock ("Godit: Commit…", Alt+C).
+func open_quick_commit() -> void:
+	if not dock_instance.has_repo():
+		return
+	if _quick_commit == null:
+		_quick_commit = QuickCommitScript.new(dock_instance.changes_panel())
+		EditorInterface.get_base_control().add_child(_quick_commit) # not in a dock: switching the layout frees those
+	_quick_commit.open()
 
 
 ## Godit Settings, from the Tools menu, the docks' ⋮ menus and the palette.
