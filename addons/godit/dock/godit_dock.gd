@@ -8,7 +8,8 @@ const RepoInitView := preload("res://addons/godit/dock/widgets/repo_init_view.gd
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 
 const AUTO_FETCH_SETTING_KEY := "auto_fetch"
-const AUTO_FETCH_INTERVAL_SECS := 600.0
+const AUTO_FETCH_MINUTES_KEY := "auto_fetch_minutes"
+const AUTO_FETCH_DEFAULT_MINUTES := 10
 
 ## Forwarded from the Changes panel; plugin.gd routes it to the Git Log panel.
 signal file_history_requested(path: String)
@@ -51,7 +52,6 @@ func _ready() -> void:
 	)
 
 	_auto_fetch_timer = Timer.new()
-	_auto_fetch_timer.wait_time = AUTO_FETCH_INTERVAL_SECS
 	_auto_fetch_timer.timeout.connect(_on_auto_fetch_timeout)
 	# On a panel, not this dock: in bottom-panel mode the dock is out of the tree and its timers wouldn't tick.
 	_changes_panel.add_child(_auto_fetch_timer)
@@ -62,13 +62,14 @@ func has_repo() -> bool:
 	return _repo != null
 
 
-## Called by plugin.gd when the Tools menu toggle changes.
+## Called by plugin.gd when the toggle or the interval changes.
 func apply_auto_fetch_setting() -> void:
 	if _auto_fetch_timer == null:
 		return
+	var interval := maxf(1.0, float(Settings.get_value(AUTO_FETCH_MINUTES_KEY, AUTO_FETCH_DEFAULT_MINUTES))) * 60.0
 	if Settings.get_value(AUTO_FETCH_SETTING_KEY, false):
-		if _auto_fetch_timer.is_stopped():
-			_auto_fetch_timer.start()
+		if _auto_fetch_timer.is_stopped() or not is_equal_approx(_auto_fetch_timer.wait_time, interval):
+			_auto_fetch_timer.start(interval)
 	else:
 		_auto_fetch_timer.stop()
 

@@ -9,6 +9,13 @@
 - **Layout menu** in the combined dock's toolbar and in the tab bars of the Git dock, Git Log and the bottom tabs; switching shows where the panels went.
 - **Combined dock**: the toolbar button hides the sidebar (remembered); the view buttons move into the toolbar and Branches becomes a view.
 - Dividers remember where they were dragged, across resizes and restarts: Changes list and diff, Git Log graph, details and file diff, the combined dock's sidebar.
+- **Godit Settings**: a window like Godot's Editor Settings, from Tools > Godit > Settings…, the docks' ⋮ menu or "Godit: Settings…" in the Command Palette: the sections on the left, the chosen one's options on the right with a line on what each does and Reset, and a filter that narrows both. Background fetch and auto-save get their intervals there.
+
+### Changed
+
+- Preferences are kept for all projects (`godit_settings.cfg` next to the editor's own settings) instead of per project: the layout, the Godit tab, diff options, History columns, blame, the Inspector rows, auto-stage and auto-add, confirmations and the sync options. A value an earlier version saved in a project still applies there until it's changed. The auto-add ignore masks are saved in `project.godot`, so the team shares them. The open view, divider positions and Git Log's Remotes/Stashes filters stay per project.
+- Tools > Godit holds Settings…, blame, background fetch, the Inspector rows and the layout; the other switches are in Godit Settings.
+- A diff option changed in one diff applies to every open diff.
 
 ### Fixed
 

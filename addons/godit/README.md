@@ -43,9 +43,9 @@ For push and pull, git has to log in without asking: use a credential helper for
 
 ## Settings
 
-Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, a faster `git status` for large projects (git's file system monitor), the Godit tab, changes in the Inspector, and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel. The layout menu in the dock's toolbar or tab bar switches it too.
+**Godit Settings** (Project > Tools > Godit > Settings…, the ⋮ menu in the docks, or "Godit: Settings…" in the Command Palette) lists every option with a line on what it does, a filter and Reset per section: the layout (one combined dock by default, a Git dock plus Git Log, or both in the bottom panel), the Godit tab, auto-staging and auto-adding new files with the masks for files to skip (for example `*.psd` source art), diff options, History columns, blame, changes in the Inspector, background fetch and auto-save with their intervals, auto-reload, and a faster `git status` for large projects (git's file system monitor). Tools > Godit keeps the layout and the most used switches.
 
-The ⋮ menu in the Changes panel controls auto-staging, auto-adding new files and the masks for files to skip (for example `*.psd` source art). `.import` and `.uid` files are added with the file they belong to, since Godot needs them in the repo.
+Your preferences are kept for all your projects, in the editor's settings folder. The masks are saved in `project.godot`, so the whole team shares them. The open view and the divider positions stay per project. `.import` and `.uid` files are added with the file they belong to, since Godot needs them in the repo.
 
 ## License
 

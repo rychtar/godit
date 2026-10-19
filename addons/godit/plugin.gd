@@ -10,8 +10,6 @@ const ScriptMenuScript := preload("res://addons/godit/dock/gutter/script_menu.gd
 const Settings := preload("res://addons/godit/util/settings.gd")
 const GitCli := preload("res://addons/godit/util/git_cli.gd")
 const GoditDockScript := preload("res://addons/godit/dock/godit_dock.gd")
-const ChangesPanelScript := preload("res://addons/godit/dock/panels/changes_panel.gd")
-const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
 const FilesystemColorsScript := preload("res://addons/godit/dock/filesystem/filesystem_colors.gd")
 const FilesystemMenuScript := preload("res://addons/godit/dock/filesystem/filesystem_menu.gd")
 const CombinedDockScript := preload("res://addons/godit/dock/godit_combined_dock.gd")
@@ -25,6 +23,7 @@ const SceneDockColorsScript := preload("res://addons/godit/dock/inspector/scene_
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const EditorCommands := preload("res://addons/godit/util/editor_commands.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
+const SettingsWindowScript := preload("res://addons/godit/dock/widgets/settings_window.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -63,17 +62,18 @@ var head_inspector: EditorInspectorPlugin
 var scene_dock_colors: Node
 ## Command Palette entries and their shortcuts.
 var commands: RefCounted
+## Godit Settings, created the first time it's opened.
+var _settings_window: SettingsWindowScript
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
-const ID_AUTO_RELOAD := 0
 
 const AUTO_SAVE_SETTING_KEY := "auto_save_scripts"
 const AUTO_SAVE_EDITOR_SETTING := "text_editor/behavior/files/autosave_interval_secs"
 const AUTO_SAVE_INTERVAL_SECS := 3
+const AUTO_SAVE_SECONDS_KEY := "auto_save_seconds"
 ## The user's own autosave interval, kept while Godit's auto-save is on so turning it off puts it back.
 const AUTO_SAVE_ORIGINAL_KEY := "auto_save_original_interval"
-const ID_AUTO_SAVE := 1
 
 ## Replaced by DOCK_LAYOUT_SETTING_KEY; still read as the default for users who had it on.
 const CHANGES_BOTTOM_DOCK_SETTING_KEY := "changes_panel_bottom_dock"
@@ -85,6 +85,7 @@ const ID_LAYOUT_BOTTOM := 2
 const ID_LAYOUT_SEPARATE := 7
 const ID_LAYOUT_COMBINED := 8
 const LAYOUT_IDS := {ID_LAYOUT_SEPARATE: LAYOUT_SEPARATE, ID_LAYOUT_BOTTOM: LAYOUT_BOTTOM, ID_LAYOUT_COMBINED: LAYOUT_COMBINED}
+const LAYOUT_ORDER := [LAYOUT_COMBINED, LAYOUT_SEPARATE, LAYOUT_BOTTOM]
 ## Shorter than the Tools menu's, for the menus inside the docks and the command palette.
 const LAYOUT_TITLES := {LAYOUT_COMBINED: "Combined Dock", LAYOUT_SEPARATE: "Git Dock and Git Log", LAYOUT_BOTTOM: "Both in the Bottom Panel"}
 const LAYOUT_TOOLTIPS := {
@@ -101,16 +102,14 @@ const BOTTOM_PANEL_MIN_HEIGHT := 300
 const BLAME_SETTING_KEY := "show_blame"
 const ID_BLAME := 4
 
-const ID_CONFIRM_SHORTCUT_COMMIT := 5
-const ID_SAVE_BEFORE_GIT := 6
-const ID_FAST_STATUS := 9
-
 const MAIN_SCREEN_SETTING_KEY := "diff_main_screen"
-const ID_MAIN_SCREEN := 10
 const MAIN_SCREEN_NAME := "Godit"
 
 const INSPECTOR_SETTING_KEY := "inspector_changes"
 const ID_INSPECTOR := 11
+const ID_SETTINGS := 12
+## The Tools menu's toggles, by item id; the rest are in Godit Settings.
+const TOOLS_TOGGLES := {ID_BLAME: [BLAME_SETTING_KEY, false], ID_AUTO_FETCH: [GoditDockScript.AUTO_FETCH_SETTING_KEY, false], ID_INSPECTOR: [INSPECTOR_SETTING_KEY, true]}
 
 
 func _enter_tree() -> void:
@@ -120,38 +119,24 @@ func _enter_tree() -> void:
 
 	tools_menu = PopupMenu.new()
 	tools_menu.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # it goes into the editor's Tools menu, which would translate it (see godit_dock.gd)
-	tools_menu.add_check_item("Auto-reload files changed externally (no confirmation)", ID_AUTO_RELOAD)
-	tools_menu.set_item_checked(tools_menu.get_item_index(ID_AUTO_RELOAD), Settings.get_value(AUTO_RELOAD_SETTING_KEY, true))
-	tools_menu.add_check_item("Auto-save scripts every %ds" % AUTO_SAVE_INTERVAL_SECS, ID_AUTO_SAVE)
-	tools_menu.set_item_checked(tools_menu.get_item_index(ID_AUTO_SAVE), Settings.get_value(AUTO_SAVE_SETTING_KEY, false))
-	tools_menu.add_check_item("Fetch remotes in the background every %d min" % int(GoditDockScript.AUTO_FETCH_INTERVAL_SECS / 60), ID_AUTO_FETCH)
-	tools_menu.set_item_checked(tools_menu.get_item_index(ID_AUTO_FETCH), Settings.get_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, false))
+	tools_menu.add_item("Settings…", ID_SETTINGS)
+	tools_menu.add_separator()
 	tools_menu.add_check_item("Show blame in the script editor", ID_BLAME)
-	tools_menu.set_item_checked(tools_menu.get_item_index(ID_BLAME), Settings.get_value(BLAME_SETTING_KEY, false))
-	tools_menu.add_check_item("Confirm Ctrl/Cmd+Enter commits", ID_CONFIRM_SHORTCUT_COMMIT)
-	tools_menu.add_check_item("Save open files before git operations without asking", ID_SAVE_BEFORE_GIT)
-	tools_menu.add_check_item("Faster git status for large projects (file system monitor)", ID_FAST_STATUS)
-	tools_menu.set_item_tooltip(tools_menu.get_item_index(ID_FAST_STATUS), "Git's built-in fsmonitor daemon and untracked cache, set in this repo's config:\n`git status` asks what changed instead of scanning every file.")
-	tools_menu.add_check_item("Godit tab next to 2D/3D/Script for full-size diffs", ID_MAIN_SCREEN)
-	tools_menu.set_item_checked(tools_menu.get_item_index(ID_MAIN_SCREEN), _has_main_screen())
+	tools_menu.add_check_item("Fetch remotes in the background", ID_AUTO_FETCH)
 	tools_menu.add_check_item("Show changes since the last commit in the Inspector and Scene dock", ID_INSPECTOR)
-	tools_menu.set_item_checked(tools_menu.get_item_index(ID_INSPECTOR), Settings.get_value(INSPECTOR_SETTING_KEY, true))
 	tools_menu.add_separator("Layout")
 	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (default; can float on a second monitor)", ID_LAYOUT_COMBINED)
 	tools_menu.add_radio_check_item("Git dock + Git Log at bottom", ID_LAYOUT_SEPARATE)
 	tools_menu.add_radio_check_item("Changes/Branches and Git Log at bottom", ID_LAYOUT_BOTTOM)
 	_update_layout_items()
-	# Dialog buttons ("Don't ask again", "Always Save First") change these settings too, so re-read them on every open.
+	# Godit Settings, the script editor's menu and the palette change these too, so they're read on every open.
 	tools_menu.about_to_popup.connect(func() -> void:
-		tools_menu.set_item_checked(tools_menu.get_item_index(ID_CONFIRM_SHORTCUT_COMMIT), Settings.get_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, true))
-		tools_menu.set_item_checked(tools_menu.get_item_index(ID_SAVE_BEFORE_GIT), Settings.get_value(SaveGuard.ALWAYS_SAVE_SETTING_KEY, false))
-		# Repo config, which can change outside Godit too.
-		var fast_index := tools_menu.get_item_index(ID_FAST_STATUS)
-		var repo: RefCounted = watcher.repo
-		tools_menu.set_item_disabled(fast_index, repo == null or (not repo.is_fast_status_on() and not GitCliRepo.fast_status_supported()))
-		tools_menu.set_item_checked(fast_index, repo != null and repo.is_fast_status_on())
+		for id: int in TOOLS_TOGGLES:
+			tools_menu.set_item_checked(tools_menu.get_item_index(id), Settings.get_value(TOOLS_TOGGLES[id][0], TOOLS_TOGGLES[id][1]))
+		tools_menu.set_item_text(tools_menu.get_item_index(ID_AUTO_FETCH), "Fetch remotes in the background every %d min" % int(Settings.get_value(GoditDockScript.AUTO_FETCH_MINUTES_KEY, GoditDockScript.AUTO_FETCH_DEFAULT_MINUTES)))
 	)
 	tools_menu.id_pressed.connect(_on_tools_menu_id_pressed)
+	Settings.notifier().changed.connect(_on_setting_changed)
 	add_tool_submenu_item("Godit", tools_menu)
 	_apply_auto_reload_setting()
 	_apply_auto_save_setting()
@@ -241,6 +226,9 @@ func _queue_poll() -> void:
 func _exit_tree() -> void:
 	# Before freeing the UI: a fetch/push still running would otherwise outlive the plugin and resume coroutines on freed panels.
 	GitCli.shutdown()
+	Settings.notifier().changed.disconnect(_on_setting_changed)
+	if _settings_window != null:
+		_settings_window.free()
 	remove_tool_menu_item("Godit")
 	commands.clear()
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
@@ -306,27 +294,35 @@ func _add_commands() -> void:
 	commands.add("push", "Push", func() -> void: dock_instance.press_sync("push"))
 	commands.add("file_history", "History of the Open Scene or Script", _show_open_file_history)
 	commands.add("toggle_blame", "Toggle Blame", func() -> void: _set_blame_enabled(not Settings.get_value(BLAME_SETTING_KEY, false)))
+	commands.add("settings", "Settings…", open_settings)
 	commands.add("toggle_sidebar", "Toggle Sidebar", func() -> void:
 		if combined_dock != null:
 			combined_dock.toggle_sidebar()
 	)
-	for layout: String in [LAYOUT_COMBINED, LAYOUT_SEPARATE, LAYOUT_BOTTOM]:
+	for layout: String in LAYOUT_ORDER:
 		commands.add("layout_" + layout, "Layout: " + LAYOUT_TITLES[layout], set_layout.bind(layout))
 
 
 ## The layout choice inside the docks: the combined dock's toolbar menu and the tab bar menus of the Git dock, Git Log and the bottom tabs.
 func _layout_menu(menu: PopupMenu) -> PopupMenu:
 	menu.add_separator("Layout")
-	for layout: String in [LAYOUT_COMBINED, LAYOUT_SEPARATE, LAYOUT_BOTTOM]:
+	for layout: String in LAYOUT_ORDER:
 		var id: int = LAYOUT_IDS.find_key(layout)
 		menu.add_radio_check_item(LAYOUT_TITLES[layout], id)
 		menu.set_item_tooltip(menu.get_item_index(id), LAYOUT_TOOLTIPS[layout])
+	menu.add_separator()
+	menu.add_item("Settings…", ID_SETTINGS)
 	menu.about_to_popup.connect(func() -> void:
 		for id: int in LAYOUT_IDS:
 			menu.set_item_checked(menu.get_item_index(id), LAYOUT_IDS[id] == _layout)
 	)
 	# Deferred: switching frees the dock the menu is in.
-	menu.id_pressed.connect(func(id: int) -> void: set_layout.call_deferred(LAYOUT_IDS[id]))
+	menu.id_pressed.connect(func(id: int) -> void:
+		if id == ID_SETTINGS:
+			open_settings()
+		else:
+			set_layout.call_deferred(LAYOUT_IDS[id])
+	)
 	return menu
 
 
@@ -470,11 +466,9 @@ func _reveal_changes() -> void:
 		_reveal(dock_instance)
 
 
-## Shared by the Tools menu and the script editor's context menu, keeping both in sync.
+## The script editor's context menu and the palette; _on_setting_changed() turns the gutter on or off.
 func _set_blame_enabled(enabled: bool) -> void:
 	Settings.set_value(BLAME_SETTING_KEY, enabled)
-	tools_menu.set_item_checked(tools_menu.get_item_index(ID_BLAME), enabled)
-	blame_gutter.set_enabled(enabled)
 
 
 ## Brings Changes to front and runs action there (see changes_panel.gd's run_action()).
@@ -491,41 +485,65 @@ func _on_gutter_change_clicked(rel_path: String, line: int) -> void:
 func _on_tools_menu_id_pressed(id: int) -> void:
 	if LAYOUT_IDS.has(id):
 		set_layout(LAYOUT_IDS[id])
-		return
-	var index := tools_menu.get_item_index(id)
-	var checked := not tools_menu.is_item_checked(index)
-	tools_menu.set_item_checked(index, checked)
-	match id:
-		ID_AUTO_RELOAD:
-			Settings.set_value(AUTO_RELOAD_SETTING_KEY, checked)
+	elif id == ID_SETTINGS:
+		open_settings()
+	elif TOOLS_TOGGLES.has(id):
+		Settings.set_value(TOOLS_TOGGLES[id][0], not Settings.get_value(TOOLS_TOGGLES[id][0], TOOLS_TOGGLES[id][1]))
+
+
+## Applies a setting changed anywhere: the Tools menu, Godit Settings, the palette, a dialog's "Don't ask again".
+func _on_setting_changed(key: String) -> void:
+	match key:
+		AUTO_RELOAD_SETTING_KEY:
 			_apply_auto_reload_setting()
-		ID_AUTO_SAVE:
-			Settings.set_value(AUTO_SAVE_SETTING_KEY, checked)
+		AUTO_SAVE_SETTING_KEY, AUTO_SAVE_SECONDS_KEY:
 			_apply_auto_save_setting()
-		ID_BLAME:
-			_set_blame_enabled(checked)
-		ID_CONFIRM_SHORTCUT_COMMIT:
-			Settings.set_value(ChangesPanelScript.CONFIRM_SHORTCUT_COMMIT_SETTING_KEY, checked)
-		ID_SAVE_BEFORE_GIT:
-			Settings.set_value(SaveGuard.ALWAYS_SAVE_SETTING_KEY, checked)
-		ID_FAST_STATUS:
-			var result: Dictionary = watcher.repo.set_fast_status(checked)
-			if not result["ok"]:
-				tools_menu.set_item_checked(index, not checked)
-				EditorInterface.get_editor_toaster().push_toast("Godit: " + result["error"], EditorToaster.SEVERITY_WARNING)
-		ID_AUTO_FETCH:
-			Settings.set_value(GoditDockScript.AUTO_FETCH_SETTING_KEY, checked)
+		BLAME_SETTING_KEY:
+			blame_gutter.set_enabled(Settings.get_value(BLAME_SETTING_KEY, false))
+		GoditDockScript.AUTO_FETCH_SETTING_KEY, GoditDockScript.AUTO_FETCH_MINUTES_KEY:
 			dock_instance.apply_auto_fetch_setting()
-		ID_INSPECTOR:
-			Settings.set_value(INSPECTOR_SETTING_KEY, checked)
-			head_inspector.enabled = checked
-			scene_dock_colors.enabled = checked
+		INSPECTOR_SETTING_KEY:
+			head_inspector.enabled = Settings.get_value(INSPECTOR_SETTING_KEY, true)
+			scene_dock_colors.enabled = head_inspector.enabled
 			var inspected := EditorInterface.get_inspector().get_edited_object()
 			if inspected != null:
 				EditorInterface.inspect_object(inspected) # rebuilt with or without the rows
-		ID_MAIN_SCREEN:
-			Settings.set_value(MAIN_SCREEN_SETTING_KEY, checked)
-			RepoSetup.reload_plugin() # the editor asks for a plugin's main screen only when it's enabled
+		MAIN_SCREEN_SETTING_KEY:
+			if _has_main_screen() != (main_screen != null):
+				RepoSetup.reload_plugin() # the editor asks for a plugin's main screen only when it's enabled
+		DOCK_LAYOUT_SETTING_KEY:
+			_update_layout_items()
+
+
+## Godit Settings, from the Tools menu, the docks' ⋮ menus and the palette.
+func open_settings() -> void:
+	if _settings_window == null:
+		_settings_window = SettingsWindowScript.new()
+		_settings_window.layouts = LAYOUT_ORDER.map(func(l: String) -> Array: return [l, LAYOUT_TITLES[l]])
+		_settings_window.default_layout = LAYOUT_COMBINED
+		_settings_window.get_layout = _dock_layout
+		_settings_window.set_layout = set_layout
+		_settings_window.get_fast_status = _fast_status_state
+		_settings_window.set_fast_status = _set_fast_status
+		EditorInterface.get_base_control().add_child(_settings_window) # not in a dock: switching the layout frees those
+	_settings_window.open()
+
+
+## {"on", "available"} for this repository's git config (it can change outside Godit too).
+func _fast_status_state() -> Dictionary:
+	var repo: RefCounted = watcher.repo
+	var on: bool = repo != null and repo.is_fast_status_on()
+	return {"on": on, "available": repo != null and (on or GitCliRepo.fast_status_supported())}
+
+
+func _set_fast_status(on: bool) -> void:
+	if watcher.repo == null:
+		return
+	var result: Dictionary = watcher.repo.set_fast_status(on)
+	if not result["ok"]:
+		EditorInterface.get_editor_toaster().push_toast("Godit: " + result["error"], EditorToaster.SEVERITY_WARNING)
+	if _settings_window != null:
+		_settings_window.refresh()
 
 
 ## Mirrors our own per-user Godit preference onto Godot's own (editor-wide) auto-reload setting — unchecking it restores the normal "reload externally modified file?" confirmation.
@@ -541,7 +559,7 @@ func _apply_auto_save_setting() -> void:
 		if original == null:
 			var current: Variant = editor_settings.get_setting(AUTO_SAVE_EDITOR_SETTING)
 			Settings.set_value(AUTO_SAVE_ORIGINAL_KEY, 0 if current == AUTO_SAVE_INTERVAL_SECS else current) # 3 here means an older version set it
-		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, AUTO_SAVE_INTERVAL_SECS)
+		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, maxi(1, int(Settings.get_value(AUTO_SAVE_SECONDS_KEY, AUTO_SAVE_INTERVAL_SECS))))
 	elif original != null:
 		editor_settings.set_setting(AUTO_SAVE_EDITOR_SETTING, original)
 		Settings.set_value(AUTO_SAVE_ORIGINAL_KEY, null)
