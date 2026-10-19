@@ -2,6 +2,7 @@
 extends Control
 
 const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
+const CommitSuggestion := preload("res://addons/godit/util/commit_suggestion.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
@@ -129,6 +130,8 @@ var _confirm_dialog_action := "revert"
 
 ## Changed + new files at the last refresh (see changes_counted).
 var change_count := 0
+## A message for what's staged, shown while the message is empty; Tab takes it.
+var suggestion := ""
 ## Conflicted files at the last refresh; the dock title turns red with any.
 var conflicts := 0
 var _operation_bar: HBoxContainer
@@ -442,6 +445,8 @@ func refresh(status_entries: Variant = null) -> void:
 					overlap.size(), "" if overlap.size() == 1 else "s", "is" if overlap.size() == 1 else "are", _repo.get_upstream()]
 
 	_update_commit_buttons_enabled(any_staged)
+	suggestion = CommitSuggestion.suggest(entries)
+	_commit_message.placeholder_text = "Commit message" if suggestion.is_empty() else "Commit message (Tab: %s)" % suggestion
 	change_count = tracked_count + untracked_count
 	conflicts = conflict_count
 	changes_counted.emit(change_count)
@@ -1451,6 +1456,13 @@ func _stash_dialog(paths: PackedStringArray, suggested_message: String) -> void:
 
 
 func _on_commit_message_gui_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_TAB and not event.shift_pressed \
+			and _commit_message.text.is_empty() and not suggestion.is_empty():
+		_commit_message.accept_event()
+		_commit_message.text = suggestion
+		_commit_message.set_caret_column(suggestion.length())
+		_on_commit_message_text_changed()
+		return
 	if event is InputEventKey and event.pressed and event.keycode in [KEY_UP, KEY_DOWN] and not event.shift_pressed:
 		var up: bool = event.keycode == KEY_UP
 		var at_edge := _commit_message.get_caret_line() == 0 if up else _commit_message.get_caret_line() == _commit_message.get_line_count() - 1

@@ -6,6 +6,7 @@ const GitStatusFlags := preload("res://addons/godit/util/git_status_flags.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const ChangelistStore := preload("res://addons/godit/util/changelist_store.gd")
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
+const CommitSuggestion := preload("res://addons/godit/util/commit_suggestion.gd")
 
 const PUSH_ACTION := &"godit_commit_push"
 
@@ -16,6 +17,8 @@ var _tree: Tree
 var _message: TextEdit
 var _amend: CheckBox
 var _push_button: Button
+## For what's staged, while the message is empty; Tab takes it.
+var _suggestion := ""
 
 
 func _init(panel: Control) -> void:
@@ -82,7 +85,11 @@ func _fill() -> void:
 	var repo: RefCounted = _panel._repo
 	var staged := 0
 	var shown := 0
-	for entry: Dictionary in repo.get_status():
+	var entries: Array = repo.get_status()
+	_suggestion = CommitSuggestion.suggest(entries)
+	_message.placeholder_text = "Commit message (Ctrl/Cmd+Enter commits, with Shift also pushes)" if _suggestion.is_empty() \
+			else "Tab: %s  ·  Ctrl/Cmd+Enter commits, with Shift also pushes" % _suggestion
+	for entry: Dictionary in entries:
 		var path: String = entry["path"]
 		var status: int = entry["status"]
 		if status & GitStatusFlags.IGNORED or _panel._nests_under_owner(path):
@@ -134,6 +141,12 @@ func _update_buttons(any_staged: Variant = null) -> void:
 
 func _on_message_gui_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
+	if key != null and key.pressed and key.keycode == KEY_TAB and not key.shift_pressed and _message.text.is_empty() and not _suggestion.is_empty():
+		_message.accept_event()
+		_message.text = _suggestion
+		_message.set_caret_column(_suggestion.length())
+		_message.text_changed.emit()
+		return
 	if key != null and key.pressed and not key.echo and key.keycode in [KEY_ENTER, KEY_KP_ENTER] and (key.ctrl_pressed or key.meta_pressed):
 		_message.accept_event()
 		if not get_ok_button().disabled:
