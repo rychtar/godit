@@ -94,6 +94,27 @@ static func push(parent: Control, repo: RefCounted, bar: Control, options: Dicti
 	return false
 
 
+## Fetch, then pull the upstream's new commits (uncommitted changes stashed around it) and push the branch's own: one button for whichever is due. A branch without an upstream gets published.
+static func sync(parent: Control, repo: RefCounted, bar: Control) -> bool:
+	if repo.get_current_branch().is_empty():
+		await Dialogs.error(parent, "Sync", "HEAD is detached, so there's no branch to sync. Switch to a branch first.")
+		return false
+	if repo.get_upstream().is_empty():
+		return await push(parent, repo, bar) # asks to publish it
+	if not await fetch(parent, repo, bar):
+		return false
+	var pulled := false
+	if repo.get_sync_status()["behind"] > 0:
+		if not await pull(parent, repo, bar, "", true):
+			return false
+		pulled = true
+	var s: Dictionary = repo.get_sync_status()
+	if s["ahead"] > 0:
+		return await push(parent, repo, bar)
+	bar.done("Pulled; nothing to push." if pulled else "In sync with %s." % s["upstream"])
+	return true
+
+
 ## "origin" if it exists, otherwise the first configured remote, or "".
 static func default_remote(repo: RefCounted) -> String:
 	var remotes: Array = repo.list_remotes()

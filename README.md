@@ -16,7 +16,7 @@ A git client inside the Godot editor. Stage, commit, switch branches and browse 
 - **Script editor**: changed lines in the gutter with one-click rollback, the changed words highlighted, optional blame.
 - **Inspector and Scene dock**: a property changed since the last commit shows its old value with Revert; added and changed nodes are colored.
 - **Commit check**: a warning when a staged scene, resource or script references a file the commit won't contain (not added, deleted, or different letter case, which breaks on Linux).
-- **Branches**: switch, merge and rebase. Fetch, pull and push run in the background.
+- **Branches**: switch, merge and rebase. Fetch, pull and push run in the background, and **⇅ Sync** does whichever is due in one click.
 - **Branch in the toolbar**: the current branch next to the run buttons with its commits to push (↑) and pull (↓), whichever dock is open. Click it, type a few letters and press Enter to switch, or create a new branch right there.
 - **Git Log**: commit graph with search and cherry-pick. Edit Commit and Interactive Rebase rewrite history; Open This Version shows a scene as it was.
 - **Console**: every git command Godit ran, and a prompt for your own. Risky commands ask first, and error dialogs jump to the command that failed.

@@ -330,6 +330,7 @@ func _add_commands() -> void:
 	commands.add("show_console", "Show Console", _show_console, [EditorCommands.command_digit(KEY_4)])
 	commands.add("commit", "Commit…", open_quick_commit, [EditorCommands.alt_key(KEY_C)])
 	# Not just "Fetch", "Pull", "Push": the editor's catalog has those, and Editor Settings > Shortcuts would show them translated.
+	commands.add("sync", "Sync with Remote", func() -> void: dock_instance.press_sync("sync"))
 	commands.add("fetch", "Fetch All Remotes", func() -> void: dock_instance.press_sync("fetch"))
 	commands.add("pull", "Pull Current Branch", func() -> void: dock_instance.press_sync("pull"))
 	commands.add("push", "Push Current Branch", func() -> void: dock_instance.press_sync("push"))

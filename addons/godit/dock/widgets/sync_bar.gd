@@ -27,6 +27,7 @@ var _own_operation_bar: HBoxContainer
 var _repo: RefCounted
 var _branch_button: MenuButton
 var _upstream_label: Label
+var _sync_button: Button
 var _fetch_button: Button
 var _pull_button: Button
 var _pull_menu: MenuButton
@@ -63,6 +64,7 @@ func _init() -> void:
 	_upstream_label.mouse_filter = Control.MOUSE_FILTER_PASS
 	row.add_child(_upstream_label)
 
+	_sync_button = _button(row, "⇅ Sync", "", _on_sync_pressed)
 	_fetch_button = _button(row, "Fetch", "Fetch all remotes — updates remote branches and tags, never touches your files", _on_fetch_pressed)
 
 	_pull_button = _button(row, "Pull", "", _on_pull_pressed)
@@ -143,7 +145,7 @@ func set_repo(repo: RefCounted) -> void:
 
 ## "fetch", "pull" or "push" as if its button was clicked (command palette, shortcuts); nothing while the button is disabled.
 func press(action: String) -> void:
-	var button: Button = {"fetch": _fetch_button, "pull": _pull_button, "push": _push_button}.get(action)
+	var button: Button = {"sync": _sync_button, "fetch": _fetch_button, "pull": _pull_button, "push": _push_button}.get(action)
 	if button != null and not button.disabled:
 		button.pressed.emit()
 
@@ -198,7 +200,12 @@ func refresh() -> void:
 	_pull_button.tooltip_text = "Fetch and integrate %s's upstream%s" % [s["branch"], " (%d new commit%s)" % [s["behind"], "" if s["behind"] == 1 else "s"] if s["behind"] > 0 else ""]
 	_push_button.text = "Push ↑%d" % s["ahead"] if s["ahead"] > 0 else "Push"
 	_push_button.tooltip_text = "Push %s%s" % [s["branch"], " (%d commit%s)" % [s["ahead"], "" if s["ahead"] == 1 else "s"] if s["ahead"] > 0 else "" if not s["upstream"].is_empty() else " — publishes it, since it has no upstream yet"]
-	for control in [_pull_button, _pull_menu, _push_button, _push_menu]:
+	_sync_button.tooltip_text = "Fetch, pull the new commits (keeping your uncommitted changes) and push yours"
+	if not detached and s["upstream"].is_empty():
+		_sync_button.tooltip_text = "Publish %s: push it and track the remote branch" % s["branch"]
+	elif s["ahead"] > 0 or s["behind"] > 0:
+		_sync_button.tooltip_text += "\n%d to pull, %d to push" % [s["behind"], s["ahead"]]
+	for control in [_sync_button, _pull_button, _pull_menu, _push_button, _push_menu]:
 		control.disabled = detached
 	_apply_compact()
 	if detached:
@@ -253,6 +260,7 @@ func _apply_compact() -> void:
 	_branch_button.tooltip_text = _upstream_label.tooltip_text + "\nClick to switch branches" if _compact else "Current branch — click to switch"
 	_upstream_label.visible = not _compact or not _branch_button.visible # the toolbar's only branch name
 	_refresh_button.visible = not _compact
+	_sync_button.text = "⇅" if _compact else "⇅ Sync"
 	if _compact:
 		_fetch_button.text = ""
 		_pull_button.text = _pull_button.text.trim_prefix("Pull").strip_edges()
@@ -320,6 +328,11 @@ static func create_branch_dialog(parent: Node, repo: RefCounted, start_point: St
 	elif answer["checkout"]:
 		EditorOpen.refresh_all_external_changes()
 	return result["ok"]
+
+
+func _on_sync_pressed() -> void:
+	await RemoteActions.sync(self, _repo, operation_bar)
+	_finish()
 
 
 func _on_fetch_pressed() -> void:
