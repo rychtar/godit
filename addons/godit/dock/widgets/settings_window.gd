@@ -8,8 +8,9 @@ const ChangesPanel := preload("res://addons/godit/dock/panels/changes_panel.gd")
 const CommitGraph := preload("res://addons/godit/dock/widgets/commit_graph.gd")
 const GoditDock := preload("res://addons/godit/dock/godit_dock.gd")
 const SplitMemory := preload("res://addons/godit/util/split_memory.gd")
+const LocalHistory := preload("res://addons/godit/util/local_history.gd")
 
-const SECTIONS := ["Layout", "Changes", "Diff", "History", "Editor", "Sync"]
+const SECTIONS := ["Layout", "Changes", "Diff", "History", "Local History", "Editor", "Sync"]
 const HELP_INDENT := 26
 const SIDEBAR_WIDTH := 170
 
@@ -108,7 +109,7 @@ func open() -> void:
 	_filter.grab_focus()
 
 
-## The settings shown, in order. kind: "bool", "choice" ("choices": [[value, title]…]), "flags" (an Array of "choices" values), "masks"; "amount" adds a number after a bool; "get"/"set" replace Settings for values kept elsewhere; "reset_keys" are reset with the section too.
+## The settings shown, in order. kind: "bool", "choice" ("choices": [[value, title]…]), "flags" (an Array of "choices" values), "masks", "number" ("min", "max", "suffix"); "amount" adds a number after a bool; "get"/"set" replace Settings for values kept elsewhere; "reset_keys" are reset with the section too.
 func _entries() -> Array:
 	return [
 		{ "section": "Layout", "key": "dock_layout", "kind": "choice", "label": "Panels", "choices": layouts,
@@ -149,6 +150,14 @@ func _entries() -> Array:
 			"help": "Shown right of the commit message in Git Log; drag their edges there to resize them." },
 		{ "section": "History", "key": CommitGraph.ABSOLUTE_DATES_SETTING_KEY, "kind": "bool", "default": false, "label": "Absolute dates",
 			"help": "2026-10-19 14:05 instead of \"3 hours ago\"." },
+
+		{ "section": "Local History", "key": LocalHistory.ENABLED_KEY, "kind": "bool", "default": true, "label": "Keep snapshots of the project's files on save and every",
+			"amount": { "key": LocalHistory.MINUTES_KEY, "default": LocalHistory.DEFAULT_MINUTES, "min": 1, "max": 120, "suffix": "min" },
+			"help": "Also before git operations rewrite files, whenever anything changed. Right-click a file or folder > Git: Local History… to compare an earlier version with now and put it back. Snapshots aren't commits: branches, the index and git status stay as they are." },
+		{ "section": "Local History", "key": LocalHistory.DAYS_KEY, "kind": "number", "default": LocalHistory.DEFAULT_DAYS, "label": "Keep them for", "min": 1, "max": 365, "suffix": "days",
+			"help": "Older snapshots are dropped; git gc frees their space later." },
+		{ "section": "Local History", "key": LocalHistory.MAX_MB_KEY, "kind": "number", "default": LocalHistory.DEFAULT_MAX_MB, "label": "Leave out files over", "min": 1, "max": 1024, "suffix": "MB",
+			"help": "Files in Git LFS, ignored files and .godot/ are left out too." },
 
 		{ "section": "Editor", "key": "show_blame", "kind": "bool", "default": false, "label": "Show blame in the script editor",
 			"help": "Author and age of each line next to the line numbers; click one to see its commit." },
@@ -236,6 +245,10 @@ func _add_row(entry: Dictionary) -> void:
 				line.add_child(check)
 			entry["checks"] = checks
 			control = line
+		"number":
+			line.add_child(_label(entry["label"]))
+			control = _amount_spin(entry)
+			line.add_child(control)
 		"masks":
 			line.add_child(_label(entry["label"]))
 			_masks_edit = TextEdit.new()
@@ -301,6 +314,8 @@ func refresh() -> void:
 				var option := entry["control"] as OptionButton
 				var index: int = entry["choices"].map(func(c: Array) -> Variant: return c[0]).find(value)
 				option.select(index)
+			"number":
+				(entry["control"] as SpinBox).set_value_no_signal(value)
 			"flags":
 				for v: Variant in entry["checks"]:
 					(entry["checks"][v] as CheckBox).set_pressed_no_signal((value as Array).has(v))

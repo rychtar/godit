@@ -13,6 +13,8 @@ const Settings := preload("res://addons/godit/util/settings.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
+const LocalHistoryRecorder := preload("res://addons/godit/util/local_history_recorder.gd")
+const LocalHistoryWindow := preload("res://addons/godit/dock/widgets/local_history_window.gd")
 const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const ConflictResolver := preload("res://addons/godit/dock/widgets/conflict_resolver.gd")
@@ -62,6 +64,7 @@ const ID_IGNORE_FOLDER := 21
 const ID_DONT_AUTO_ADD_EXT := 22
 const ID_MOVE_ALL_TO := 23
 const ID_SHOW_DIFF_TAB := 24
+const ID_LOCAL_HISTORY := 25
 
 const OPT_AUTO_STAGE := 0
 const OPT_AUTO_ADD := 1
@@ -1180,6 +1183,7 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_fill_move_to_menu([meta["path"]])
 				_context_menu.add_separator()
 				_context_menu.add_item("Show History", ID_SHOW_HISTORY)
+				_add_local_history_item()
 				_context_menu.add_item("Copy Path", ID_COPY_PATH)
 				_context_menu.add_separator()
 				_context_menu.add_item("Stash...", ID_STASH_GROUP)
@@ -1204,11 +1208,13 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 				_context_menu.add_item("Stash %d File%s..." % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], ID_STASH_GROUP)
 				_context_menu.add_submenu_item("Move %d File%s to Changelist" % [folder_paths.size(), "" if folder_paths.size() == 1 else "s"], MENU_MOVE_TO_SUBMENU)
 				_fill_move_to_menu(folder_paths)
+			_add_local_history_item()
 		"untracked_file":
 			_context_menu.add_item("Add to Git", ID_ADD_TO_VCS)
 			_context_menu.add_item("Open", ID_OPEN)
 			if DiffViewScript.expander.is_valid():
 				_context_menu.add_item("Show Diff in the Godit Tab", ID_SHOW_DIFF_TAB)
+			_add_local_history_item()
 			_context_menu.add_separator()
 			_context_menu.add_item("Ignore", ID_IGNORE)
 			var ext: String = meta["path"].get_extension()
@@ -1255,6 +1261,12 @@ func _show_context_menu_for_item(item: TreeItem, screen_position: Vector2) -> vo
 	_context_menu.position = screen_position
 	_context_menu.reset_size()
 	_context_menu.popup()
+
+
+## "Local History…" of the right-clicked file or folder, while Godit runs in the editor.
+func _add_local_history_item() -> void:
+	if LocalHistoryWindow.opener.is_valid():
+		_context_menu.add_item("Local History…", ID_LOCAL_HISTORY)
 
 
 ## Move-to targets for paths: every changelist except the one they all already sit in.
@@ -1320,14 +1332,14 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			_confirm_dialog_action = "revert"
 			_revert_confirm_dialog.title = "Revert"
 			_revert_confirm_dialog.ok_button_text = "Revert"
-			_revert_confirm_dialog.dialog_text = "Discard all changes to \"%s\"%s? This can't be undone." % [path.get_file(), _companions_note(path)]
+			_revert_confirm_dialog.dialog_text = "Discard all changes to \"%s\"%s? %s" % [path.get_file(), _companions_note(path), _undo_note()]
 			_revert_confirm_dialog.popup_centered()
 		ID_REMOVE:
 			var path: String = _context_target["path"]
 			_confirm_dialog_action = "remove"
 			_revert_confirm_dialog.title = "Remove File"
 			_revert_confirm_dialog.ok_button_text = "Remove"
-			_revert_confirm_dialog.dialog_text = "Remove \"%s\"%s from Git and delete it from disk? This can't be undone." % [path.get_file(), _companions_note(path)]
+			_revert_confirm_dialog.dialog_text = "Remove \"%s\"%s from Git and delete it from disk? %s" % [path.get_file(), _companions_note(path), _undo_note()]
 			_revert_confirm_dialog.popup_centered()
 		ID_IGNORE:
 			_ignore_paths(_with_companions([_context_target["path"]]))
@@ -1340,6 +1352,11 @@ func _on_context_menu_id_pressed(id: int) -> void:
 			DiffViewScript.expander.call(_diff_view)
 		ID_SHOW_HISTORY:
 			file_history_requested.emit(_context_target["path"])
+		ID_LOCAL_HISTORY:
+			if _context_target.get("kind", "") == "folder":
+				LocalHistoryWindow.open_for(_context_target["dir"], true)
+			else:
+				LocalHistoryWindow.open_for(_context_target["path"])
 		ID_ACCEPT_OURS, ID_ACCEPT_THEIRS:
 			var path: String = _context_target["path"]
 			var result: Dictionary = _repo.resolve_conflict(path, "ours" if id == ID_ACCEPT_OURS else "theirs")
@@ -1366,17 +1383,25 @@ func _on_context_menu_id_pressed(id: int) -> void:
 
 ## Reverts or removes the file, per _confirm_dialog_action (set by whichever menu item opened this dialog).
 func _on_revert_confirm_dialog_confirmed() -> void:
-	for path in _with_companions([_context_target["path"]]):
+	var paths := _with_companions([_context_target["path"]])
+	var action := _confirm_dialog_action
+	await LocalHistoryRecorder.before("Remove" if action == "remove" else "Revert")
+	for path in paths:
 		# A new sidecar isn't in Git to remove: deleting it is what revert does.
-		var remove: bool = _confirm_dialog_action == "remove" and not GitStatusFlags.is_untracked(_known_status.get(path, 0))
+		var remove: bool = action == "remove" and not GitStatusFlags.is_untracked(_known_status.get(path, 0))
 		var result: Dictionary = _repo.remove_file(path) if remove else _repo.revert_file(path)
 		if not result["ok"]:
-			_show_error("Remove failed" if _confirm_dialog_action == "remove" else "Revert failed", result["error"])
+			_show_error("Remove failed" if action == "remove" else "Revert failed", result["error"])
 			break
 		_changelist_state["assignments"].erase(path)
 		EditorOpen.refresh_external_change(_repo.get_repo_root(), path)
 	_save_changelist_state()
 	refresh()
+
+
+## How to get the files back: Local History while it's on.
+static func _undo_note() -> String:
+	return "Local History keeps the current version (right-click > Git: Local History…)." if LocalHistoryRecorder.is_on() else "This can't be undone."
 
 
 ## " (and its .uid)" when path has changed sidecars that go along with it, else "".
@@ -1396,8 +1421,9 @@ static func _path_list(paths: Array) -> String:
 ## Asks, then discards every change to paths (new files are deleted).
 func _revert_paths(paths: Array) -> void:
 	paths = _with_companions(paths)
-	if not await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? This can't be undone.\n\n%s" % [paths.size(), _path_list(paths)], "Revert All"):
+	if not await Dialogs.confirm(self, "Revert Files", "Discard all changes to these %d files? %s\n\n%s" % [paths.size(), _undo_note(), _path_list(paths)], "Revert All"):
 		return
+	await LocalHistoryRecorder.before("Revert")
 	var errors: Array = []
 	for path in paths:
 		var result: Dictionary = _repo.revert_file(path)

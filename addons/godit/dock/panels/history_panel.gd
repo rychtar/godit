@@ -12,6 +12,8 @@ const WebLinks := preload("res://addons/godit/util/web_links.gd")
 const SceneText := preload("res://addons/godit/util/scene_text.gd")
 const RebaseDialog := preload("res://addons/godit/dock/widgets/rebase_dialog.gd")
 const SaveGuard := preload("res://addons/godit/dock/widgets/save_guard.gd")
+const LocalHistoryRecorder := preload("res://addons/godit/util/local_history_recorder.gd")
+const LocalHistoryWindow := preload("res://addons/godit/dock/widgets/local_history_window.gd")
 const GitErrors := preload("res://addons/godit/util/git_errors.gd")
 const DiffViewScript := preload("res://addons/godit/dock/widgets/diff_view.gd")
 const ChangesetDialog := preload("res://addons/godit/dock/widgets/changeset_dialog.gd")
@@ -47,7 +49,7 @@ enum {
 }
 enum { ID_WORKTREE_COMMIT = 200, ID_WORKTREE_STASH, ID_WORKTREE_REVERT }
 enum { ID_STASH_SHOW = 300, ID_STASH_APPLY, ID_STASH_POP, ID_STASH_DROP, ID_STASH_COMPARE_WORKTREE }
-enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB, ID_FILE_OPEN_VERSION }
+enum { ID_FILE_OPEN = 100, ID_FILE_HISTORY, ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE, ID_FILE_COPY_PATH, ID_FILE_OPEN_ON_WEB, ID_FILE_OPEN_VERSION, ID_FILE_LOCAL_HISTORY }
 ## Where Open This Version puts its copies: inside .godot, which every Godot project's .gitignore leaves out.
 const HISTORY_COPIES := "res://.godot/godit/history"
 
@@ -736,6 +738,8 @@ func _on_files_tree_item_mouse_selected(mouse_position: Vector2, mouse_button_in
 	_file_menu.clear()
 	_file_menu.add_item("Open", ID_FILE_OPEN)
 	_file_menu.add_item("Show History of This File", ID_FILE_HISTORY)
+	if LocalHistoryWindow.opener.is_valid():
+		_file_menu.add_item("Local History of This File…", ID_FILE_LOCAL_HISTORY)
 	_file_menu.add_item("Copy Path", ID_FILE_COPY_PATH)
 	if _detail_oid == WORKTREE_OID:
 		_file_menu.position = _files_tree.get_screen_position() + mouse_position.round()
@@ -764,6 +768,9 @@ func _on_file_menu_id_pressed(id: int) -> void:
 			_open_version(path)
 		ID_FILE_HISTORY:
 			set_path_filter(path)
+		ID_FILE_LOCAL_HISTORY:
+			var current: String = path if _detail_oid == WORKTREE_OID else _repo.current_path(_detail_oid, path)
+			LocalHistoryWindow.open_for(current if not current.is_empty() else path)
 		ID_FILE_COPY_PATH:
 			DisplayServer.clipboard_set(path)
 		ID_FILE_OPEN_ON_WEB:
@@ -771,8 +778,10 @@ func _on_file_menu_id_pressed(id: int) -> void:
 		ID_FILE_RESTORE_THIS, ID_FILE_RESTORE_BEFORE:
 			var rev := _detail_oid if id == ID_FILE_RESTORE_THIS else _detail_oid + "^"
 			var label := "as of %s" % _detail_oid.substr(0, 7) if id == ID_FILE_RESTORE_THIS else "as it was before %s" % _detail_oid.substr(0, 7)
+			var kept := "Local History keeps your current version." if LocalHistoryRecorder.is_on() else "your current edits to the file are lost."
 			if await Dialogs.confirm(self, "Restore File",
-					"Replace \"%s\" in your working tree with its version %s?\n\nThe result shows up as an uncommitted change; your current edits to the file are lost." % [path, label], "Restore"):
+					"Replace \"%s\" in your working tree with its version %s?\n\nThe result shows up as an uncommitted change; %s" % [path, label, kept], "Restore"):
+				await LocalHistoryRecorder.before("Restore")
 				var result: Dictionary = _repo.restore_file_from(rev, path)
 				if not result["ok"]:
 					await Dialogs.error(self, "Restore failed", result["error"])

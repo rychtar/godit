@@ -5,6 +5,7 @@ extends RefCounted
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
+const LocalHistoryRecorder := preload("res://addons/godit/util/local_history_recorder.gd")
 
 const ALWAYS_SAVE_SETTING_KEY := "save_before_git"
 
@@ -36,10 +37,12 @@ static func save_all() -> void:
 	EditorInterface.save_all_scenes()
 
 
-## Coroutine. verb names the operation ("Commit", "Checkout"...); for_commit says the risk is missing edits rather than overwritten ones. False = the user cancelled.
+## Coroutine. verb names the operation ("Commit", "Checkout"...); for_commit says the risk is missing edits rather than overwritten ones. False = the user cancelled. Otherwise Local History gets the files first (an operation that rewrites them may lose work).
 static func ensure_saved(parent: Node, verb: String, for_commit := false) -> bool:
 	var proceed: bool = await _ensure_saved(parent, verb, for_commit)
 	if proceed:
+		if not for_commit:
+			await LocalHistoryRecorder.before(verb)
 		EditorOpen.remember_scene_state() # what the open scenes look like on disk before the operation, to reload only those it changes
 	return proceed
 

@@ -18,6 +18,7 @@ const GLOBAL_KEYS := [
 	"auto_stage_changes", "auto_add_new_files", "confirm_shortcut_commit", "save_before_git",
 	"auto_fetch", "auto_fetch_minutes", "auto_save_scripts", "auto_save_seconds", "auto_save_original_interval", "auto_reload_external_changes",
 	"reminders", "reminder_hours",
+	"local_history", "local_history_minutes", "local_history_days", "local_history_max_mb", "local_history_group_folders",
 ]
 ## Team conventions, key -> its project setting (saved in project.godot, so they're committed with the project).
 const TEAM_KEYS := { "auto_add_ignore_masks": "godit/changes/auto_add_ignore_masks" }

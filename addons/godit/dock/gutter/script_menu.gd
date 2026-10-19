@@ -2,6 +2,7 @@
 extends EditorContextMenuPlugin
 
 const WebLinks := preload("res://addons/godit/util/web_links.gd")
+const LocalHistoryWindow := preload("res://addons/godit/dock/widgets/local_history_window.gd")
 
 ## Set by plugin.gd.
 var diff_gutter: Node
@@ -27,6 +28,8 @@ func _items(code_edit: CodeEdit) -> Array:
 		items.append(["Git: Show Change in Changes Panel", _on_show_in_changes])
 	items.append(["Git: Show Commit for This Line", _on_line_commit])
 	items.append(["Git: Show History of This File", _on_file_history])
+	if LocalHistoryWindow.opener.is_valid():
+		items.append(["Git: Local History of This File…", _on_local_history])
 	var resolved: Dictionary = diff_gutter.resolve_repo(code_edit.get_meta(diff_gutter.META_RES_PATH, ""))
 	if not resolved.is_empty():
 		var site := WebLinks.site(resolved["repo"])
@@ -131,6 +134,12 @@ func _on_file_history(target: Variant) -> void:
 	var code_edit := _code_edit_from(target)
 	if code_edit != null:
 		show_file_history.call(code_edit.get_meta(diff_gutter.META_REL_PATH, ""))
+
+
+func _on_local_history(target: Variant) -> void:
+	var code_edit := _code_edit_from(target)
+	if code_edit != null:
+		LocalHistoryWindow.open_for(code_edit.get_meta(diff_gutter.META_REL_PATH, ""))
 
 
 ## The caret's line in the last pushed version of the file (lines may be off by your unpushed edits).

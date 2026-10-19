@@ -30,6 +30,8 @@ const QuickCommitScript := preload("res://addons/godit/dock/widgets/quick_commit
 const RemindersScript := preload("res://addons/godit/util/reminders.gd")
 const SetupCheckScript := preload("res://addons/godit/dock/widgets/setup_check.gd")
 const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
+const LocalHistoryRecorderScript := preload("res://addons/godit/util/local_history_recorder.gd")
+const LocalHistoryWindowScript := preload("res://addons/godit/dock/widgets/local_history_window.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -58,6 +60,8 @@ var filesystem_menu: EditorContextMenuPlugin
 var watcher: Node
 ## Toasts about work left uncommitted or unpushed for hours.
 var reminders: Node
+## Local History snapshots on save, on a timer and before git operations.
+var local_history: Node
 ## Project > Tools > Godit submenu, holding the auto-reload toggle.
 var tools_menu: PopupMenu
 ## The Godit tab next to 2D/3D/Script showing a diff full size, or null when turned off.
@@ -78,6 +82,8 @@ var branch_toolbar: BranchToolbarScript
 var _quick_commit: QuickCommitScript
 ## Godit Setup, created the first time it's opened.
 var _setup_check: SetupCheckScript
+## Local History, created the first time it's opened.
+var _local_history_window: LocalHistoryWindowScript
 ## What the dock title shows: changed files, and its color for conflicts or commits to pull.
 var _title_state := {"count": 0, "conflicts": 0, "behind": 0}
 ## Bottom panel buttons on Godot < 4.6, where docks have no EditorDock to title: control -> Button.
@@ -139,6 +145,8 @@ func _enter_tree() -> void:
 	add_child(watcher)
 	reminders = RemindersScript.new()
 	add_child(reminders)
+	local_history = LocalHistoryRecorderScript.new()
+	add_child(local_history)
 
 	tools_menu = PopupMenu.new()
 	tools_menu.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # it goes into the editor's Tools menu, which would translate it (see godit_dock.gd)
@@ -241,6 +249,7 @@ func _enter_tree() -> void:
 	main_screen_changed.connect(_on_main_screen_changed)
 	Dialogs.show_console = _show_console
 	RemoteActions.open_setup_check = open_setup_check
+	LocalHistoryWindowScript.opener = open_local_history
 	head_inspector = HeadInspectorScript.new()
 	head_inspector.enabled = Settings.get_value(INSPECTOR_SETTING_KEY, true)
 	add_inspector_plugin(head_inspector)
@@ -251,6 +260,8 @@ func _enter_tree() -> void:
 	# Saves show up right away; the panels' polling still catches changes made outside the editor.
 	resource_saved.connect(func(_r: Resource) -> void: _queue_poll())
 	scene_saved.connect(func(_p: String) -> void: _queue_poll())
+	resource_saved.connect(func(_r: Resource) -> void: local_history.on_saved())
+	scene_saved.connect(func(_p: String) -> void: local_history.on_saved())
 	EditorInterface.get_resource_filesystem().filesystem_changed.connect(_queue_poll)
 
 
@@ -282,7 +293,10 @@ func _exit_tree() -> void:
 		_quick_commit.free()
 	if _setup_check != null:
 		_setup_check.free()
+	if _local_history_window != null:
+		_local_history_window.free()
 	RemoteActions.open_setup_check = Callable()
+	LocalHistoryWindowScript.opener = Callable()
 	remove_tool_menu_item("Godit")
 	commands.clear()
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
@@ -326,6 +340,7 @@ func _exit_tree() -> void:
 		blame_gutter.disable()
 	blame_gutter.free()
 	reminders.free()
+	local_history.free() # waits for a snapshot still being written
 	watcher.free() # after the panels, which are subscribed to it
 
 	GitCli.restore_environment()
@@ -351,6 +366,12 @@ func _add_commands() -> void:
 	commands.add("pull", "Pull Current Branch", func() -> void: dock_instance.press_sync("pull"))
 	commands.add("push", "Push Current Branch", func() -> void: dock_instance.press_sync("push"))
 	commands.add("file_history", "History of the Open Scene or Script", _show_open_file_history)
+	commands.add("local_history", "Local History of the Open Scene or Script", func() -> void:
+		var path := _open_file_path()
+		if not path.is_empty():
+			open_local_history(path)
+	)
+	commands.add("local_history_project", "Local History of the Project", open_local_history.bind("", true))
 	commands.add("toggle_blame", "Toggle Blame", func() -> void: _set_blame_enabled(not Settings.get_value(BLAME_SETTING_KEY, false)))
 	commands.add("settings", "Settings…", open_settings)
 	commands.add("check_setup", "Check Setup…", open_setup_check)
@@ -404,6 +425,13 @@ func set_layout(layout: String) -> void:
 
 ## The current scene's history, or the current script's while the Script screen is open.
 func _show_open_file_history() -> void:
+	var path := _open_file_path()
+	if not path.is_empty():
+		_show_file_history(path)
+
+
+## Repo-relative path of the current script while the Script screen is open, else of the current scene; "" when there's none.
+func _open_file_path() -> String:
 	var path := ""
 	if _last_main_screen == "Script":
 		path = EditorOpen.current_tab_path()
@@ -411,11 +439,10 @@ func _show_open_file_history() -> void:
 		path = EditorInterface.get_edited_scene_root().scene_file_path
 	var repo: RefCounted = watcher.repo
 	if path.is_empty() or repo == null:
-		return
+		return ""
 	var abs_path := ProjectSettings.globalize_path(path)
 	var root: String = repo.get_repo_root() + "/"
-	if abs_path.begins_with(root):
-		_show_file_history(abs_path.trim_prefix(root))
+	return abs_path.trim_prefix(root) if abs_path.begins_with(root) else ""
 
 
 func _has_main_screen() -> bool:
@@ -607,6 +634,16 @@ func open_setup_check() -> void:
 		_setup_check = SetupCheckScript.new(watcher.repo)
 		EditorInterface.get_base_control().add_child(_setup_check) # not in a dock: switching the layout frees those
 	_setup_check.open()
+
+
+## Earlier versions of a file, or of a folder's files ("" = the whole project), from Local History.
+func open_local_history(path: String, folder := false) -> void:
+	if watcher.repo == null:
+		return
+	if _local_history_window == null:
+		_local_history_window = LocalHistoryWindowScript.new(watcher.repo)
+		EditorInterface.get_base_control().add_child(_local_history_window) # not in a dock: switching the layout frees those
+	_local_history_window.open(path, folder)
 
 
 ## Godit Settings, from the Tools menu, the docks' ⋮ menus and the palette.

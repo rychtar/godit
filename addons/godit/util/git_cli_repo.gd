@@ -1154,9 +1154,10 @@ func read_snapshot(with_status := false) -> Dictionary:
 	return snapshot_of(_repo_root, get_git_dir(), get_common_dir(), with_status)
 
 
-## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved. Static and free of static vars, so RepoWatcher can run it on a worker thread.
+## Every ref and its target plus HEAD, so pollers can cheaply tell whether history moved; Local History's snapshots (refs/godit/) aren't history. Static and free of static vars, so RepoWatcher can run it on a worker thread.
 static func refs_signature_of(root: String, git_dir: String) -> String:
-	return GitCli.execute("git", GitCli.argv(root, REFS_ARGS))["out"].get_string_from_utf8() + read_text(git_dir.path_join("HEAD"))
+	var refs := Array(GitCli.execute("git", GitCli.argv(root, REFS_ARGS))["out"].get_string_from_utf8().split("\n")).filter(func(line: String) -> bool: return not line.begins_with("refs/godit/"))
+	return "\n".join(refs) + read_text(git_dir.path_join("HEAD"))
 
 
 ## {"status" (raw STATUS_ARGS output, "" without with_status), "refs", "config", "stash_log"}; worker-thread safe like refs_signature_of().
