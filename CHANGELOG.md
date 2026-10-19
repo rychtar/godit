@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-10-19
+
+### Highlights
+
+- **Local History**: Godit keeps snapshots of your files as you save, every few minutes and before a git operation rewrites them, so a script or scene can go back to how it was an hour ago, even if you never committed it. Right-click a file or folder > Git: Local History…. No commits, and git status stays as it is.
+- **Godit Settings**: every option in one window like the editor's own settings, kept for all your projects.
+- **⇅ Sync**: one button fetches, pulls and pushes, and switching branches takes your uncommitted changes along.
+- **From anywhere in the editor**: the current branch in the toolbar, `Alt+C` to commit with the dock closed, every Godit command in the Command Palette, with shortcuts.
+- **Check Setup**: finds what keeps git from working for the project (your name, the remote, logging in, line endings, Git LFS) and fixes it or says how.
 
 ### Added
 
