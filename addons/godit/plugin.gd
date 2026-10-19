@@ -23,6 +23,8 @@ const RepoSetup := preload("res://addons/godit/util/repo_setup.gd")
 const HeadInspectorScript := preload("res://addons/godit/dock/inspector/head_inspector.gd")
 const SceneDockColorsScript := preload("res://addons/godit/dock/inspector/scene_dock_colors.gd")
 const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
+const EditorCommands := preload("res://addons/godit/util/editor_commands.gd")
+const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -59,6 +61,8 @@ var _last_main_screen := "Script"
 var head_inspector: EditorInspectorPlugin
 ## Changed nodes colored in the Scene dock.
 var scene_dock_colors: Node
+## Command Palette entries and their shortcuts.
+var commands: RefCounted
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
@@ -81,6 +85,13 @@ const ID_LAYOUT_BOTTOM := 2
 const ID_LAYOUT_SEPARATE := 7
 const ID_LAYOUT_COMBINED := 8
 const LAYOUT_IDS := {ID_LAYOUT_SEPARATE: LAYOUT_SEPARATE, ID_LAYOUT_BOTTOM: LAYOUT_BOTTOM, ID_LAYOUT_COMBINED: LAYOUT_COMBINED}
+## Shorter than the Tools menu's, for the menus inside the docks and the command palette.
+const LAYOUT_TITLES := {LAYOUT_COMBINED: "Combined Dock", LAYOUT_SEPARATE: "Git Dock and Git Log", LAYOUT_BOTTOM: "Both in the Bottom Panel"}
+const LAYOUT_TOOLTIPS := {
+	LAYOUT_COMBINED: "Everything in one SourceTree-like dock: the views and branches in a sidebar. On Godot 4.6+ it can float, e.g. on a second monitor.",
+	LAYOUT_SEPARATE: "Changes and Branches in a side dock, Git Log and Console in the bottom panel",
+	LAYOUT_BOTTOM: "Changes and Branches as tabs in the bottom panel, next to Git Log",
+}
 
 const ID_AUTO_FETCH := 3
 
@@ -143,15 +154,18 @@ func _enter_tree() -> void:
 	add_tool_submenu_item("Godit", tools_menu)
 	_apply_auto_reload_setting()
 	_apply_auto_save_setting()
+	_add_commands()
 
 	dock_instance = GoditDockScene.instantiate()
 	dock_instance.plugin = self
 	dock_instance.name = "Git" # dock tab label; scene root is named GoditDock in code
-	add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, dock_instance)
+	add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, dock_instance, commands.shortcut("toggle_dock"))
 
 	history_dock_instance = GoditHistoryDockScene.instantiate()
 	history_dock_instance.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT)
 	add_control_to_bottom_panel(history_dock_instance, "Git Log")
+	dock_instance.set_tab_menu(_layout_menu(PopupMenu.new()))
+	history_dock_instance.set_tab_menu(_layout_menu(PopupMenu.new()))
 	_apply_dock_layout()
 
 	diff_gutter = DiffGutterScript.new()
@@ -227,6 +241,7 @@ func _exit_tree() -> void:
 	# Before freeing the UI: a fetch/push still running would otherwise outlive the plugin and resume coroutines on freed panels.
 	GitCli.shutdown()
 	remove_tool_menu_item("Godit")
+	commands.clear()
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
 	DiffViewScript.expander = Callable()
 	DiffViewScript.collapser = Callable()
@@ -269,6 +284,78 @@ func _exit_tree() -> void:
 	watcher.free() # after the panels, which are subscribed to it
 
 	GitCli.restore_environment()
+
+
+func _shortcut_input(event: InputEvent) -> void:
+	if commands != null and commands.handle(event):
+		get_viewport().set_input_as_handled()
+
+
+## Command Palette entries (Ctrl/Cmd+Shift+P, "Godit: …"), with shortcuts in Editor Settings > Shortcuts > Godit.
+func _add_commands() -> void:
+	commands = EditorCommands.new()
+	commands.add("toggle_dock", "Toggle Godit Dock", Callable(), [EditorCommands.alt_key(KEY_G)])
+	commands.add("show_changes", "Show File Status", _show_changes.bind(""), [EditorCommands.command_digit(KEY_1)])
+	commands.add("show_history", "Show History", _reveal_history, [EditorCommands.command_digit(KEY_2)])
+	commands.add("show_branches", "Show Branches", _reveal_branches, [EditorCommands.command_digit(KEY_3)])
+	commands.add("show_console", "Show Console", _show_console, [EditorCommands.command_digit(KEY_4)])
+	commands.add("commit", "Commit…", _show_changes.bind("commit"))
+	commands.add("fetch", "Fetch", func() -> void: dock_instance.press_sync("fetch"))
+	commands.add("pull", "Pull", func() -> void: dock_instance.press_sync("pull"))
+	commands.add("push", "Push", func() -> void: dock_instance.press_sync("push"))
+	commands.add("file_history", "History of the Open Scene or Script", _show_open_file_history)
+	commands.add("toggle_blame", "Toggle Blame", func() -> void: _set_blame_enabled(not Settings.get_value(BLAME_SETTING_KEY, false)))
+	commands.add("toggle_sidebar", "Toggle Sidebar", func() -> void:
+		if combined_dock != null:
+			combined_dock.toggle_sidebar()
+	)
+	for layout: String in [LAYOUT_COMBINED, LAYOUT_SEPARATE, LAYOUT_BOTTOM]:
+		commands.add("layout_" + layout, "Layout: " + LAYOUT_TITLES[layout], set_layout.bind(layout))
+
+
+## The layout choice inside the docks: the combined dock's toolbar menu and the tab bar menus of the Git dock, Git Log and the bottom tabs.
+func _layout_menu(menu: PopupMenu) -> PopupMenu:
+	menu.add_separator("Layout")
+	for layout: String in [LAYOUT_COMBINED, LAYOUT_SEPARATE, LAYOUT_BOTTOM]:
+		var id: int = LAYOUT_IDS.find_key(layout)
+		menu.add_radio_check_item(LAYOUT_TITLES[layout], id)
+		menu.set_item_tooltip(menu.get_item_index(id), LAYOUT_TOOLTIPS[layout])
+	menu.about_to_popup.connect(func() -> void:
+		for id: int in LAYOUT_IDS:
+			menu.set_item_checked(menu.get_item_index(id), LAYOUT_IDS[id] == _layout)
+	)
+	# Deferred: switching frees the dock the menu is in.
+	menu.id_pressed.connect(func(id: int) -> void: set_layout.call_deferred(LAYOUT_IDS[id]))
+	return menu
+
+
+## Switches the layout (Tools menu, the docks' layout menus, command palette) and shows where the panels went.
+func set_layout(layout: String) -> void:
+	Settings.set_value(DOCK_LAYOUT_SETTING_KEY, layout)
+	_update_layout_items()
+	_apply_dock_layout()
+	if combined_dock != null:
+		_reveal(combined_dock)
+	elif bottom_dock_container != null:
+		_reveal(bottom_dock_container)
+	else:
+		_reveal(dock_instance)
+
+
+## The current scene's history, or the current script's while the Script screen is open.
+func _show_open_file_history() -> void:
+	var path := ""
+	if _last_main_screen == "Script":
+		path = EditorOpen.current_tab_path()
+	elif EditorInterface.get_edited_scene_root() != null:
+		path = EditorInterface.get_edited_scene_root().scene_file_path
+	var repo: RefCounted = watcher.repo
+	if path.is_empty() or repo == null:
+		return
+	var abs_path := ProjectSettings.globalize_path(path)
+	var root: String = repo.get_repo_root() + "/"
+	if abs_path.begins_with(root):
+		_show_file_history(abs_path.trim_prefix(root))
 
 
 func _has_main_screen() -> bool:
@@ -357,6 +444,19 @@ func _show_console() -> void:
 		history_dock_instance.show_console()
 
 
+## Brings Branches (the combined dock's sidebar or view, or its tab) to front.
+func _reveal_branches() -> void:
+	if combined_dock != null:
+		_reveal(combined_dock)
+		combined_dock.show_view("branches")
+	elif bottom_dock_container != null:
+		_reveal(bottom_dock_container)
+		bottom_dock_container.current_tab = bottom_dock_container.get_node("Branches").get_index()
+	else:
+		_reveal(dock_instance)
+		dock_instance.show_branches()
+
+
 ## Brings Changes (in whichever layout) to front.
 func _reveal_changes() -> void:
 	if combined_dock != null:
@@ -389,9 +489,7 @@ func _on_gutter_change_clicked(rel_path: String, line: int) -> void:
 
 func _on_tools_menu_id_pressed(id: int) -> void:
 	if LAYOUT_IDS.has(id):
-		Settings.set_value(DOCK_LAYOUT_SETTING_KEY, LAYOUT_IDS[id])
-		_update_layout_items()
-		_apply_dock_layout()
+		set_layout(LAYOUT_IDS[id])
 		return
 	var index := tools_menu.get_item_index(id)
 	var checked := not tools_menu.is_item_checked(index)
@@ -478,7 +576,7 @@ func _apply_dock_layout() -> void:
 			bottom_dock_container.remove_child(changes)
 			bottom_dock_container.remove_child(branches)
 			dock_instance.reattach_panels({"changes": changes, "branches": branches})
-			add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, dock_instance)
+			add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, dock_instance, commands.shortcut("toggle_dock"))
 			bottom_dock_container.free()
 			bottom_dock_container = null
 		LAYOUT_COMBINED:
@@ -489,7 +587,7 @@ func _apply_dock_layout() -> void:
 				history_dock_instance.reattach_panels()
 			combined_dock.free()
 			combined_dock = null
-			add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, dock_instance)
+			add_control_to_dock(EditorPlugin.DOCK_SLOT_LEFT_UR, dock_instance, commands.shortcut("toggle_dock"))
 			add_control_to_bottom_panel(history_dock_instance, "Git Log")
 
 	match want:
@@ -500,7 +598,10 @@ func _apply_dock_layout() -> void:
 			bottom_dock_container.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT)
 			bottom_dock_container.add_child(panels["changes"])
 			bottom_dock_container.add_child(panels["branches"])
-			add_control_to_bottom_panel(bottom_dock_container, "Git Changes")
+			var menu := _layout_menu(PopupMenu.new())
+			bottom_dock_container.add_child(menu, false, Node.INTERNAL_MODE_FRONT)
+			bottom_dock_container.set_popup(menu)
+			add_control_to_bottom_panel(bottom_dock_container, "Git Changes", commands.shortcut("toggle_dock"))
 		LAYOUT_COMBINED:
 			remove_control_from_docks(dock_instance)
 			remove_control_from_bottom_panel(history_dock_instance)
@@ -510,6 +611,9 @@ func _apply_dock_layout() -> void:
 				panels.merge(history_dock_instance.detach_panels())
 			combined_dock = CombinedDockScript.new(panels)
 			combined_dock.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT) # it starts in the bottom panel, where it mustn't shrink to a clipped sliver
+			if combined_dock.layout_menu() != null:
+				_layout_menu(combined_dock.layout_menu())
+			combined_dock.use_shortcuts(commands.shortcuts())
 			_add_combined_dock()
 	_layout = want
 
@@ -517,7 +621,7 @@ func _apply_dock_layout() -> void:
 ## Bottom panel by default. On 4.6+ as an EditorDock the user can move to a side dock or make floating, and the editor remembers where; older versions can only put it in the bottom panel.
 func _add_combined_dock() -> void:
 	if not ClassDB.class_exists("EditorDock"):
-		add_control_to_bottom_panel(combined_dock, "Godit")
+		add_control_to_bottom_panel(combined_dock, "Godit", commands.shortcut("toggle_dock"))
 		return
 	# Through ClassDB and call(): EditorDock, add_dock() and DOCK_SLOT_BOTTOM don't exist before 4.6, and naming them would break parsing there.
 	_combined_editor_dock = ClassDB.instantiate("EditorDock")
@@ -526,6 +630,7 @@ func _add_combined_dock() -> void:
 	_combined_editor_dock.set("global", true) # listed in Editor > Editor Docks, so it can be reopened after closing
 	_combined_editor_dock.set("default_slot", ClassDB.class_get_integer_constant("EditorDock", "DOCK_SLOT_BOTTOM"))
 	_combined_editor_dock.set("available_layouts", ClassDB.class_get_integer_constant("EditorDock", "DOCK_LAYOUT_ALL"))
+	_combined_editor_dock.set("dock_shortcut", commands.shortcut("toggle_dock"))
 	_combined_editor_dock.add_child(combined_dock)
 	call("add_dock", _combined_editor_dock)
 

@@ -64,7 +64,16 @@ func reattach_panels() -> void:
 		_tabs.add_child(_console)
 
 
-## Brings the Log tab to front with oid selected.
+## Puts menu (plugin.gd's layout choice) behind the menu button at the end of the tab bar; freed without a repo, where there are no tabs.
+func set_tab_menu(menu: PopupMenu) -> void:
+	if _tabs == null:
+		menu.free()
+		return
+	_tabs.add_child(menu, false, INTERNAL_MODE_FRONT)
+	_tabs.set_popup(menu)
+
+
+## Brings the Console tab to front.
 func show_console() -> void:
 	if _tabs != null and _console.get_parent() == _tabs:
 		_tabs.current_tab = _console.get_index()

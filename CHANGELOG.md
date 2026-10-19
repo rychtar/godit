@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Command Palette**: every Godit command (`Ctrl/Cmd+Shift+P`, "Godit: …"): show File Status, History, Branches or Console, Commit, Fetch, Pull, Push, the three layouts, Toggle Sidebar, Toggle Blame, and the history of the open scene or script.
+- **Shortcuts**: `Ctrl/Cmd+1` to `4` open File Status, History, Branches and Console in any layout (by the key's place, so they work on layouts where the digits need Shift), `Alt+G` shows or hides the Godit dock like `Alt+O` the Output. On Godot 4.5+ they're in Editor Settings > Shortcuts > Godit, where the other commands can get keys too.
+- **Layout menu** in the combined dock's toolbar and in the tab bars of the Git dock, Git Log and the bottom tabs; switching shows where the panels went.
+- **Combined dock**: the toolbar button hides the sidebar (remembered); the view buttons move into the toolbar and Branches becomes a view.
+- Dividers remember where they were dragged, across resizes and restarts: Changes list and diff, Git Log graph, details and file diff, the combined dock's sidebar.
+
+### Fixed
+
+- Fetch/Pull/Push didn't turn into icons after switching to a layout with a narrow Git dock, or with longer translated labels: the bar held the panel wider than the dock, which cut it off on both sides.
+
 ## 1.3.0 - 2026-10-18
 
 ### Added

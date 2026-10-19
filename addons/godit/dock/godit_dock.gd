@@ -108,6 +108,24 @@ func show_changes(action: String) -> void:
 	_changes_panel.run_action(action)
 
 
+## Brings the Branches tab to front within this dock.
+func show_branches() -> void:
+	if _branches_panel.get_parent() == _tab_container:
+		_tab_container.current_tab = _branches_panel.get_index()
+
+
+## Fetch, Pull or Push from the Changes header (see sync_bar.gd's press()).
+func press_sync(action: String) -> void:
+	if _repo != null:
+		_changes_panel._sync_bar.press(action)
+
+
+## Puts menu (plugin.gd's layout choice) behind the menu button at the end of the tab bar.
+func set_tab_menu(menu: PopupMenu) -> void:
+	_tab_container.add_child(menu, false, INTERNAL_MODE_FRONT)
+	_tab_container.set_popup(menu)
+
+
 ## Scrolls the Changes diff to path/line, e.g. from a click on the script editor's change gutter.
 func reveal_change(path: String, line: int) -> void:
 	if _changes_panel.get_parent() == _tab_container:

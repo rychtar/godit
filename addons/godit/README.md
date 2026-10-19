@@ -31,7 +31,8 @@ For push and pull, git has to log in without asking: use a credential helper for
 
 ## Usage
 
-- **Where**: Godit opens as one SourceTree-style dock in the bottom panel: File Status, History and Console on the left with your branches under them. On Godot 4.6+ drag it to a side dock or make it floating, e.g. on a second monitor, and it stays there. Narrower than 480 px, Changes leaves the diff out: right-click a file, Show Diff in the Godit Tab.
+- **Where**: Godit opens as one SourceTree-style dock in the bottom panel: File Status, History and Console on the left with your branches under them. On Godot 4.6+ drag it to a side dock or make it floating, e.g. on a second monitor, and it stays there. The button at the left of its toolbar hides the sidebar, the one at the right switches the layout. Dividers stay where you drag them. Narrower than 480 px, Changes leaves the diff out: right-click a file, Show Diff in the Godit Tab.
+- **Keyboard**: `Ctrl/Cmd+1` to `4` open File Status, History, Branches and Console, `Alt+G` shows or hides the Godit dock. Every Godit command is in the Command Palette (`Ctrl/Cmd+Shift+P`, type "godit"): commit, fetch, pull, push, the layouts, blame, history of the open scene or script. On Godot 4.5+ bind or change their keys in Editor Settings > Shortcuts > Godit.
 - **Commit**: tick files in **File Status**, type a message and press `Ctrl/Cmd+Enter`. Add `Shift` to also push.
 - **Stage part of a file**: open its diff and stage a hunk or selected lines.
 - **Changelists**: double-click one to make it active and drag files between them.
@@ -42,7 +43,7 @@ For push and pull, git has to log in without asking: use a credential helper for
 
 ## Settings
 
-Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, a faster `git status` for large projects (git's file system monitor), the Godit tab, changes in the Inspector, and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel.
+Project > Tools > Godit: auto-reload changed files, auto-save scripts, background fetch, blame column, whether to confirm keyboard commits, a faster `git status` for large projects (git's file system monitor), the Godit tab, changes in the Inspector, and the layout: one combined dock (default), a Git dock plus Git Log, or both in the bottom panel. The layout menu in the dock's toolbar or tab bar switches it too.
 
 The ⋮ menu in the Changes panel controls auto-staging, auto-adding new files and the masks for files to skip (for example `*.psd` source art). `.import` and `.uid` files are added with the file they belong to, since Godot needs them in the repo.
 

@@ -5,8 +5,10 @@ extends Control
 const UiScale := preload("res://addons/godit/util/ui_scale.gd")
 const Settings := preload("res://addons/godit/util/settings.gd")
 const RepoInitView := preload("res://addons/godit/dock/widgets/repo_init_view.gd")
+const SplitMemory := preload("res://addons/godit/util/split_memory.gd")
 
 const VIEW_SETTING_KEY := "combined_view"
+const SIDEBAR_HIDDEN_SETTING_KEY := "combined_sidebar_hidden"
 const SIDEBAR_WIDTH := 240
 ## Below this width (a side dock) the view buttons go in a row on top and Branches becomes a view of its own.
 const WIDE_MIN_WIDTH := 720
@@ -28,6 +30,12 @@ var _sidebar: VBoxContainer
 var _sidebar_panel: PanelContainer
 ## The branch/Fetch/Pull/Push bar across the top, padded like the sidebar and underlined like its edge.
 var _toolbar: PanelContainer
+## Sidebar toggle, the view buttons while the sidebar is hidden, the sync bar and the layout menu.
+var _toolbar_row: HBoxContainer
+var _sidebar_button: Button
+## Between the view buttons and Fetch while they share the toolbar.
+var _toolbar_gap: VSeparator
+var _layout_button: MenuButton
 var _buttons: BoxContainer
 var _views: TabContainer
 var _view_buttons := {}
@@ -35,6 +43,8 @@ var _view_buttons := {}
 var _changes_badge: Label
 var _headers: Array[Label] = []
 var _wide := true
+## Hidden with the toolbar button; the view buttons then sit in the toolbar and Branches becomes a view.
+var _sidebar_hidden := false
 ## The view shown last, besides Branches while it sits in the sidebar.
 var _view := "changes"
 
@@ -55,7 +65,24 @@ func _init(panels: Dictionary) -> void:
 	_sync_bar.set_toolbar_mode(true)
 	_layout.add_theme_constant_override("separation", 0) # toolbar line, sidebar edge and views meet
 	_toolbar = PanelContainer.new()
-	_toolbar.add_child(_sync_bar)
+	_toolbar_row = HBoxContainer.new()
+	_toolbar.add_child(_toolbar_row)
+	_sidebar_button = Button.new()
+	_sidebar_button.flat = true
+	_sidebar_button.toggle_mode = true
+	_sidebar_button.size_flags_vertical = SIZE_SHRINK_BEGIN
+	_sidebar_button.tooltip_text = "Show or hide the sidebar with the views and branches"
+	_sidebar_button.toggled.connect(func(on: bool) -> void: set_sidebar_hidden(not on))
+	_toolbar_row.add_child(_sidebar_button)
+	_toolbar_gap = VSeparator.new()
+	_toolbar_row.add_child(_toolbar_gap)
+	_sync_bar.size_flags_horizontal = SIZE_EXPAND_FILL
+	_toolbar_row.add_child(_sync_bar)
+	_layout_button = MenuButton.new()
+	_layout_button.flat = true
+	_layout_button.size_flags_vertical = SIZE_SHRINK_BEGIN
+	_layout_button.tooltip_text = "Layout: one combined dock, a Git dock with Git Log, or both in the bottom panel"
+	_toolbar_row.add_child(_layout_button)
 	_layout.add_child(_toolbar)
 	panels["branches"].set_sidebar_mode(true, _sync_bar.operation_bar)
 	panels["branches"].ref_selected.connect(_on_ref_selected)
@@ -73,6 +100,7 @@ func _init(panels: Dictionary) -> void:
 	_views.tabs_visible = false
 	_views.size_flags_horizontal = SIZE_EXPAND_FILL
 	split.add_child(_views)
+	SplitMemory.keep_offset(split, "combined_sidebar")
 
 	_sidebar.add_child(_header("Workspace"))
 	var gap := Control.new()
@@ -81,6 +109,7 @@ func _init(panels: Dictionary) -> void:
 
 	_buttons = BoxContainer.new()
 	_buttons.add_theme_constant_override("separation", int(UiScale.px(1)))
+	_buttons.size_flags_vertical = SIZE_SHRINK_BEGIN # in the toolbar, level with the sync bar's buttons
 	var group := ButtonGroup.new()
 	for view: String in VIEWS:
 		var button := Button.new()
@@ -111,10 +140,12 @@ func _init(panels: Dictionary) -> void:
 		panels[view].size_flags_vertical = SIZE_EXPAND_FILL
 		_views.add_child(panels[view])
 	_view = Settings.get_value(VIEW_SETTING_KEY, "changes")
-	_set_wide(true)
+	_sidebar_hidden = Settings.get_value(SIDEBAR_HIDDEN_SETTING_KEY, false)
+	_arrange()
 	resized.connect(func() -> void:
 		if (size.x >= UiScale.px(WIDE_MIN_WIDTH)) != _wide:
-			_set_wide(not _wide)
+			_wide = not _wide
+			_arrange()
 	)
 
 
@@ -138,6 +169,11 @@ func _notification(what: int) -> void:
 		if has_theme_icon(VIEW_ICONS[view], &"EditorIcons"):
 			_view_buttons[view].icon = get_theme_icon(VIEW_ICONS[view], &"EditorIcons")
 		_style_view_button(_view_buttons[view])
+	for pair: Array in [[_sidebar_button, &"Panels2Alt"], [_layout_button, &"Panels3Alt"]]:
+		if has_theme_icon(pair[1], &"EditorIcons"):
+			pair[0].icon = get_theme_icon(pair[1], &"EditorIcons")
+		else:
+			pair[0].text = "Sidebar" if pair[0] == _sidebar_button else "Layout"
 	_style_panels()
 	var small := int(get_theme_font_size(&"font_size", &"Label") * 0.85)
 	for header in _headers:
@@ -200,37 +236,75 @@ func _set_change_count(count: int) -> void:
 	_changes_badge.text = str(count) if count > 0 else ""
 
 
-## Wide: buttons and Branches in a sidebar left of the views. Narrow: buttons in a row above, Branches a view like the rest.
-func _set_wide(wide: bool) -> void:
-	_wide = wide
+func _has_sidebar() -> bool:
+	return _wide and not _sidebar_hidden
+
+
+## Wide: buttons and Branches in a sidebar left of the views, or the buttons in the toolbar while the sidebar is hidden. Narrow: buttons in a row above. Without the sidebar, Branches is a view like the rest.
+func _arrange() -> void:
+	var sidebar := _has_sidebar()
 	var branches: Control = _panels["branches"]
 	if _buttons.get_parent() != null:
 		_buttons.get_parent().remove_child(_buttons)
 	branches.get_parent().remove_child(branches)
-	_buttons.vertical = wide
-	_view_buttons["branches"].visible = not wide
-	_changes_badge.visible = wide # would sit on top of the clipped title in a row
+	_buttons.vertical = sidebar
+	_view_buttons["branches"].visible = not sidebar
+	_changes_badge.visible = sidebar # would sit on top of the title in a row
 	for button: Button in _view_buttons.values():
-		button.size_flags_horizontal = SIZE_FILL if wide else SIZE_EXPAND_FILL
-		button.clip_text = not wide # four titles in a row would otherwise hold the side dock wider than it is
-	if wide:
+		button.size_flags_horizontal = SIZE_FILL if _wide else SIZE_EXPAND_FILL
+		button.clip_text = not _wide # four titles in a row would otherwise hold the side dock wider than it is
+	if sidebar:
 		_sidebar.add_child(_buttons)
 		_sidebar.move_child(_buttons, 1)
 		_sidebar.add_child(branches)
 		branches.visible = true # a TabContainer hid it as a background tab
 	else:
-		_layout.add_child(_buttons)
-		_layout.move_child(_buttons, _toolbar.get_index() + 1)
 		_views.add_child(branches)
-	_sidebar_panel.visible = wide
-	show_view("changes" if wide and _view == "branches" else _view)
+		if _wide:
+			_toolbar_row.add_child(_buttons)
+			_toolbar_row.move_child(_buttons, 1)
+		else:
+			_layout.add_child(_buttons)
+			_layout.move_child(_buttons, _toolbar.get_index() + 1)
+	_sidebar_panel.visible = sidebar
+	_sidebar_button.visible = _wide
+	_toolbar_gap.visible = _wide and not sidebar
+	_sidebar_button.set_pressed_no_signal(sidebar)
+	show_view("changes" if sidebar and _view == "branches" else _view)
+
+
+## Hides the sidebar (remembered), leaving the views the whole width.
+func set_sidebar_hidden(hidden: bool) -> void:
+	if _panels.is_empty() or hidden == _sidebar_hidden:
+		return
+	_sidebar_hidden = hidden
+	Settings.set_value(SIDEBAR_HIDDEN_SETTING_KEY, hidden)
+	_arrange()
+
+
+func toggle_sidebar() -> void:
+	set_sidebar_hidden(not _sidebar_hidden)
+
+
+## The layout menu in the toolbar, which plugin.gd fills.
+func layout_menu() -> PopupMenu:
+	return _layout_button.get_popup() if _layout_button != null else null
+
+
+## Shortcut resources by command key (see plugin.gd), shown in the buttons' tooltips; a button also runs its shortcut itself while visible.
+func use_shortcuts(shortcuts: Dictionary) -> void:
+	if _panels.is_empty():
+		return
+	for view: String in _view_buttons:
+		_view_buttons[view].shortcut = shortcuts.get("show_" + view)
+	_sidebar_button.shortcut = shortcuts.get("toggle_sidebar")
 
 
 ## Brings "changes", "history", "branches" or "console" to front.
 func show_view(view: String) -> void:
 	if _views == null or not view in VIEWS:
 		return
-	if view == "branches" and _wide:
+	if view == "branches" and _has_sidebar():
 		return # always visible in the sidebar
 	_view = view
 	_views.current_tab = _panels[view].get_index()
@@ -257,7 +331,7 @@ func detach_panels() -> Dictionary:
 
 ## Selecting a branch, tag or stash in the sidebar shows its commit in History, like SourceTree.
 func _on_ref_selected(ref: String) -> void:
-	if not _wide or _view != "history":
+	if not _has_sidebar() or _view != "history":
 		return
 	var oid: String = _panels["history"]._repo.resolve_commit(ref)
 	if not oid.is_empty():

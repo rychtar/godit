@@ -141,6 +141,13 @@ func set_repo(repo: RefCounted) -> void:
 	refresh()
 
 
+## "fetch", "pull" or "push" as if its button was clicked (command palette, shortcuts); nothing while the button is disabled.
+func press(action: String) -> void:
+	var button: Button = {"fetch": _fetch_button, "pull": _pull_button, "push": _push_button}.get(action)
+	if button != null and not button.disabled:
+		button.pressed.emit()
+
+
 ## The combined dock's window-wide toolbar: no branch switcher (the sidebar lists and switches branches) and Fetch/Pull/Push at the left instead of far off at the right.
 func set_toolbar_mode(on: bool) -> void:
 	var row := get_child(0)
