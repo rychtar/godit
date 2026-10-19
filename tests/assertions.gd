@@ -89,7 +89,10 @@ func _remove_recursive(path: String) -> void:
 	for sub in dir.get_directories():
 		_remove_recursive(path.path_join(sub))
 	for file in dir.get_files():
-		DirAccess.remove_absolute(path.path_join(file))
+		var file_path := path.path_join(file)
+		if DirAccess.remove_absolute(file_path) != OK:
+			FileAccess.set_read_only_attribute(file_path, false) # git's objects are read-only, and Windows won't delete those
+			DirAccess.remove_absolute(file_path)
 	DirAccess.remove_absolute(path)
 
 func cleanup() -> void:
@@ -99,4 +102,7 @@ func cleanup() -> void:
 	_nodes.clear()
 	for dir in _temp_dirs:
 		_remove_recursive(dir)
+		# leftovers would end up in the next test's folder of the same name
+		if DirAccess.dir_exists_absolute(dir):
+			failures.append("couldn't delete the temp folder %s" % dir)
 	_temp_dirs.clear()
