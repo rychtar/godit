@@ -67,6 +67,7 @@ var _file_header := ""
 func _init() -> void:
 	size_flags_horizontal = SIZE_EXPAND_FILL
 	size_flags_vertical = SIZE_EXPAND_FILL
+	Settings.notifier().changed.connect(_on_setting_changed)
 
 	_tabs = TabBar.new()
 	_tabs.visible = false
@@ -109,7 +110,6 @@ func _init() -> void:
 	_scene_toggle.visible = false
 	_scene_toggle.toggled.connect(func(on: bool) -> void:
 		Settings.set_value("diff_scene_view", on)
-		_rerender(true)
 	)
 	header_row.add_child(_scene_toggle)
 
@@ -241,21 +241,25 @@ func _on_option_pressed(id: int) -> void:
 	match id:
 		OPT_SIDE_BY_SIDE:
 			Settings.set_value("diff_side_by_side", not _setting("side_by_side", false))
-			_rerender()
 		OPT_SYNTAX:
 			Settings.set_value("diff_syntax", not _setting("syntax", true))
-			_rerender()
 		OPT_HIDE_NOISE:
 			Settings.set_value("diff_hide_noise", not _setting("hide_noise", true))
-			_rerender()
 		OPT_IGNORE_WHITESPACE:
 			Settings.set_value("diff_ignore_whitespace", not _setting("ignore_whitespace", false))
-			options_changed.emit()
 		_:
 			if CONTEXT_BY_ID.has(id):
 				Settings.set_value("diff_context", CONTEXT_BY_ID[id])
-				options_changed.emit()
 	_sync_options_menu()
+
+
+## A diff option changed here, in another diff or in Godit Settings: every open diff follows.
+func _on_setting_changed(key: String) -> void:
+	match key:
+		"diff_side_by_side", "diff_syntax", "diff_hide_noise", "diff_scene_view", "diff_image_mode":
+			_rerender(true)
+		"diff_ignore_whitespace", "diff_context":
+			options_changed.emit() # the owner fetches the diff again with get_options()
 
 
 # --- content -----------------------------------------------------------------
@@ -457,7 +461,6 @@ func _show_image_preview(path: String) -> bool:
 			button.button_pressed = key == mode
 			button.pressed.connect(func() -> void:
 				Settings.set_value("diff_image_mode", key)
-				_show_image_preview(path)
 			)
 			bar.add_child(button)
 		_image_view.add_child(bar)

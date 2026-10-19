@@ -87,6 +87,16 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	resized.connect(queue_redraw)
 	focus_mode = Control.FOCUS_CLICK
+	_load_column_settings()
+	Settings.notifier().changed.connect(func(key: String) -> void:
+		if key.begins_with("history_"):
+			_load_column_settings()
+			queue_redraw()
+	)
+
+
+## Also when they change elsewhere: in another Git Log (the combined dock's) or in Godit Settings.
+func _load_column_settings() -> void:
 	var defaults := { "hash": DEFAULT_HASH_COL_WIDTH, "author": DEFAULT_AUTHOR_COL_WIDTH, "date": DEFAULT_DATE_COL_WIDTH }
 	for column in COLUMNS:
 		_col_width[column] = Settings.get_value("history_%s_col_width" % column, defaults[column])
