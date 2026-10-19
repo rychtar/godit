@@ -190,6 +190,7 @@ func _enter_tree() -> void:
 	diff_gutter = DiffGutterScript.new()
 	add_child(diff_gutter)
 	diff_gutter.enable(self)
+	diff_gutter.navigate_shortcuts = [commands.shortcut("previous_change"), commands.shortcut("next_change")]
 
 	diff_gutter.change_clicked.connect(_on_gutter_change_clicked)
 
@@ -354,6 +355,10 @@ func _add_commands() -> void:
 	)
 	commands.add("local_history_project", "Local History of the Project", open_local_history.bind("", true))
 	commands.add("toggle_blame", "Toggle Blame", func() -> void: _set_blame_enabled(not Settings.get_value(BLAME_SETTING_KEY, false)))
+	# Alt+F5 like VS Code; macOS uses F5 with modifiers for VoiceOver, so there Ctrl+Cmd+Down/Up, which neither the system nor the editor binds.
+	var mac := OS.get_name() == "macOS"
+	commands.add("next_change", "Next Change", func() -> void: diff_gutter.goto_change(1), [EditorCommands.ctrl_cmd_key(KEY_DOWN) if mac else EditorCommands.alt_key(KEY_F5)])
+	commands.add("previous_change", "Previous Change", func() -> void: diff_gutter.goto_change(-1), [EditorCommands.ctrl_cmd_key(KEY_UP) if mac else EditorCommands.alt_key(KEY_F5, true)])
 	commands.add("settings", "Settings…", open_settings)
 	commands.add("check_setup", "Check Setup…", open_setup_check)
 	commands.add("switch_branch", "Switch Branch…", func() -> void:

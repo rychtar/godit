@@ -19,6 +19,8 @@ var _anchor_line := 0
 var _first_line := 0
 var _opened_msec := 0
 var _old_view: CodeEdit
+## [previous, next] change Shortcuts, named in the arrows' tooltips.
+var navigate_shortcuts: Array = []
 
 
 func open(code_edit: CodeEdit, regions: Array, index: int, rel_path: String) -> void:
@@ -46,8 +48,8 @@ func open(code_edit: CodeEdit, regions: Array, index: int, rel_path: String) -> 
 	add_child(layout)
 	var toolbar := HBoxContainer.new()
 	layout.add_child(toolbar)
-	_add_button(toolbar, "", "ArrowUp", "Previous change", index > 0, func() -> void: navigate_requested.emit(-1))
-	_add_button(toolbar, "", "ArrowDown", "Next change", index < regions.size() - 1, func() -> void: navigate_requested.emit(1))
+	_add_button(toolbar, "", "ArrowUp", "Previous change" + _shortcut_hint(0), index > 0, func() -> void: navigate_requested.emit(-1))
+	_add_button(toolbar, "", "ArrowDown", "Next change" + _shortcut_hint(1), index < regions.size() - 1, func() -> void: navigate_requested.emit(1))
 	var title := Label.new()
 	title.text = "Change %d of %d · %s" % [index + 1, regions.size(), _summary(region, type)]
 	title.modulate.a = 0.75
@@ -99,6 +101,12 @@ func close() -> void:
 				(pair[0] as Signal).disconnect(pair[1])
 	closed.emit()
 	queue_free()
+
+
+## " (Alt+F5)" for navigate_shortcuts[index] when it's bound, else "".
+func _shortcut_hint(index: int) -> String:
+	var shortcut: Shortcut = navigate_shortcuts[index] if index < navigate_shortcuts.size() else null
+	return " (%s)" % shortcut.get_as_text() if shortcut != null and not shortcut.events.is_empty() else ""
 
 
 func _summary(region: Dictionary, type: String) -> String:

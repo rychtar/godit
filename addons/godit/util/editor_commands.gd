@@ -73,9 +73,19 @@ static func command_digit(keycode: Key) -> InputEventKey:
 	return event
 
 
-## Alt (Option on macOS) with a letter, like the editor's own bottom panel shortcuts.
-static func alt_key(keycode: Key) -> InputEventKey:
+## Control and Command together with a key, for macOS.
+static func ctrl_cmd_key(keycode: Key) -> InputEventKey:
+	var event := InputEventKey.new()
+	event.keycode = keycode
+	event.ctrl_pressed = true
+	event.meta_pressed = true
+	return event
+
+
+## Alt (Option on macOS) with a key, and Shift if asked, like the editor's own bottom panel shortcuts.
+static func alt_key(keycode: Key, shift := false) -> InputEventKey:
 	var event := InputEventKey.new()
 	event.keycode = keycode
 	event.alt_pressed = true
+	event.shift_pressed = shift
 	return event

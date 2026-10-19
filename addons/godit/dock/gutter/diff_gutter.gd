@@ -41,6 +41,8 @@ var _preview: Control
 var _edit_timer: Timer
 ## CodeEdits edited since the last _edit_timer timeout.
 var _edited: Array[CodeEdit] = []
+## [previous, next] change Shortcuts (set by plugin.gd), named in the preview's arrow tooltips.
+var navigate_shortcuts: Array = []
 
 
 func enable(_plugin: EditorPlugin) -> void:
@@ -248,6 +250,47 @@ static func region_at_line(code_edit: CodeEdit, line: int) -> int:
 	return flags[line + 1]["region"] if flags.has(line + 1) else -1
 
 
+## 0-based line a change starts on (a deletion: the line its flag is on).
+static func region_line(region: Dictionary) -> int:
+	return maxi(region["new_start"] - 1, 0)
+
+
+## The change after (delta 1) or before (-1) the 0-based caret line, wrapping around; regions must not be empty.
+static func change_index(regions: Array, caret_line: int, delta: int) -> int:
+	if delta > 0:
+		for i in regions.size():
+			if region_line(regions[i]) > caret_line:
+				return i
+		return 0
+	for i in range(regions.size() - 1, -1, -1):
+		if region_line(regions[i]) < caret_line:
+			return i
+	return regions.size() - 1
+
+
+## Moves the caret of the open script to its next (delta 1) or previous (-1) change against HEAD; an open preview follows. False when the script editor isn't showing a changed file.
+func goto_change(delta: int) -> bool:
+	var code_edit := current_code_edit()
+	var res_path := EditorOpen.current_tab_path()
+	if code_edit == null or not res_path.begins_with("res://") or not _script_editor.is_visible_in_tree():
+		return false
+	refresh_code_edit(code_edit, res_path) # typing in the last EDIT_DELAY isn't flagged yet
+	var regions: Array = code_edit.get_meta(META_REGIONS, [])
+	if regions.is_empty():
+		EditorInterface.get_editor_toaster().push_toast("Git: no changes in %s since the last commit." % res_path.get_file())
+		return false
+	var target := change_index(regions, code_edit.get_caret_line(), delta)
+	var preview_open := is_instance_valid(_preview)
+	code_edit.remove_secondary_carets()
+	code_edit.deselect()
+	code_edit.set_caret_line(region_line(regions[target]))
+	code_edit.set_caret_column(0)
+	code_edit.center_viewport_to_caret()
+	if preview_open:
+		show_preview(code_edit, target)
+	return true
+
+
 ## Inserts the gutter column once per CodeEdit (each open tab has its own), just left of Bookmarks, or at the left edge if that gutter isn't present.
 func _install_gutter(code_edit: CodeEdit) -> void:
 	var insert_at := gutter_index(code_edit, GUTTER_NAME)
@@ -330,10 +373,11 @@ func show_preview(code_edit: CodeEdit, region: int) -> void:
 	if region < 0 or region >= regions.size():
 		return
 	_preview = ChangePreview.new()
+	_preview.navigate_shortcuts = navigate_shortcuts
 	_preview.navigate_requested.connect(func(delta: int) -> void:
 		var target := region + delta
 		if target >= 0 and target < regions.size():
-			code_edit.set_caret_line(maxi(regions[target]["new_start"] - 1, 0))
+			code_edit.set_caret_line(region_line(regions[target]))
 			code_edit.center_viewport_to_caret()
 			show_preview(code_edit, target)
 	)
