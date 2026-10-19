@@ -27,6 +27,7 @@ const SettingsWindowScript := preload("res://addons/godit/dock/widgets/settings_
 const BranchToolbarScript := preload("res://addons/godit/dock/widgets/branch_toolbar.gd")
 const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
 const QuickCommitScript := preload("res://addons/godit/dock/widgets/quick_commit.gd")
+const RemindersScript := preload("res://addons/godit/util/reminders.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -53,6 +54,8 @@ var filesystem_colors: Node
 var filesystem_menu: EditorContextMenuPlugin
 ## Polls the repo for every panel; created before them, since they subscribe as they get their repo.
 var watcher: Node
+## Toasts about work left uncommitted or unpushed for hours.
+var reminders: Node
 ## Project > Tools > Godit submenu, holding the auto-reload toggle.
 var tools_menu: PopupMenu
 ## The Godit tab next to 2D/3D/Script showing a diff full size, or null when turned off.
@@ -129,6 +132,8 @@ func _enter_tree() -> void:
 	EditorOpen.remember_scene_state() # Godit's own files as loaded, for a git operation that changes them
 	watcher = RepoWatcherScript.new()
 	add_child(watcher)
+	reminders = RemindersScript.new()
+	add_child(reminders)
 
 	tools_menu = PopupMenu.new()
 	tools_menu.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # it goes into the editor's Tools menu, which would translate it (see godit_dock.gd)
@@ -310,6 +315,7 @@ func _exit_tree() -> void:
 	if blame_gutter.has_method("disable"):
 		blame_gutter.disable()
 	blame_gutter.free()
+	reminders.free()
 	watcher.free() # after the panels, which are subscribed to it
 
 	GitCli.restore_environment()
