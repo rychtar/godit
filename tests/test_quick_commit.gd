@@ -6,12 +6,9 @@ const ChangesPanelScene = preload("res://addons/godit/dock/panels/changes_panel.
 const QuickCommit = preload("res://addons/godit/dock/widgets/quick_commit.gd")
 const Settings = preload("res://addons/godit/util/settings.gd")
 
-# Settings in a temp folder, with auto-staging off: the window shows what the checkboxes did.
+# Auto-staging off (in the runner's temp settings): the window shows what the checkboxes did.
 func _window() -> QuickCommit:
 	await tree.process_frame # the root isn't in the tree yet while the runner starts
-	var dir := make_temp_dir()
-	Settings.local_path_override = dir.path_join("project.cfg")
-	Settings.global_path_override = dir.path_join("global.cfg")
 	Settings.set_value("auto_stage_changes", false)
 	var repo := make_repo()
 	commit_file(repo, "a.txt", "1\n", "first")
@@ -40,7 +37,6 @@ func test_checkboxes_stage_the_files() -> void:
 	check_contains("counted", window._summary.text, "1 of 2 changed files staged")
 	window.set_staged("a.txt", true)
 	check("and back in", _rows(window), [["a.txt", true], ["b.txt", true]])
-	_restore()
 
 func test_commit_needs_a_message_and_a_staged_file() -> void:
 	var window := await _window()
@@ -55,8 +51,3 @@ func test_commit_needs_a_message_and_a_staged_file() -> void:
 	window._message.text_changed.emit()
 	window.set_staged("b.txt", true)
 	check("no message", window.get_ok_button().disabled, true)
-	_restore()
-
-func _restore() -> void:
-	Settings.local_path_override = ""
-	Settings.global_path_override = ""

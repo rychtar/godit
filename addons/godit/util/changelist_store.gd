@@ -6,6 +6,12 @@ extends RefCounted
 
 const DEFAULT_NAME := "Default"
 const CONFIG_PATH := "user://godit_changelists.cfg"
+## The test runner points this elsewhere, so tests don't write into the project's user://.
+static var path_override := ""
+
+
+static func _path() -> String:
+	return path_override if not path_override.is_empty() else CONFIG_PATH
 
 
 static func _section(repo_root: String) -> String:
@@ -21,7 +27,7 @@ static func load_state(repo_root: String) -> Dictionary:
 	if _cache.has(repo_root):
 		return _cache[repo_root]
 	var cfg := ConfigFile.new()
-	cfg.load(CONFIG_PATH) # missing file is fine, falls through to defaults
+	cfg.load(_path()) # missing file is fine, falls through to defaults
 	var section := _section(repo_root)
 
 	var names: Array = cfg.get_value(section, "names", [])
@@ -45,14 +51,14 @@ static func load_state(repo_root: String) -> Dictionary:
 
 static func save_state(repo_root: String, state: Dictionary) -> void:
 	var cfg := ConfigFile.new()
-	cfg.load(CONFIG_PATH)
+	cfg.load(_path())
 	var section := _section(repo_root)
 	cfg.set_value(section, "names", state["names"])
 	cfg.set_value(section, "assignments", state["assignments"])
 	cfg.set_value(section, "active", state["active"])
 	cfg.set_value(section, "shelved", state.get("shelved", {}))
 	cfg.set_value(section, "messages", state.get("messages", {}))
-	cfg.save(CONFIG_PATH)
+	cfg.save(_path())
 
 
 ## Remembers which changelist each stashed path was in, keyed by the stash's commit oid (stable, unlike stash@{n}).

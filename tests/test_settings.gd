@@ -7,17 +7,20 @@ const SettingsWindow = preload("res://addons/godit/dock/widgets/settings_window.
 const MASKS_SETTING := "godit/changes/auto_add_ignore_masks"
 
 var _dir := ""
+## The runner's paths, put back by _restore().
+var _runner_paths: Array = []
 
 func _isolate() -> void:
+	_runner_paths = [Settings.local_path_override, Settings.global_path_override, Settings.project_file_override]
 	_dir = make_temp_dir()
 	Settings.local_path_override = _dir.path_join("project_a.cfg")
 	Settings.global_path_override = _dir.path_join("config/godit_settings.cfg")
 	Settings.project_file_override = _dir.path_join("project.godot")
 
 func _restore() -> void:
-	Settings.local_path_override = ""
-	Settings.global_path_override = ""
-	Settings.project_file_override = ""
+	Settings.local_path_override = _runner_paths[0]
+	Settings.global_path_override = _runner_paths[1]
+	Settings.project_file_override = _runner_paths[2]
 	ProjectSettings.set_setting(MASKS_SETTING, null)
 
 func _write_local(key: String, value: Variant) -> void:
