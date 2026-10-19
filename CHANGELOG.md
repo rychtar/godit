@@ -45,6 +45,7 @@
 
 ### Fixed
 
+- Branches and the toolbar's branch switcher ran the counts of a branch both ahead and behind together: `↑12 ↓2` instead of `↑1 ↓2`.
 - Fetch/Pull/Push didn't turn into icons after switching to a layout with a narrow Git dock, or with longer translated labels: the bar held the panel wider than the dock, which cut it off on both sides.
 - In an editor set to another language, Godit was half translated: the editor's own catalog translated the words it happens to have (in Czech Fetch became "Stáhnout změny", Amend "Doplnit", History "Historie", Revert, Cancel and dialog titles too) and left the rest in English. Godit's docks, the Godit tab, its dialogs, menus, tooltips, the Inspector rows and the change preview stay in English now.
 - Editor Settings > Shortcuts > Godit showed Fetch, Pull and Push translated in a non-English editor; the commands are called Fetch All Remotes, Pull Current Branch and Push Current Branch now (in the Command Palette too), which the editor doesn't translate.

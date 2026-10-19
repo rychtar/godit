@@ -46,6 +46,22 @@ func test_fetch_and_pull_bring_in_a_collaborators_commit() -> void:
 	check("file arrived", read_file(repo.get_repo_root().path_join("b.txt")), "b\n")
 	check("in sync again", repo.get_sync_status().behind, 0)
 
+func test_branches_count_ahead_and_behind_apart() -> void:
+	var s := _setup()
+	var repo: GitCliRepo = s.repo
+	await repo.push({ "remote": "origin", "branch": "main", "set_upstream": true })
+	var other := make_temp_dir()
+	git(other, ["clone", "-q", s.remote, "."])
+	for n in 2:
+		write_file(other.path_join("b.txt"), "%d\n" % n)
+		git(other, ["add", "b.txt"])
+		git(other, ["commit", "-q", "-m", "theirs %d" % n])
+	git(other, ["push", "-q", "origin", "main"])
+	commit_file(repo, "a.txt", "2\n", "mine")
+	await repo.fetch()
+	var main: Dictionary = repo.list_branches()[0]
+	check("one ahead, two behind", [main.ahead, main.behind], [1, 2])
+
 func test_a_rejected_push_is_reported() -> void:
 	var s := _setup()
 	var repo: GitCliRepo = s.repo

@@ -430,11 +430,12 @@ static func recent_first(branches: Array, recent: PackedStringArray) -> Array:
 	return order.map(func(i: int) -> Dictionary: return branches[i])
 
 
+## The count after word in "[ahead 1, behind 2]"; cut at the comma first, since to_int() joins every digit in a string ("1, behind 2" gave 12).
 static func _track_count(track: String, word: String) -> int:
 	var at := track.find(word + " ")
 	if at == -1:
 		return 0
-	return track.substr(at + word.length() + 1).to_int()
+	return track.substr(at + word.length() + 1).get_slice(",", 0).get_slice("]", 0).to_int()
 
 
 ## Array[{"name", "oid", "summary", "annotated"}], newest first.
