@@ -36,6 +36,10 @@ var _pull_autostash := false
 ## Local branch names in the switcher popup, by item id.
 var _menu_branches: Array = []
 var _compact := false
+## The width the full-size bar needs, taken when it last turned compact: it stays compact until it has that much room again.
+var _full_width := 0.0
+## The nearest ancestor that isn't a container (the panel), whose width is the room the bar really has.
+var _holder: Control
 var _refresh_button: Button
 
 
@@ -88,10 +92,7 @@ func _init() -> void:
 	_refresh_button = _button(row, "", "Refresh", func() -> void: changed.emit())
 	_refresh_button.flat = true
 	_refresh_button.set_meta("icon_name", &"Reload")
-	resized.connect(func() -> void:
-		if _is_narrow() != _compact:
-			refresh()
-	)
+	resized.connect(_on_resized)
 
 	operation_bar = OperationBar.new()
 	_own_operation_bar = operation_bar
@@ -99,6 +100,8 @@ func _init() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_ENTER_TREE:
+		_watch_holder()
 	if what == NOTIFICATION_THEME_CHANGED:
 		# Editor icons are only reachable once the bar is in the editor's theme.
 		_set_icon(_branch_button, &"GuiTreeArrowDown")
@@ -141,6 +144,7 @@ func set_repo(repo: RefCounted) -> void:
 ## The combined dock's window-wide toolbar: no branch switcher (the sidebar lists and switches branches) and Fetch/Pull/Push at the left instead of far off at the right.
 func set_toolbar_mode(on: bool) -> void:
 	var row := get_child(0)
+	_full_width = 0.0 # measured with the other set of buttons
 	_branch_button.visible = not on
 	row.move_child(_upstream_label, row.get_child_count() - 1 if on else 1)
 	refresh()
@@ -194,13 +198,49 @@ func refresh() -> void:
 		_push_button.tooltip_text = "HEAD is detached — checkout a branch to push"
 
 
-func _is_narrow() -> bool:
-	return size.x > 0 and size.x < UiScale.px(COMPACT_WIDTH)
+func _on_resized() -> void:
+	if _wants_compact() != _compact:
+		refresh()
+
+
+## Containers grow past their panel to fit the full-size bar, so its own width never drops below COMPACT_WIDTH once its labels need more (after a layout switch, or with longer translated labels): the panel's width decides too.
+func _watch_holder() -> void:
+	var holder := get_parent_control()
+	while holder is Container:
+		holder = holder.get_parent_control()
+	if holder == _holder:
+		return
+	if is_instance_valid(_holder):
+		_holder.resized.disconnect(_on_resized)
+	_holder = holder
+	_full_width = 0.0
+	if _holder != null:
+		_holder.resized.connect(_on_resized)
+
+
+## Icons only below COMPACT_WIDTH or while the full-size bar sticks out of its panel; back to labels once there's room for them.
+func _wants_compact() -> bool:
+	if size.x <= 0:
+		return _compact
+	if _compact:
+		return size.x < maxf(UiScale.px(COMPACT_WIDTH), _full_width)
+	return size.x < UiScale.px(COMPACT_WIDTH) or _overflows()
+
+
+func _overflows() -> bool:
+	if not is_instance_valid(_holder) or _holder.size.x <= 0:
+		return false
+	var bar := get_global_rect()
+	var room := _holder.get_global_rect()
+	return bar.position.x < room.position.x - 1 or bar.end.x > room.end.x + 1
 
 
 ## Icons and counts only, and the branch name clipped, when the bar is narrow (a side dock).
 func _apply_compact() -> void:
-	_compact = _is_narrow()
+	var compact := _wants_compact()
+	if compact and not _compact:
+		_full_width = get_combined_minimum_size().x # what the labels need; size.x can still be the last layout's
+	_compact = compact
 	_branch_button.clip_text = _compact
 	_branch_button.size_flags_horizontal = SIZE_EXPAND_FILL if _compact else SIZE_FILL
 	_branch_button.tooltip_text = _upstream_label.tooltip_text + "\nClick to switch branches" if _compact else "Current branch — click to switch"
