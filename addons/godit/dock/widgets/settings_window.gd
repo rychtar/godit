@@ -152,6 +152,8 @@ func _entries() -> Array:
 
 		{ "section": "Editor", "key": "show_blame", "kind": "bool", "default": false, "label": "Show blame in the script editor",
 			"help": "Author and age of each line next to the line numbers; click one to see its commit." },
+		{ "section": "Editor", "key": "toolbar_branch", "kind": "bool", "default": true, "label": "Current branch in the editor's toolbar",
+			"help": "With the commits to push (↑) and pull (↓); click it for a list of branches to switch to. \"Godit: Switch Branch…\" in the Command Palette opens the same list." },
 		{ "section": "Editor", "key": "inspector_changes", "kind": "bool", "default": true, "label": "Changes since the last commit in the Inspector and Scene dock",
 			"help": "A \"Last commit\" row with Revert under changed properties, and added or changed nodes colored." },
 

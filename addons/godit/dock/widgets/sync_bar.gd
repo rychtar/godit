@@ -281,32 +281,45 @@ func _on_branch_menu_id_pressed(id: int) -> void:
 	if id == ID_NEW_BRANCH:
 		await new_branch_dialog("HEAD")
 		return
-	if id < 0 or id >= _menu_branches.size() or not await SaveGuard.ensure_saved(self, "Checkout"):
+	if id < 0 or id >= _menu_branches.size():
 		return
-	var result: Dictionary = _repo.checkout_branch(_menu_branches[id])
-	EditorOpen.refresh_all_external_changes()
-	if not result["ok"]:
-		await Dialogs.error(self, "Checkout failed", GitErrors.explain(result["error"]))
-	else:
+	if await switch_branch(self, _repo, _menu_branches[id]):
 		operation_bar.done("Switched to %s." % _menu_branches[id])
 	_finish()
 
 
 ## Shared with the Branches panel's "New Branch…".
 func new_branch_dialog(start_point: String) -> void:
-	var answer: Variant = await Dialogs.form(self, "New Branch", [
-		{ "key": "name", "label": "Name", "placeholder": "feature/my-branch" },
+	await create_branch_dialog(self, _repo, start_point)
+	_finish()
+
+
+## Checks out a local branch, or a remote one as a new branch tracking it, after saving open files; false when it didn't happen. Also the editor toolbar's switcher.
+static func switch_branch(parent: Node, repo: RefCounted, branch: String, remote := false) -> bool:
+	if not await SaveGuard.ensure_saved(parent, "Checkout"):
+		return false
+	var result: Dictionary = repo.checkout_remote_branch(branch) if remote else repo.checkout_branch(branch)
+	EditorOpen.refresh_all_external_changes()
+	if not result["ok"]:
+		await Dialogs.error(parent, "Checkout failed", GitErrors.explain(result["error"]))
+	return result["ok"]
+
+
+## Asks for a name (prefilled with branch_name) and creates the branch; false when cancelled or it failed. Also the editor toolbar's switcher.
+static func create_branch_dialog(parent: Node, repo: RefCounted, start_point: String, branch_name := "") -> bool:
+	var answer: Variant = await Dialogs.form(parent, "New Branch", [
+		{ "key": "name", "label": "Name", "placeholder": "feature/my-branch", "default": branch_name },
 		{ "key": "start", "label": "Start point", "default": start_point },
 		{ "key": "checkout", "label": "Switch to it (uncommitted changes come along)", "type": "check", "default": true },
 	], "Create")
 	if answer == null or String(answer["name"]).strip_edges().is_empty():
-		return
-	var result: Dictionary = _repo.create_branch(String(answer["name"]).strip_edges(), String(answer["start"]).strip_edges(), answer["checkout"])
+		return false
+	var result: Dictionary = repo.create_branch(String(answer["name"]).strip_edges(), String(answer["start"]).strip_edges(), answer["checkout"])
 	if not result["ok"]:
-		await Dialogs.error(self, "Create branch failed", GitErrors.explain(result["error"]))
+		await Dialogs.error(parent, "Create branch failed", GitErrors.explain(result["error"]))
 	elif answer["checkout"]:
 		EditorOpen.refresh_all_external_changes()
-	_finish()
+	return result["ok"]
 
 
 func _on_fetch_pressed() -> void:

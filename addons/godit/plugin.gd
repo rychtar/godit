@@ -24,6 +24,8 @@ const Dialogs := preload("res://addons/godit/dock/widgets/dialogs.gd")
 const EditorCommands := preload("res://addons/godit/util/editor_commands.gd")
 const EditorOpen := preload("res://addons/godit/util/editor_open.gd")
 const SettingsWindowScript := preload("res://addons/godit/dock/widgets/settings_window.gd")
+const BranchToolbarScript := preload("res://addons/godit/dock/widgets/branch_toolbar.gd")
+const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -64,6 +66,8 @@ var scene_dock_colors: Node
 var commands: RefCounted
 ## Godit Settings, created the first time it's opened.
 var _settings_window: SettingsWindowScript
+## The current branch in the editor's main toolbar, or null outside a repository.
+var branch_toolbar: BranchToolbarScript
 
 const AUTO_RELOAD_SETTING_KEY := "auto_reload_external_changes"
 const AUTO_RELOAD_EDITOR_SETTING := "text_editor/behavior/files/auto_reload_scripts_on_external_change"
@@ -108,6 +112,7 @@ const MAIN_SCREEN_NAME := "Godit"
 const INSPECTOR_SETTING_KEY := "inspector_changes"
 const ID_INSPECTOR := 11
 const ID_SETTINGS := 12
+const TOOLBAR_BRANCH_SETTING_KEY := "toolbar_branch"
 ## The Tools menu's toggles, by item id; the rest are in Godit Settings.
 const TOOLS_TOGGLES := {ID_BLAME: [BLAME_SETTING_KEY, false], ID_AUTO_FETCH: [GoditDockScript.AUTO_FETCH_SETTING_KEY, false], ID_INSPECTOR: [INSPECTOR_SETTING_KEY, true]}
 
@@ -153,6 +158,12 @@ func _enter_tree() -> void:
 	dock_instance.set_tab_menu(_layout_menu(PopupMenu.new()))
 	history_dock_instance.set_tab_menu(_layout_menu(PopupMenu.new()))
 	_apply_dock_layout()
+	var toolbar_repo: RefCounted = RepoOpener.open_current_project_repo()["repo"] # its own, like the panels': watcher.repo is set only once the plugin is ready
+	if toolbar_repo != null:
+		branch_toolbar = BranchToolbarScript.new()
+		branch_toolbar.visible = Settings.get_value(TOOLBAR_BRANCH_SETTING_KEY, true)
+		add_control_to_container(CONTAINER_TOOLBAR, branch_toolbar)
+		branch_toolbar.set_repo(toolbar_repo)
 
 	diff_gutter = DiffGutterScript.new()
 	add_child(diff_gutter)
@@ -230,6 +241,9 @@ func _exit_tree() -> void:
 	Settings.notifier().changed.disconnect(_on_setting_changed)
 	if _settings_window != null:
 		_settings_window.free()
+	if branch_toolbar != null:
+		remove_control_from_container(CONTAINER_TOOLBAR, branch_toolbar)
+		branch_toolbar.free()
 	remove_tool_menu_item("Godit")
 	commands.clear()
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
@@ -297,6 +311,10 @@ func _add_commands() -> void:
 	commands.add("file_history", "History of the Open Scene or Script", _show_open_file_history)
 	commands.add("toggle_blame", "Toggle Blame", func() -> void: _set_blame_enabled(not Settings.get_value(BLAME_SETTING_KEY, false)))
 	commands.add("settings", "Settings…", open_settings)
+	commands.add("switch_branch", "Switch Branch…", func() -> void:
+		if branch_toolbar != null:
+			branch_toolbar.open_switcher()
+	)
 	commands.add("toggle_sidebar", "Toggle Sidebar", func() -> void:
 		if combined_dock != null:
 			combined_dock.toggle_sidebar()
@@ -521,6 +539,9 @@ func _on_setting_changed(key: String) -> void:
 				RepoSetup.reload_plugin() # the editor asks for a plugin's main screen only when it's enabled
 		DOCK_LAYOUT_SETTING_KEY:
 			_update_layout_items()
+		TOOLBAR_BRANCH_SETTING_KEY:
+			if branch_toolbar != null:
+				branch_toolbar.visible = Settings.get_value(TOOLBAR_BRANCH_SETTING_KEY, true)
 
 
 ## Godit Settings, from the Tools menu, the docks' ⋮ menus and the palette.

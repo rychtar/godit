@@ -4,7 +4,8 @@
 
 ### Added
 
-- **Command Palette**: every Godit command (`Ctrl/Cmd+Shift+P`, "Godit: …"): show File Status, History, Branches or Console, Commit, Fetch, Pull, Push, the three layouts, Toggle Sidebar, Toggle Blame, and the history of the open scene or script.
+- **Branch in the toolbar**: the current branch next to the run buttons, with the commits to push (↑) and pull (↓), whichever dock is open. A click, or "Godit: Switch Branch…" in the Command Palette, lists the branches filtered as you type: Enter switches, a remote branch becomes a local one tracking it, New Branch… creates one. Godit Settings > Editor hides it.
+- **Command Palette**: every Godit command (`Ctrl/Cmd+Shift+P`, "Godit: …"): show File Status, History, Branches or Console, Commit, Fetch, Pull, Push, Switch Branch, the three layouts, Toggle Sidebar, Toggle Blame, Settings, and the history of the open scene or script.
 - **Shortcuts**: `Ctrl/Cmd+1` to `4` open File Status, History, Branches and Console in any layout (by the key's place, so they work on layouts where the digits need Shift), `Alt+G` shows or hides the Godit dock like `Alt+O` the Output. On Godot 4.5+ they're in Editor Settings > Shortcuts > Godit, where the other commands can get keys too.
 - **Layout menu** in the combined dock's toolbar and in the tab bars of the Git dock, Git Log and the bottom tabs; switching shows where the panels went.
 - **Combined dock**: the toolbar button hides the sidebar (remembered); the view buttons move into the toolbar and Branches becomes a view.

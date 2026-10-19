@@ -12,7 +12,7 @@ const SECTION := "godit"
 
 ## Preferences that follow the user to every project; any other key (open view, dividers, toolbar filters) stays per project.
 const GLOBAL_KEYS := [
-	"dock_layout", "diff_main_screen", "show_blame", "inspector_changes",
+	"dock_layout", "diff_main_screen", "show_blame", "inspector_changes", "toolbar_branch",
 	"diff_side_by_side", "diff_ignore_whitespace", "diff_syntax", "diff_hide_noise", "diff_context", "diff_scene_view", "diff_image_mode",
 	"history_visible_columns", "history_absolute_dates", "history_hash_col_width", "history_author_col_width", "history_date_col_width",
 	"auto_stage_changes", "auto_add_new_files", "confirm_shortcut_commit", "save_before_git",
