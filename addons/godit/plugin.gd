@@ -329,9 +329,10 @@ func _add_commands() -> void:
 	commands.add("show_branches", "Show Branches", _reveal_branches, [EditorCommands.command_digit(KEY_3)])
 	commands.add("show_console", "Show Console", _show_console, [EditorCommands.command_digit(KEY_4)])
 	commands.add("commit", "Commit…", open_quick_commit, [EditorCommands.alt_key(KEY_C)])
-	commands.add("fetch", "Fetch", func() -> void: dock_instance.press_sync("fetch"))
-	commands.add("pull", "Pull", func() -> void: dock_instance.press_sync("pull"))
-	commands.add("push", "Push", func() -> void: dock_instance.press_sync("push"))
+	# Not just "Fetch", "Pull", "Push": the editor's catalog has those, and Editor Settings > Shortcuts would show them translated.
+	commands.add("fetch", "Fetch All Remotes", func() -> void: dock_instance.press_sync("fetch"))
+	commands.add("pull", "Pull Current Branch", func() -> void: dock_instance.press_sync("pull"))
+	commands.add("push", "Push Current Branch", func() -> void: dock_instance.press_sync("push"))
 	commands.add("file_history", "History of the Open Scene or Script", _show_open_file_history)
 	commands.add("toggle_blame", "Toggle Blame", func() -> void: _set_blame_enabled(not Settings.get_value(BLAME_SETTING_KEY, false)))
 	commands.add("settings", "Settings…", open_settings)

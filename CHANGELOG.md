@@ -8,7 +8,7 @@
 - **Quick commit**: `Alt+C`, or "Godit: Commit…" in the Command Palette, opens a small commit window from anywhere, with the dock closed: the changed files with checkboxes (checked = staged, as in File Status), the message and Amend, Commit or Commit and Push. The message is the one in File Status, and the checks before committing are the same.
 - **Dock title**: "Godit (5)" counts the changed files, like the editor's "Debugger (2)", and turns yellow while there are commits to pull and red on conflicts, so it shows behind other tabs too. On Godot 4.4 and 4.5 the side Git dock keeps its plain name.
 - **Godit updating itself**: when a checkout, pull, reset or another git operation changes Godit's own files (`addons/godit/` in your repository), Godit offers to restart the editor instead of letting Godot reload the running plugin's scripts, which can lose its state or crash the editor.
-- **Command Palette**: every Godit command (`Ctrl/Cmd+Shift+P`, "Godit: …"): show File Status, History, Branches or Console, Commit, Fetch, Pull, Push, Switch Branch, the three layouts, Toggle Sidebar, Toggle Blame, Settings, and the history of the open scene or script.
+- **Command Palette**: every Godit command (`Ctrl/Cmd+Shift+P`, "Godit: …"): show File Status, History, Branches or Console, Commit, Fetch All Remotes, Pull Current Branch, Push Current Branch, Switch Branch, the three layouts, Toggle Sidebar, Toggle Blame, Settings, and the history of the open scene or script.
 - **Shortcuts**: `Ctrl/Cmd+1` to `4` open File Status, History, Branches and Console in any layout (by the key's place, so they work on layouts where the digits need Shift), `Alt+G` shows or hides the Godit dock like `Alt+O` the Output. On Godot 4.5+ they're in Editor Settings > Shortcuts > Godit, where the other commands can get keys too.
 - **Layout menu** in the combined dock's toolbar and in the tab bars of the Git dock, Git Log and the bottom tabs; switching shows where the panels went.
 - **Combined dock**: the toolbar button hides the sidebar (remembered); the view buttons move into the toolbar and Branches becomes a view.
@@ -27,6 +27,7 @@
 
 - Fetch/Pull/Push didn't turn into icons after switching to a layout with a narrow Git dock, or with longer translated labels: the bar held the panel wider than the dock, which cut it off on both sides.
 - In an editor set to another language, Godit was half translated: the editor's own catalog translated the words it happens to have (in Czech Fetch became "Stáhnout změny", Amend "Doplnit", History "Historie", Revert, Cancel and dialog titles too) and left the rest in English. Godit's docks, the Godit tab, its dialogs, menus, tooltips, the Inspector rows and the change preview stay in English now.
+- Editor Settings > Shortcuts > Godit showed Fetch, Pull and Push translated in a non-English editor; the commands are called Fetch All Remotes, Pull Current Branch and Push Current Branch now (in the Command Palette too), which the editor doesn't translate.
 
 ## 1.3.0 - 2026-10-18
 
