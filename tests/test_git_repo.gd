@@ -20,6 +20,8 @@ func test_parse_status() -> void:
 	check("partly staged", entries[5].status, GitStatusFlags.INDEX_MODIFIED | GitStatusFlags.WT_MODIFIED)
 
 func test_status_of_a_file_named_with_an_arrow() -> void:
+	if OS.get_name() == "Windows": # > isn't allowed in Windows file names
+		return
 	var repo := make_repo()
 	write_file(repo.get_repo_root().path_join("a -> b.txt"), "x\n")
 	var entries := repo.get_status()
