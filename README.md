@@ -31,7 +31,7 @@ A git client inside the Godot editor. Stage, commit, switch branches and browse 
 
 You need Godot 4.4+, `git` on your `PATH`, and a project inside a git repository.
 
-For push and pull, git has to log in without asking: use a credential helper for HTTPS or `ssh-agent` for SSH. If `git push` works in a terminal without a prompt, it works in Godit.
+For push and pull, git has to log in without asking: use a credential helper for HTTPS or `ssh-agent` for SSH. If `git push` works in a terminal without a prompt, it works in Godit. **Tools > Godit > Check Setup…** tries the login and says how to fix it for your remote (it opens from "Help Me Log In" when a push is refused, too), and checks the rest: your name for commits, the remote, `.godot/` ignored, line endings, Git LFS and big files.
 
 If `addons/godit/` is in your repository and a checkout, pull or reset changes it (a teammate updated Godit, or an older branch has an older version), Godit offers to restart the editor, since reloading its own scripts while it runs can crash Godot.
 

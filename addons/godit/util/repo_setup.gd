@@ -44,13 +44,13 @@ static func init_repo(root: String, options: Dictionary) -> Dictionary:
 	var r := GitCli.run(root, ["init"], true)
 	if r["exit_code"] != 0:
 		return { "ok": false, "error": r["text"].strip_edges() }
-	_append_missing_lines(root.path_join(".gitignore"), GITIGNORE_LINES)
+	append_missing_lines(root.path_join(".gitignore"), GITIGNORE_LINES)
 	var attributes: Array = GITATTRIBUTES_LINES.duplicate()
 	if options.get("lfs", false):
 		GitCli.run(root, ["lfs", "install", "--local"], true)
 		for pattern in LFS_PATTERNS:
 			attributes.append("%s filter=lfs diff=lfs merge=lfs -text" % pattern)
-	_append_missing_lines(root.path_join(".gitattributes"), attributes)
+	append_missing_lines(root.path_join(".gitattributes"), attributes)
 	if not String(options.get("name", "")).is_empty():
 		GitCli.run(root, ["config", "user.name", options["name"]], true)
 	if not String(options.get("email", "")).is_empty():
@@ -91,7 +91,8 @@ static func reload_plugin() -> void:
 	EditorInterface.set_plugin_enabled.call_deferred("godit", true)
 
 
-static func _append_missing_lines(path: String, wanted: Array) -> void:
+## Appends the lines of wanted that path doesn't have yet (creating it), keeping its last line ended.
+static func append_missing_lines(path: String, wanted: Array) -> void:
 	var text := FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 	var existing := Array(text.split("\n")).map(func(l: String) -> String: return l.strip_edges())
 	var missing := wanted.filter(func(l: String) -> bool: return not existing.has(l))
@@ -103,6 +104,13 @@ static func _append_missing_lines(path: String, wanted: Array) -> void:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f != null:
 		f.store_string(text)
+
+
+## Coroutine: {"exit_code", "text"} of a non-git program run on a thread (gh talks to the network).
+static func run_program(program: String, args: Array) -> Dictionary:
+	var run := _ProgramRun.new()
+	run.start(program, args)
+	return await run.finished
 
 
 ## Runs a non-git program on a thread; finished carries {"exit_code", "text"} (stderr included).

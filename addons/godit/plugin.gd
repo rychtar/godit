@@ -28,6 +28,8 @@ const BranchToolbarScript := preload("res://addons/godit/dock/widgets/branch_too
 const RepoOpener := preload("res://addons/godit/util/repo_opener.gd")
 const QuickCommitScript := preload("res://addons/godit/dock/widgets/quick_commit.gd")
 const RemindersScript := preload("res://addons/godit/util/reminders.gd")
+const SetupCheckScript := preload("res://addons/godit/dock/widgets/setup_check.gd")
+const RemoteActions := preload("res://addons/godit/dock/widgets/remote_actions.gd")
 ## Changes + Branches: left dock, alongside FileSystem/Import.
 var dock_instance: Control
 ## History (commit graph): bottom panel by default, like Output/Debugger
@@ -74,6 +76,8 @@ var _settings_window: SettingsWindowScript
 var branch_toolbar: BranchToolbarScript
 ## The quick commit window, created the first time it's opened.
 var _quick_commit: QuickCommitScript
+## Godit Setup, created the first time it's opened.
+var _setup_check: SetupCheckScript
 ## What the dock title shows: changed files, and its color for conflicts or commits to pull.
 var _title_state := {"count": 0, "conflicts": 0, "behind": 0}
 ## Bottom panel buttons on Godot < 4.6, where docks have no EditorDock to title: control -> Button.
@@ -122,6 +126,7 @@ const MAIN_SCREEN_NAME := "Godit"
 const INSPECTOR_SETTING_KEY := "inspector_changes"
 const ID_INSPECTOR := 11
 const ID_SETTINGS := 12
+const ID_SETUP := 13
 const TOOLBAR_BRANCH_SETTING_KEY := "toolbar_branch"
 ## The Tools menu's toggles, by item id; the rest are in Godit Settings.
 const TOOLS_TOGGLES := {ID_BLAME: [BLAME_SETTING_KEY, false], ID_AUTO_FETCH: [GoditDockScript.AUTO_FETCH_SETTING_KEY, false], ID_INSPECTOR: [INSPECTOR_SETTING_KEY, true]}
@@ -138,6 +143,7 @@ func _enter_tree() -> void:
 	tools_menu = PopupMenu.new()
 	tools_menu.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # it goes into the editor's Tools menu, which would translate it (see godit_dock.gd)
 	tools_menu.add_item("Settings…", ID_SETTINGS)
+	tools_menu.add_item("Check Setup…", ID_SETUP)
 	tools_menu.add_separator()
 	tools_menu.add_check_item("Show blame in the script editor", ID_BLAME)
 	tools_menu.add_check_item("Fetch remotes in the background", ID_AUTO_FETCH)
@@ -234,6 +240,7 @@ func _enter_tree() -> void:
 		DiffViewScript.follower = _follow_diff
 	main_screen_changed.connect(_on_main_screen_changed)
 	Dialogs.show_console = _show_console
+	RemoteActions.open_setup_check = open_setup_check
 	head_inspector = HeadInspectorScript.new()
 	head_inspector.enabled = Settings.get_value(INSPECTOR_SETTING_KEY, true)
 	add_inspector_plugin(head_inspector)
@@ -273,6 +280,9 @@ func _exit_tree() -> void:
 		branch_toolbar.free()
 	if _quick_commit != null:
 		_quick_commit.free()
+	if _setup_check != null:
+		_setup_check.free()
+	RemoteActions.open_setup_check = Callable()
 	remove_tool_menu_item("Godit")
 	commands.clear()
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
@@ -343,6 +353,7 @@ func _add_commands() -> void:
 	commands.add("file_history", "History of the Open Scene or Script", _show_open_file_history)
 	commands.add("toggle_blame", "Toggle Blame", func() -> void: _set_blame_enabled(not Settings.get_value(BLAME_SETTING_KEY, false)))
 	commands.add("settings", "Settings…", open_settings)
+	commands.add("check_setup", "Check Setup…", open_setup_check)
 	commands.add("switch_branch", "Switch Branch…", func() -> void:
 		if branch_toolbar != null:
 			branch_toolbar.open_switcher()
@@ -545,6 +556,8 @@ func _on_tools_menu_id_pressed(id: int) -> void:
 		set_layout(LAYOUT_IDS[id])
 	elif id == ID_SETTINGS:
 		open_settings()
+	elif id == ID_SETUP:
+		open_setup_check()
 	elif TOOLS_TOGGLES.has(id):
 		Settings.set_value(TOOLS_TOGGLES[id][0], not Settings.get_value(TOOLS_TOGGLES[id][0], TOOLS_TOGGLES[id][1]))
 
@@ -584,6 +597,16 @@ func open_quick_commit() -> void:
 		_quick_commit = QuickCommitScript.new(dock_instance.changes_panel())
 		EditorInterface.get_base_control().add_child(_quick_commit) # not in a dock: switching the layout frees those
 	_quick_commit.open()
+
+
+## Is git set up for this project: name, remote, login, ignores, line endings, LFS ("Godit: Check Setup…", Tools > Godit, "Help Me Log In" after a refused login).
+func open_setup_check() -> void:
+	if watcher.repo == null:
+		return
+	if _setup_check == null:
+		_setup_check = SetupCheckScript.new(watcher.repo)
+		EditorInterface.get_base_control().add_child(_setup_check) # not in a dock: switching the layout frees those
+	_setup_check.open()
 
 
 ## Godit Settings, from the Tools menu, the docks' ⋮ menus and the palette.
