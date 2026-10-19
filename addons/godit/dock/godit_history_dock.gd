@@ -17,6 +17,10 @@ var _console: Control
 signal changes_requested(action: String)
 
 
+func _init() -> void:
+	auto_translate_mode = AUTO_TRANSLATE_MODE_DISABLED # English throughout, see godit_dock.gd
+
+
 func _ready() -> void:
 	var opened := RepoOpener.open_current_project_repo()
 	if opened["repo"] == null:

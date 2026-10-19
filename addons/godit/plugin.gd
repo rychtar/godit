@@ -119,6 +119,7 @@ func _enter_tree() -> void:
 	add_child(watcher)
 
 	tools_menu = PopupMenu.new()
+	tools_menu.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # it goes into the editor's Tools menu, which would translate it (see godit_dock.gd)
 	tools_menu.add_check_item("Auto-reload files changed externally (no confirmation)", ID_AUTO_RELOAD)
 	tools_menu.set_item_checked(tools_menu.get_item_index(ID_AUTO_RELOAD), Settings.get_value(AUTO_RELOAD_SETTING_KEY, true))
 	tools_menu.add_check_item("Auto-save scripts every %ds" % AUTO_SAVE_INTERVAL_SECS, ID_AUTO_SAVE)
@@ -595,6 +596,7 @@ func _apply_dock_layout() -> void:
 			remove_control_from_docks(dock_instance)
 			var panels: Dictionary = dock_instance.detach_panels()
 			bottom_dock_container = TabContainer.new()
+			bottom_dock_container.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # English throughout, see godit_dock.gd
 			bottom_dock_container.custom_minimum_size.y = UiScale.px(BOTTOM_PANEL_MIN_HEIGHT)
 			bottom_dock_container.add_child(panels["changes"])
 			bottom_dock_container.add_child(panels["branches"])

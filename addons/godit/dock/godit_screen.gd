@@ -18,6 +18,7 @@ var _empty: Label
 
 func _init() -> void:
 	name = "GoditScreen"
+	auto_translate_mode = AUTO_TRANSLATE_MODE_DISABLED # English throughout, see godit_dock.gd
 	size_flags_horizontal = SIZE_EXPAND_FILL
 	size_flags_vertical = SIZE_EXPAND_FILL
 	visible = false

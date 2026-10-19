@@ -11,6 +11,7 @@ var _head: Dictionary
 
 func _init(head: Dictionary) -> void:
 	_head = head
+	auto_translate_mode = AUTO_TRANSLATE_MODE_DISABLED # the Inspector would translate Revert (see godit_dock.gd)
 	label = LABEL
 	add_theme_color_override(&"property_color", GitIcons.COLOR_MODIFIED)
 	var row := HBoxContainer.new()

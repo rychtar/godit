@@ -13,6 +13,7 @@
 ### Fixed
 
 - Fetch/Pull/Push didn't turn into icons after switching to a layout with a narrow Git dock, or with longer translated labels: the bar held the panel wider than the dock, which cut it off on both sides.
+- In an editor set to another language, Godit was half translated: the editor's own catalog translated the words it happens to have (in Czech Fetch became "Stáhnout změny", Amend "Doplnit", History "Historie", Revert, Cancel and dialog titles too) and left the rest in English. Godit's docks, the Godit tab, its dialogs, menus, tooltips, the Inspector rows and the change preview stay in English now.
 
 ## 1.3.0 - 2026-10-18
 

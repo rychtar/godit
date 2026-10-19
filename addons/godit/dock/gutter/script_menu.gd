@@ -69,6 +69,7 @@ func _fill_text_menu(menu: PopupMenu, code_edit: CodeEdit) -> void:
 	menu.add_separator()
 	for i in items.size():
 		menu.add_item(items[i][0], TEXT_MENU_ID_BASE + i)
+		menu.set_item_auto_translate_mode(menu.item_count - 1, Node.AUTO_TRANSLATE_MODE_DISABLED) # the editor's menu would translate it (see godit_dock.gd)
 
 
 func _on_text_menu_id(id: int, code_edit: CodeEdit) -> void:

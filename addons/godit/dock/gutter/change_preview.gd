@@ -23,6 +23,7 @@ var _old_view: CodeEdit
 
 func open(code_edit: CodeEdit, regions: Array, index: int, rel_path: String) -> void:
 	_code_edit = code_edit
+	auto_translate_mode = AUTO_TRANSLATE_MODE_DISABLED # a child of the editor's CodeEdit, which would translate it (see godit_dock.gd)
 	var region: Dictionary = regions[index]
 	var type := DiffHunks.region_type(region)
 	_anchor_line = maxi(region["new_start"] - 1, 0) if type == "deleted" else region["new_start"] + region["new_count"] - 2

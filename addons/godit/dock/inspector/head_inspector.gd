@@ -24,6 +24,7 @@ func _parse_begin(object: Object) -> void:
 	if _state.get("is_new", false):
 		var note := Label.new()
 		note.text = "New since the last commit"
+		note.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # the Inspector would translate it (see godit_dock.gd)
 		note.add_theme_color_override("font_color", GitIcons.COLOR_ADDED)
 		note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		add_custom_control(note)

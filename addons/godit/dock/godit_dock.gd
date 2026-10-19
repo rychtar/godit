@@ -26,6 +26,10 @@ var _repo: RefCounted
 var _auto_fetch_timer: Timer
 
 
+func _init() -> void:
+	auto_translate_mode = AUTO_TRANSLATE_MODE_DISABLED # the editor's catalog would translate only some words (Fetch, History, Amend…), leaving the dock half translated
+
+
 func _ready() -> void:
 	var opened := RepoOpener.open_current_project_repo()
 	if opened["repo"] == null:

@@ -52,6 +52,7 @@ var _view := "changes"
 ## panels: {"changes", "branches", "history", "console"} taken from the other two docks, or {} when the project has no repository yet.
 func _init(panels: Dictionary) -> void:
 	name = "Godit"
+	auto_translate_mode = AUTO_TRANSLATE_MODE_DISABLED # English throughout, see godit_dock.gd
 	set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	if panels.is_empty():
 		add_child(RepoInitView.new("This project isn't a git repository yet."))
