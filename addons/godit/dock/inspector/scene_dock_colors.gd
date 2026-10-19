@@ -8,7 +8,7 @@ const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const RepoWatcher := preload("res://addons/godit/util/repo_watcher.gd")
 const META_ORIGINAL := &"godit_original_color"
 
-## Turned off from Tools > Godit, with the Inspector rows.
+## Turned off in Godit Settings > Editor, with the Inspector rows.
 var enabled := true:
 	set(value):
 		enabled = value

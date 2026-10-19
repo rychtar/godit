@@ -1,4 +1,4 @@
-## Everything in one dock, SourceTree-style (Tools > Godit > Layout: Combined): a sidebar with the views and Branches, the chosen view beside it — meant to be made floating, e.g. on a second monitor.
+## Everything in one dock, SourceTree-style (Godit Settings > Layout: Combined Dock): a sidebar with the views and Branches, the chosen view beside it — meant to be made floating, e.g. on a second monitor.
 @tool
 extends Control
 

@@ -26,7 +26,7 @@ const CommitMessageHistory := preload("res://addons/godit/util/commit_message_hi
 const SplitMemory := preload("res://addons/godit/util/split_memory.gd")
 
 const DIFF_VISIBLE_SETTING_KEY := "diff_preview_visible"
-## Read by plugin.gd too, for the Tools menu toggle that turns the confirmation back on.
+## Godit Settings > Changes turns the confirmation back on.
 const CONFIRM_SHORTCUT_COMMIT_SETTING_KEY := "confirm_shortcut_commit"
 const SyncBar := preload("res://addons/godit/dock/widgets/sync_bar.gd")
 const AUTO_STAGE_SETTING_KEY := "auto_stage_changes"
@@ -1511,7 +1511,7 @@ func _confirm_shortcut_commit(push_after: bool) -> bool:
 	var answer: Variant = await Dialogs.form(self, "Commit and Push" if push_after else "Commit", [
 		{ "type": "label", "label": "%s%s?\n\n%s" % [what, " and push" if push_after else "", summary] },
 		{ "key": "dont_ask", "label": "Don't ask again for keyboard shortcuts", "type": "check", "default": false,
-			"tooltip": "Turn it back on in Project > Tools > Godit" },
+			"tooltip": "Turn it back on in Godit Settings > Changes" },
 	], "Commit and Push" if push_after else "Commit")
 	if answer == null:
 		_commit_message.grab_focus()

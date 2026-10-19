@@ -1,4 +1,4 @@
-## Local History of a file or folder (FileSystem and script editor menus, Changes, Git Log, the Command Palette): the snapshots that changed it, newest first, each compared with how it is now, and Restore. A folder lists what differs from now under it, files created since included, filtered by name and grouped by folder if wanted.
+## Local History of a file or folder (FileSystem and script editor menus, Changes, Git Log, Tools > Godit, the Command Palette): the snapshots that changed it, newest first, each compared with how it is now, and Restore. A folder lists what differs from now under it, files created since included, filtered by name and grouped by folder if wanted.
 @tool
 extends AcceptDialog
 

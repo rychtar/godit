@@ -48,7 +48,7 @@ var _combined_editor_dock: Node
 var _layout := LAYOUT_SEPARATE
 ## Changed-line flags in the script editor's gutter, next to Bookmarks.
 var diff_gutter: Node
-## Author/age column in the script editor, toggled from the Tools menu.
+## Author/age column in the script editor, toggled from its menu, Godit Settings and the palette.
 var blame_gutter: Node
 ## "Git" submenu in the script editor's right-click menu.
 var script_menu: EditorContextMenuPlugin
@@ -62,7 +62,7 @@ var watcher: Node
 var reminders: Node
 ## Local History snapshots on save, on a timer and before git operations.
 var local_history: Node
-## Project > Tools > Godit submenu, holding the auto-reload toggle.
+## Project > Tools > Godit: Settings…, Check Setup… and the project's Local History; the switches are in Godit Settings.
 var tools_menu: PopupMenu
 ## The Godit tab next to 2D/3D/Script showing a diff full size, or null when turned off.
 var main_screen: Control
@@ -110,7 +110,7 @@ const ID_LAYOUT_SEPARATE := 7
 const ID_LAYOUT_COMBINED := 8
 const LAYOUT_IDS := {ID_LAYOUT_SEPARATE: LAYOUT_SEPARATE, ID_LAYOUT_BOTTOM: LAYOUT_BOTTOM, ID_LAYOUT_COMBINED: LAYOUT_COMBINED}
 const LAYOUT_ORDER := [LAYOUT_COMBINED, LAYOUT_SEPARATE, LAYOUT_BOTTOM]
-## Shorter than the Tools menu's, for the menus inside the docks and the command palette.
+## For the layout menus inside the docks, Godit Settings and the command palette.
 const LAYOUT_TITLES := {LAYOUT_COMBINED: "Combined Dock", LAYOUT_SEPARATE: "Git Dock and Git Log", LAYOUT_BOTTOM: "Both in the Bottom Panel"}
 const LAYOUT_TOOLTIPS := {
 	LAYOUT_COMBINED: "Everything in one SourceTree-like dock: the views and branches in a sidebar. On Godot 4.6+ it can float, e.g. on a second monitor.",
@@ -118,24 +118,19 @@ const LAYOUT_TOOLTIPS := {
 	LAYOUT_BOTTOM: "Changes and Branches as tabs in the bottom panel, next to Git Log",
 }
 
-const ID_AUTO_FETCH := 3
-
 ## Same floor the Shader Editor uses, so the bottom panels can't be dragged down to an unusable sliver (they can still be hidden entirely).
 const BOTTOM_PANEL_MIN_HEIGHT := 300
 
 const BLAME_SETTING_KEY := "show_blame"
-const ID_BLAME := 4
 
 const MAIN_SCREEN_SETTING_KEY := "diff_main_screen"
 const MAIN_SCREEN_NAME := "Godit"
 
 const INSPECTOR_SETTING_KEY := "inspector_changes"
-const ID_INSPECTOR := 11
 const ID_SETTINGS := 12
 const ID_SETUP := 13
+const ID_LOCAL_HISTORY := 14
 const TOOLBAR_BRANCH_SETTING_KEY := "toolbar_branch"
-## The Tools menu's toggles, by item id; the rest are in Godit Settings.
-const TOOLS_TOGGLES := {ID_BLAME: [BLAME_SETTING_KEY, false], ID_AUTO_FETCH: [GoditDockScript.AUTO_FETCH_SETTING_KEY, false], ID_INSPECTOR: [INSPECTOR_SETTING_KEY, true]}
 
 
 func _enter_tree() -> void:
@@ -152,21 +147,7 @@ func _enter_tree() -> void:
 	tools_menu.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED # it goes into the editor's Tools menu, which would translate it (see godit_dock.gd)
 	tools_menu.add_item("Settings…", ID_SETTINGS)
 	tools_menu.add_item("Check Setup…", ID_SETUP)
-	tools_menu.add_separator()
-	tools_menu.add_check_item("Show blame in the script editor", ID_BLAME)
-	tools_menu.add_check_item("Fetch remotes in the background", ID_AUTO_FETCH)
-	tools_menu.add_check_item("Show changes since the last commit in the Inspector and Scene dock", ID_INSPECTOR)
-	tools_menu.add_separator("Layout")
-	tools_menu.add_radio_check_item("Combined dock, SourceTree-like (default; can float on a second monitor)", ID_LAYOUT_COMBINED)
-	tools_menu.add_radio_check_item("Git dock + Git Log at bottom", ID_LAYOUT_SEPARATE)
-	tools_menu.add_radio_check_item("Changes/Branches and Git Log at bottom", ID_LAYOUT_BOTTOM)
-	_update_layout_items()
-	# Godit Settings, the script editor's menu and the palette change these too, so they're read on every open.
-	tools_menu.about_to_popup.connect(func() -> void:
-		for id: int in TOOLS_TOGGLES:
-			tools_menu.set_item_checked(tools_menu.get_item_index(id), Settings.get_value(TOOLS_TOGGLES[id][0], TOOLS_TOGGLES[id][1]))
-		tools_menu.set_item_text(tools_menu.get_item_index(ID_AUTO_FETCH), "Fetch remotes in the background every %d min" % int(Settings.get_value(GoditDockScript.AUTO_FETCH_MINUTES_KEY, GoditDockScript.AUTO_FETCH_DEFAULT_MINUTES)))
-	)
+	tools_menu.add_item("Local History of the Project…", ID_LOCAL_HISTORY)
 	tools_menu.id_pressed.connect(_on_tools_menu_id_pressed)
 	Settings.notifier().changed.connect(_on_setting_changed)
 	add_tool_submenu_item("Godit", tools_menu)
@@ -410,10 +391,9 @@ func _layout_menu(menu: PopupMenu) -> PopupMenu:
 	return menu
 
 
-## Switches the layout (Tools menu, the docks' layout menus, command palette) and shows where the panels went.
+## Switches the layout (Godit Settings, the docks' layout menus, command palette) and shows where the panels went.
 func set_layout(layout: String) -> void:
 	Settings.set_value(DOCK_LAYOUT_SETTING_KEY, layout)
-	_update_layout_items()
 	_apply_dock_layout()
 	if combined_dock != null:
 		_reveal(combined_dock)
@@ -579,17 +559,16 @@ func _on_gutter_change_clicked(rel_path: String, line: int) -> void:
 
 
 func _on_tools_menu_id_pressed(id: int) -> void:
-	if LAYOUT_IDS.has(id):
-		set_layout(LAYOUT_IDS[id])
-	elif id == ID_SETTINGS:
-		open_settings()
-	elif id == ID_SETUP:
-		open_setup_check()
-	elif TOOLS_TOGGLES.has(id):
-		Settings.set_value(TOOLS_TOGGLES[id][0], not Settings.get_value(TOOLS_TOGGLES[id][0], TOOLS_TOGGLES[id][1]))
+	match id:
+		ID_SETTINGS:
+			open_settings()
+		ID_SETUP:
+			open_setup_check()
+		ID_LOCAL_HISTORY:
+			open_local_history("", true)
 
 
-## Applies a setting changed anywhere: the Tools menu, Godit Settings, the palette, a dialog's "Don't ask again".
+## Applies a setting changed anywhere: Godit Settings, the script editor's menu, the palette, a dialog's "Don't ask again".
 func _on_setting_changed(key: String) -> void:
 	match key:
 		AUTO_RELOAD_SETTING_KEY:
@@ -609,8 +588,6 @@ func _on_setting_changed(key: String) -> void:
 		MAIN_SCREEN_SETTING_KEY:
 			if _has_main_screen() != (main_screen != null):
 				RepoSetup.reload_plugin() # the editor asks for a plugin's main screen only when it's enabled
-		DOCK_LAYOUT_SETTING_KEY:
-			_update_layout_items()
 		TOOLBAR_BRANCH_SETTING_KEY:
 			if branch_toolbar != null:
 				branch_toolbar.visible = Settings.get_value(TOOLBAR_BRANCH_SETTING_KEY, true)
@@ -703,11 +680,6 @@ func _dock_layout() -> String:
 	var old_bottom: Variant = Settings.get_value(CHANGES_BOTTOM_DOCK_SETTING_KEY, null)
 	var fallback := LAYOUT_COMBINED if old_bottom == null else (LAYOUT_BOTTOM if old_bottom else LAYOUT_SEPARATE)
 	return Settings.get_value(DOCK_LAYOUT_SETTING_KEY, fallback)
-
-
-func _update_layout_items() -> void:
-	for id: int in LAYOUT_IDS:
-		tools_menu.set_item_checked(tools_menu.get_item_index(id), LAYOUT_IDS[id] == _dock_layout())
 
 
 ## Side docks and the bottom panel are separate registrations in Godot's editor, so switching layouts reparents the panels live: back into the Git dock and Git Log first, then into the wanted layout.

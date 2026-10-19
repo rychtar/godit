@@ -7,7 +7,7 @@ const DiffGutter := preload("res://addons/godit/dock/gutter/diff_gutter.gd")
 const GitIcons := preload("res://addons/godit/util/git_icons.gd")
 const HeadValueProperty := preload("res://addons/godit/dock/inspector/head_value_property.gd")
 
-## Turned off from Tools > Godit.
+## Turned off in Godit Settings > Editor.
 var enabled := true
 ## "rel_path|HEAD oid" -> SceneText.parse() of the file at HEAD, or {} when it isn't there.
 var _head_cache := {}
