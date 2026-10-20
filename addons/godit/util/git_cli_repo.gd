@@ -1614,11 +1614,13 @@ func branches_containing(oid: String) -> PackedStringArray:
 		if GitCli.run(_repo_root, ["merge-base", "--is-ancestor", oid, "HEAD"])["exit_code"] == 0:
 			names.append("HEAD")
 
-	var result := GitCli.run(_repo_root, ["for-each-ref", "--contains", oid, "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+	var result := GitCli.run(_repo_root, ["for-each-ref", "--contains", oid, "--format=%(refname:short)" + GitCli.US + "%(symref)", "refs/heads", "refs/remotes"])
 	for line in GitCli.lines(result["text"]):
-		if line.ends_with("/HEAD"):
+		var fields := line.split(GitCli.US)
+		# Skip symbolic refs: refs/remotes/origin/HEAD shortens to just "origin".
+		if fields.size() > 1 and not fields[1].is_empty():
 			continue
-		names.append(line)
+		names.append(fields[0])
 	return names
 
 

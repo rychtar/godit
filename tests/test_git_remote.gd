@@ -94,6 +94,16 @@ func test_force_with_lease_and_deleting_a_remote_branch() -> void:
 	var forced: Dictionary = await repo.push({ "force_with_lease": true })
 	check("a rewritten commit can be pushed with a lease", forced.ok, true)
 
+func test_branches_containing_skips_the_remotes_head() -> void:
+	var s := _setup()
+	await s.repo.push({ "remote": "origin", "branch": "main", "set_upstream": true })
+	var dir := make_temp_dir()
+	git(dir, ["clone", "-q", s.remote, "."])
+	var clone := GitCliRepo.new()
+	clone.open(dir)
+	check("a clone has origin/HEAD", git(dir, ["symbolic-ref", "refs/remotes/origin/HEAD"]), "refs/remotes/origin/main")
+	check("only real branches", clone.branches_containing(clone.get_head_oid()), PackedStringArray(["main", "origin/main"]))
+
 func test_a_failed_job_keeps_its_error_text() -> void:
 	var repo := make_repo()
 	var result: Dictionary = await repo.fetch()

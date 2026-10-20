@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- In a cloned project, a commit's details in Git Log said "In 2 branches: origin, origin/main": `origin` there is git's pointer to the remote's default branch (`origin/HEAD`), not a branch, and isn't listed anymore.
+
 ## 1.4.0 - 2026-10-19
 
 ### Highlights
